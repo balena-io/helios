@@ -1,0 +1,28 @@
+[package]
+name = "next-balena-supervisor"
+version = "0.1.0"
+edition = "2021"
+description = "Next-gen experimental balenaSupervisor"
+homepage = "https://github.com/balena-io-experimental/next-balena-supervisor"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/balena-io-experimental/next-balena-supervisor"
+
+[dependencies]
+axum = { version = "0.8.4", features = ["macros"] }
+hyper = "1.6.0"
+hyper-util = { version = "0.1.14", features = [
+  "http1",
+  "client-legacy",
+  "tokio",
+] }
+hyper-tls = "0.6.0"
+tokio = { version = "1.45.1", default-features = false, features = [
+  "rt-multi-thread",
+] }
+tower-http = { version = "0.6.6", default-features = false, features = [
+  "trace",
+] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+anyhow = "1.0.98"
