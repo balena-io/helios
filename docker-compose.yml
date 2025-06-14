@@ -1,0 +1,39 @@
+version: '2.4'
+
+services:
+  next-supervisor:
+    build: ./
+    # This is needed so the service can bind to the same port as the
+    # supervisor after stopping it. This should go away eventually so
+    # no other features that require host networking should be introduced
+    # on this service
+    network_mode: host
+    labels:
+      # Needed to get access to supervisor api variables
+      # and credentials
+      io.balena.features.supervisor-api: '1'
+      # Needed for access to DOCKER_HOST
+      io.balena.features.balena-socket: '1'
+      # Needed to stop the supervisor service
+      io.balena.features.dbus: '1'
+    environment:
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
+      - DEBUG=1
+      - RUST_LOG=debug
+    volumes:
+      - boot:/mnt/boot
+      - data:/mnt/data
+
+volumes:
+  boot:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind,ro
+      device: /mnt/boot
+  data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/data/resin-data/balena-supervisor
