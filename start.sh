@@ -23,7 +23,6 @@ for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT \
   fi
 done
 
-# Stop the old supervisor
 stop_supervisor() {
   dbus-send \
     --system \
@@ -91,7 +90,7 @@ setup_supervisor() {
 }
 
 if [ -n "$DISABLE" ]; then
-  # If the DISABLE_PROXY env var is set, disable the service and exit
+  # If the DISABLE env var is set, disable the service and exit
   disable_proxy
   restart_supervisor
   exit
