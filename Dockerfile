@@ -15,10 +15,8 @@ COPY src ./src
 # Run unit tests
 RUN cargo test
 
-
 # Build release
 RUN cargo build --release
-
 
 # Release target
 FROM alpine:3.21
@@ -28,6 +26,6 @@ RUN apk add --update --no-cache \
 		libgcc curl sqlite jq dbus
 
 COPY start.sh /usr/bin
-COPY --from=build /usr/src/app/target/release/next-balena-supervisor /usr/bin
+COPY --from=build /usr/src/app/target/release/theseus /usr/bin
 
 CMD ["/usr/bin/start.sh"]

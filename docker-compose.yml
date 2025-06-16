@@ -1,7 +1,7 @@
 version: '2.4'
 
 services:
-  next-supervisor:
+  theseus:
     build: ./
     # This is needed so the service can bind to the same port as the
     # supervisor after stopping it. This should go away eventually so
@@ -22,7 +22,9 @@ services:
       - RUST_LOG=debug
     volumes:
       - boot:/mnt/boot
-      - data:/mnt/data
+      # The legacy data volume is only needed while the proxy is needed. Eventually
+      # supervisor data should use a volume rather than a directory on the host
+      - legacy_data:/mnt/legacy
 
 volumes:
   boot:
@@ -31,7 +33,7 @@ volumes:
       type: none
       o: bind,ro
       device: /mnt/boot
-  data:
+  legacy_data:
     driver: local
     driver_opts:
       type: none

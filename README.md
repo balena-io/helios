@@ -1,6 +1,6 @@
-# next-balena-supervisor
+# theseus
 
-This is an experiment to proxy supervisor requests as a mean to [slowly replace the existing supervisor](https://martinfowler.com/bliki/StranglerFigApplication.html) with a new more modern and lean implementation.
+Experimental replacement for the [balenaSupervisor](https://github.com/balena-os/balenas-supervisor) written in Rust. This service, when installed, will reconfigure the existing supervisor and act as a proxy for requests coming to and from the supervisor. This feature will allow us to slowly replace the legacy supervisor with a more modern and lean implementation.
 
 ## Running
 

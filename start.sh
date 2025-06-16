@@ -7,15 +7,14 @@ DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
 # Supervisor override port
-LEGACY_SUPERVISOR_PORT=${LEGACY_SUPERVISOR_PORT:-48480}
+legacy_port=${LEGACY_SUPERVISOR_PORT:-48480}
+unset LEGACY_SUPERVISOR_PORT
 
 # Read credentials from config.json
 BALENA_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
 
 # Check for required variables
-for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT \
-  BALENA_SUPERVISOR_API_KEY \
-  BALENA_API_ENDPOINT; do
+for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_API_ENDPOINT; do
   eval val="\$$var"
   if [ -z "$val" ]; then
     echo "Error: variable '$var' is not set" >&2
@@ -60,23 +59,24 @@ start_supervisor() {
     string:"replace"
 }
 
-# Supervisor database
-db=/mnt/data/database.sqlite
+# Legacy Supervisor database
+legacy_db=/mnt/legacy/database.sqlite
 
 enable_proxy() {
   # Override supervisor configuration
-  sqlite3 "$db" "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', 'http://localhost:${BALENA_SUPERVISOR_PORT}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
-  sqlite3 "$db" "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${LEGACY_SUPERVISOR_PORT}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+  sqlite3 "$legacy_db" "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '$BALENA_SUPERVISOR_ADDRESS') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+  sqlite3 "$legacy_db" "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${legacy_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
 }
 
 disable_proxy() {
-  sqlite3 "$db" "DELETE FROM config WHERE key='apiEndpointOverride';"
-  sqlite3 "$db" "DELETE FROM config WHERE key='listenPortOverride';"
+  sqlite3 "$legacy_db" "DELETE FROM config WHERE key='apiEndpointOverride';"
+  sqlite3 "$legacy_db" "DELETE FROM config WHERE key='listenPortOverride';"
 }
 
 setup_supervisor() {
-  ready=$(sqlite3 /mnt/data/database.sqlite "SELECT COUNT(*) FROM config WHERE key='apiEndpointOverride'")
-  [ "$ready" != "0" ] && return
+  # If the port is already set, then skip initialization
+  port=$(sqlite3 "$legacy_db" "SELECT value FROM config WHERE key='listenPortOverride'")
+  [ "$port" = "$legacy_port" ] && return
 
   # Stop the old supervisor and enable the proxy
   stop_supervisor
@@ -98,10 +98,12 @@ else
   setup_supervisor
 fi
 
-BALENA_SUPERVISOR_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${LEGACY_SUPERVISOR_PORT}"
+# Set the legacy supervisor address for the proxy
+LEGACY_SUPERVISOR_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${legacy_port}"
+
 # Make variables available for the new process
 export BALENA_API_ENDPOINT
-export BALENA_SUPERVISOR_ADDRESS
+export LEGACY_SUPERVISOR_ADDRESS
 
-# Start the proxy
-exec next-balena-supervisor
+# Start the new supervisor
+exec theseus

@@ -1,17 +1,21 @@
 [package]
-name = "next-balena-supervisor"
+name = "theseus"
 version = "0.0.2"
 edition = "2021"
 description = "Next-gen experimental balenaSupervisor"
-homepage = "https://github.com/balena-io-experimental/next-balena-supervisor"
+homepage = "https://github.com/balena-io-experimental/theseus"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/balena-io-experimental/next-balena-supervisor"
+repository = "https://github.com/balena-io-experimental/theseus"
+publish = false
 
 [dependencies]
-axum = { version = "0.8.4", features = ["macros"] }
+axum = { version = "0.8.4", default-features = false, features = [
+  "tokio",
+  "http1",
+] }
 hyper = "1.6.0"
-hyper-util = { version = "0.1.14", features = [
+hyper-util = { version = "0.1.14", default-features = false, features = [
   "http1",
   "client-legacy",
   "tokio",
@@ -26,3 +30,7 @@ tower-http = { version = "0.6.6", default-features = false, features = [
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 anyhow = "1.0.98"
+
+[profile.release]
+opt-level = "z"
+codegen-units = 1
