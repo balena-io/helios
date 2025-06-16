@@ -20,7 +20,6 @@ hyper-util = { version = "0.1.14", default-features = false, features = [
   "client-legacy",
   "tokio",
 ] }
-hyper-tls = "0.6.0"
 tokio = { version = "1.45.1", default-features = false, features = [
   "rt-multi-thread",
 ] }
@@ -30,6 +29,7 @@ tower-http = { version = "0.6.6", default-features = false, features = [
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 anyhow = "1.0.98"
+hyper-rustls = "0.27.7"
 
 [profile.release]
 opt-level = "z"

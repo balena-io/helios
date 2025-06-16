@@ -3,8 +3,9 @@ mod proxy;
 use crate::config::Config;
 use proxy::proxy_legacy;
 
+use anyhow::Context;
 use axum::{body::Body, Router};
-use hyper_tls::HttpsConnector;
+use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -25,14 +26,19 @@ struct ApiState {
 }
 
 impl ApiState {
-    pub fn new(config: Config) -> Self {
-        let https = HttpsConnector::new();
+    pub fn new(config: Config) -> anyhow::Result<Self> {
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .with_context(|| "no native root CA certificates found")?
+            .https_only()
+            .enable_http1()
+            .build();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        Self {
+        Ok(Self {
             global_config: config,
             https_client: client,
-        }
+        })
     }
 }
 
@@ -46,7 +52,7 @@ impl Api {
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        let state = ApiState::new(self.config.clone());
+        let state = ApiState::new(self.config.clone())?;
         let app = Router::new()
             // TODO: intercept /v1/update and call the local planner
             // Default to proxying requests if there is no handler
