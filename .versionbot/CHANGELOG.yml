@@ -1,4 +1,16 @@
 - commits:
+    - subject: Refactor code and rename repository
+      hash: 4f5bb07536d91a12c7fe5f7aa453c6c6efe60a92
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.0.3
+  title: ""
+  date: 2025-06-16T22:10:30.474Z
+- commits:
     - subject: Setup flowzone
       hash: dc1a1b5ae91e36122d66867c0e5e127a2e2d04cf
       body: ""
