@@ -1,0 +1,12 @@
+- commits:
+    - subject: Setup flowzone
+      hash: dc1a1b5ae91e36122d66867c0e5e127a2e2d04cf
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.0.2
+  title: ""
+  date: 2025-06-16T17:37:45.938Z
