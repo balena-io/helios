@@ -28,7 +28,12 @@ tower-http = { version = "0.6.6", default-features = false, features = [
   "trace",
 ] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.19", features = [
+  "env-filter",
+  "fmt",
+  "registry",
+  "ansi",
+] }
 anyhow = "1.0.98"
 
 [profile.release]

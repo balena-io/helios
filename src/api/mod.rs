@@ -1,7 +1,7 @@
 mod proxy;
 
 use crate::config::Config;
-use proxy::proxy_legacy;
+use proxy::{proxy_legacy, ProxyConfig};
 
 use axum::{body::Body, Router};
 use hyper_tls::HttpsConnector;
@@ -9,6 +9,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -17,8 +18,8 @@ pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 #[derive(Clone)]
 struct ApiState {
-    /// Global supervisor configuration
-    global_config: Config,
+    /// Legacy proxy configuration
+    proxy: Arc<ProxyConfig>,
 
     /// Shared https client for remote connections
     https_client: HttpsClient,
@@ -30,7 +31,10 @@ impl ApiState {
         let client = Client::builder(TokioExecutor::new()).build(https);
 
         Self {
-            global_config: config,
+            proxy: Arc::new(ProxyConfig {
+                legacy_uri: config.legacy.uri,
+                remote_uri: config.balena.uri,
+            }),
             https_client: client,
         }
     }
@@ -54,11 +58,11 @@ impl Api {
             .layer(TraceLayer::new_for_http())
             .with_state(state);
 
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", self.config.local_api_port).parse()?;
+        let listen_addr: SocketAddr = format!("0.0.0.0:{}", self.config.local.port).parse()?;
 
         // Try to bind to the local address
         let listener = TcpListener::bind(listen_addr).await?;
-        info!("API Listening on {}", self.config.local_api_port);
+        info!("API Listening on {}", self.config.local.port);
 
         axum::serve(listener, app).await?;
         Ok(())

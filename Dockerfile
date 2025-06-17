@@ -16,14 +16,14 @@ COPY src ./src
 RUN cargo test
 
 # Build release
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Release target
 FROM alpine:3.21
 
 # Install release dependencies
 RUN apk add --update --no-cache \
-		libgcc curl sqlite jq dbus
+		libstdc++ sqlite jq dbus
 
 COPY start.sh /usr/bin
 COPY --from=build /usr/src/app/target/release/theseus /usr/bin

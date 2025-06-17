@@ -7,12 +7,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hyper::Uri;
-use tracing::{instrument, Span};
+use tracing::info;
+
+pub struct ProxyConfig {
+    pub remote_uri: Uri,
+    pub legacy_uri: Uri,
+}
 
 /// Proxy requests to/from legacy supervisor to the relevant target
 ///
 /// This is the fallback API behavior while we the supervisor migration is ongoing
-#[instrument(skip(state, request), fields(target))]
 pub async fn proxy_legacy(
     State(state): State<ApiState>,
     request: Request,
@@ -26,11 +30,14 @@ pub async fn proxy_legacy(
         .get("user-agent")
         .and_then(|ua| ua.to_str().ok())
         .filter(|ua| ua.starts_with("Supervisor/"))
-        .map(|_| &state.global_config.balena_api_uri)
-        .unwrap_or(&state.global_config.legacy_supervisor_uri);
+        .map(|_| &state.proxy.remote_uri)
+        .unwrap_or(&state.proxy.legacy_uri);
 
     // Record the target address for the request
-    Span::current().record("target", target_endpoint.to_string());
+    info!(
+        "target" = target_endpoint.to_string(),
+        "proxying request to"
+    );
 
     // Build target URI
     let mut target_parts = target_endpoint.clone().into_parts();

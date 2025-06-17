@@ -12,6 +12,9 @@ unset LEGACY_SUPERVISOR_PORT
 
 # Read credentials from config.json
 BALENA_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
+BALENA_UUID="$(jq -r .uuid /mnt/boot/config.json)"
+BALENA_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
+BALENA_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
 
 # Check for required variables
 for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_API_ENDPOINT; do
@@ -103,6 +106,9 @@ LEGACY_SUPERVISOR_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${legacy_port}"
 
 # Make variables available for the new process
 export BALENA_API_ENDPOINT
+export BALENA_UUID
+export BALENA_API_KEY
+export BALENA_POLL_INTERVAL
 export LEGACY_SUPERVISOR_ADDRESS
 
 # Start the new supervisor
