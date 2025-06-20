@@ -33,12 +33,15 @@ pub struct Remote {
     //// Remote API poll interval in milliseconds
     ///
     /// Defaults to 15 mins (900000ms)
-    pub poll_interval_ms: u32,
+    pub poll_interval_ms: u64,
 
     /// Remote API request timeout
     ///
     /// Defaults to 59 secs
-    pub request_timeout_ms: u32,
+    pub request_timeout_ms: u64,
+
+    /// API rate limiting interval in milliseconds
+    pub min_interval_ms: u64,
 }
 
 impl Remote {
@@ -50,16 +53,18 @@ impl Remote {
         let api_key = env::var("BALENA_API_KEY").ok();
         let poll_interval_ms = env::var("BALENA_POLL_INTERVAL")
             .unwrap_or_else(|_| "900000".to_string())
-            .parse::<u32>()?;
+            .parse::<u64>()?;
         let request_timeout_ms = env::var("BALENA_REQUEST_TIMEOUT")
             .unwrap_or_else(|_| "59000".to_string())
-            .parse::<u32>()?;
+            .parse::<u64>()?;
 
         Ok(Self {
             uri,
             api_key,
             poll_interval_ms,
             request_timeout_ms,
+            // Not configurable via env vars
+            min_interval_ms: 15000,
         })
     }
 }

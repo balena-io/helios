@@ -1,5 +1,6 @@
 mod api;
 mod config;
+pub mod request;
 
 use anyhow::Result;
 use api::Api;
