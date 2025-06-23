@@ -238,6 +238,7 @@ impl RequestState {
         // Use the min configured interval as initial backoff
         let current_backoff = config.min_interval;
         Self {
+            // TODO: we need to add a DNS resolver to support MDNS
             client: reqwest::Client::new(),
             endpoint,
             config,

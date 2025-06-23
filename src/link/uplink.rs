@@ -1,10 +1,8 @@
 //! API uplink component. It regularly polls target state from the remote backend and passes these
 //! directives to the control core
 
-use crate::{
-    config::Config,
-    request::{Get, RequestConfig},
-};
+use super::request::{Get, RequestConfig};
+use crate::config::Config;
 use anyhow::Result;
 use axum::http::uri::PathAndQuery;
 use hyper::Uri;
@@ -134,7 +132,7 @@ impl UplinkService {
         let mut client = Get::new(endpoint, request_config);
 
         // Perform initial poll before starting the timer
-        // TODO: on the legacy supervisor the first poll depends on the instant updates
+        // XXX: on the legacy supervisor the first poll depends on the instant updates
         // configuration. Should we replicate that here? An alternative would be to cache the
         // target state/etag outside the process memory, so a supervisor restart only pull the target if it has
         // changed

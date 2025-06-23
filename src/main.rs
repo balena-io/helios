@@ -1,7 +1,7 @@
 mod api;
 mod config;
+pub mod control;
 pub mod link;
-pub mod request;
 
 use anyhow::Result;
 use api::Api;

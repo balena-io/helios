@@ -6,6 +6,9 @@ set -e
 DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
+# Use debug logging by default, disabling logs dependenc
+RUST_LOG=${RUST_LOG:-theseus=debug,mahler=debug}
+
 # Supervisor override port
 legacy_port=${LEGACY_SUPERVISOR_PORT:-48480}
 unset LEGACY_SUPERVISOR_PORT
