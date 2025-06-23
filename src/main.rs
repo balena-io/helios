@@ -1,10 +1,13 @@
 mod api;
 mod config;
+pub mod link;
 pub mod request;
 
 use anyhow::Result;
 use api::Api;
 use config::Config;
+use link::UplinkService;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
@@ -32,7 +35,18 @@ async fn main() -> Result<()> {
     info!("Configuration loaded successfully");
     debug!("{:#?}", config);
 
-    let api = Api::new(config);
+    let api = Api::new(config.clone());
+
+    if config.balena.api_key.is_some() {
+        info!("Starting target state poll");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _ = UplinkService::new(config, tx).await?;
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                debug!("received target state request");
+            }
+        });
+    }
 
     api.start().await?;
 

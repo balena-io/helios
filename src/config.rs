@@ -42,6 +42,13 @@ pub struct Remote {
 
     /// API rate limiting interval in milliseconds
     pub min_interval_ms: u64,
+
+    /// API target state poll max jitter delay
+    ///
+    /// NOTE: the jitter has as objective to reduce the load on networks that have
+    /// devices on the 1000s. It's not meant to ease the load on the API as the backend performs
+    /// other operations to deal with scaling issues
+    pub max_jitter_delay_ms: u64,
 }
 
 impl Remote {
@@ -64,7 +71,8 @@ impl Remote {
             poll_interval_ms,
             request_timeout_ms,
             // Not configurable via env vars
-            min_interval_ms: 15000,
+            min_interval_ms: 15 * 1000,
+            max_jitter_delay_ms: 60 * 1000,
         })
     }
 }
