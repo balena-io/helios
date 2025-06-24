@@ -6,7 +6,6 @@ use crate::config::Config;
 use anyhow::Result;
 use axum::http::uri::PathAndQuery;
 use hyper::Uri;
-use rand::Rng;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
@@ -212,7 +211,7 @@ impl UplinkService {
     }
 
     fn calculate_jitter(base_interval: Duration, max_jitter: Duration) -> Duration {
-        let jitter_ms = rand::thread_rng().gen_range(0..=max_jitter.as_millis() as u64);
+        let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
         base_interval + Duration::from_millis(jitter_ms)
     }
 }

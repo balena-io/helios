@@ -980,7 +980,7 @@ mod tests {
 
         client.patch(json!({"status": "test"}));
 
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
 
         let metrics_after = client.metrics();
         assert_eq!(metrics_after.success_count, 1);

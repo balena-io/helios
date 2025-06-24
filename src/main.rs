@@ -2,11 +2,13 @@ mod api;
 mod config;
 pub mod control;
 pub mod link;
+mod overrides;
 
 use anyhow::Result;
 use api::Api;
 use config::Config;
 use link::UplinkService;
+use overrides::Overrides;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 use tracing_subscriber::{
@@ -38,14 +40,23 @@ async fn main() -> Result<()> {
     let api = Api::new(config.clone());
 
     if config.balena.api_key.is_some() {
+        let overrides = Overrides::new(config.uuid.clone());
+
         info!("Starting target state poll");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let _ = UplinkService::new(config, tx).await?;
+
+        // Get a copy of the API state to pass on the target
         let api_state = api.get_state();
         tokio::spawn(async move {
             while let Some(directive) = rx.recv().await {
                 debug!("received target state request");
-                api_state.set_target_state(directive.target).await;
+                // Override the target state from `/mnt/temp/apps`
+                let target_with_overrides = overrides.apply(directive.target.clone()).await;
+
+                // Update the API target state, this will be returned by the API in
+                // polling requests from the legacy supervisor
+                api_state.set_target_state(target_with_overrides).await;
             }
         });
     }
