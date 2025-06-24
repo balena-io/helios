@@ -41,9 +41,11 @@ async fn main() -> Result<()> {
         info!("Starting target state poll");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let _ = UplinkService::new(config, tx).await?;
+        let api_state = api.get_state();
         tokio::spawn(async move {
-            while rx.recv().await.is_some() {
+            while let Some(directive) = rx.recv().await {
                 debug!("received target state request");
+                api_state.set_target_state(directive.target).await;
             }
         });
     }

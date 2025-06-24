@@ -8,21 +8,29 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 #[derive(Clone)]
-struct ApiState {
+pub struct ApiState {
     /// Legacy proxy configuration
     proxy: Arc<ProxyConfig>,
 
     /// Shared https client for remote connections
     https_client: HttpsClient,
+
+    /// Device UUID
+    uuid: String,
+
+    /// Cached target state from uplink service
+    target_state: Arc<RwLock<Option<Value>>>,
 }
 
 impl ApiState {
@@ -36,27 +44,44 @@ impl ApiState {
                 remote_uri: config.balena.uri,
             }),
             https_client: client,
+            uuid: config.uuid,
+            target_state: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_target_state(&self, target: Value) {
+        let mut state = self.target_state.write().await;
+        *state = Some(target);
+    }
+
+    pub async fn get_target_state(&self) -> Option<Value> {
+        let state = self.target_state.read().await;
+        state.clone()
     }
 }
 
 pub struct Api {
     config: Config,
+    state: ApiState,
 }
 
 impl Api {
     pub fn new(config: Config) -> Self {
-        Self { config }
+        let state = ApiState::new(config.clone());
+        Self { config, state }
+    }
+
+    pub fn get_state(&self) -> ApiState {
+        self.state.clone()
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        let state = ApiState::new(self.config.clone());
         let app = Router::new()
             // TODO: intercept /v1/update and call the local planner
             // Default to proxying requests if there is no handler
             .fallback(proxy_legacy)
             .layer(TraceLayer::new_for_http())
-            .with_state(state);
+            .with_state(self.state.clone());
 
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", self.config.local.port).parse()?;
 
