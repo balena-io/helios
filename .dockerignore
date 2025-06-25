@@ -1,0 +1,6 @@
+**/.git
+**/node_modules
+**/target
+**/.cache
+livepush
+package*.json

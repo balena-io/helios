@@ -21,6 +21,11 @@ RUN cargo build --release --locked
 # Release target
 FROM alpine:3.21
 
+# Image metadata
+LABEL org.opencontainers.image.source="https://github.com/balena-io-experimental/theseus"
+LABEL org.opencontainers.image.description="Next-gen experimental balenaSupervisor"
+LABEL org.opencontainers.image.licenses=APACHE-2.0
+
 # Install release dependencies
 RUN apk add --update --no-cache \
 		libstdc++ sqlite jq dbus

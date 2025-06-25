@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "node16",
+		"moduleResolution": "node16",
+		"noUnusedParameters": true,
+		"noUnusedLocals": true,
+		"strict": true,
+		"target": "es2022",
+		"skipLibCheck": true,
+		"strictNullChecks": true
+	},
+	"include": [
+		"livepush/**/*.ts"
+	],
+	"exclude": [
+		"node_modules/**/*"
+	]
+}
