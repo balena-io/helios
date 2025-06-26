@@ -1,7 +1,7 @@
 mod proxy;
 
 use crate::config::Config;
-use proxy::{proxy_legacy, ProxyConfig};
+use proxy::{proxy, ProxyConfig};
 
 use axum::{body::Body, Router};
 use hyper_tls::HttpsConnector;
@@ -20,7 +20,7 @@ pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 #[derive(Clone)]
 pub struct ApiState {
-    /// Legacy proxy configuration
+    /// Proxy configuration
     proxy: Arc<ProxyConfig>,
 
     /// Shared https client for remote connections
@@ -40,7 +40,7 @@ impl ApiState {
 
         Self {
             proxy: Arc::new(ProxyConfig {
-                legacy_uri: config.legacy.uri,
+                fallback_uri: config.fallback.uri,
                 remote_uri: config.balena.uri,
             }),
             https_client: client,
@@ -79,7 +79,7 @@ impl Api {
         let app = Router::new()
             // TODO: intercept /v1/update and call the local planner
             // Default to proxying requests if there is no handler
-            .fallback(proxy_legacy)
+            .fallback(proxy)
             .layer(TraceLayer::new_for_http())
             .with_state(self.state.clone());
 

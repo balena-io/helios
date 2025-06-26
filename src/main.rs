@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
             fmt::layer()
                 .with_writer(std::io::stderr)
                 .with_span_events(FmtSpan::CLOSE)
-                .event_format(fmt::format().compact().with_target(false)),
+                .event_format(fmt::format().compact().with_target(false).without_time()),
         )
         .init();
 

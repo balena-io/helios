@@ -7,11 +7,11 @@ DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
 # Use debug logging by default, disabling logs dependenc
-RUST_LOG=${RUST_LOG:-theseus=debug,mahler=debug}
+RUST_LOG=${RUST_LOG:-debug,hyper=error,bollard=error}
 
-# Supervisor override port
-legacy_port=${LEGACY_SUPERVISOR_PORT:-48480}
-unset LEGACY_SUPERVISOR_PORT
+# Supervisor fallback port
+fallback_port=${FALLBACK_PORT:-48480}
+unset FALLBACK_PORT
 
 # Read credentials from config.json
 BALENA_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
@@ -71,7 +71,7 @@ legacy_db=/mnt/legacy/database.sqlite
 enable_proxy() {
   # Override supervisor configuration
   sqlite3 "$legacy_db" "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '$BALENA_SUPERVISOR_ADDRESS') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
-  sqlite3 "$legacy_db" "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${legacy_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+  sqlite3 "$legacy_db" "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${fallback_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
 }
 
 disable_proxy() {
@@ -82,7 +82,7 @@ disable_proxy() {
 setup_supervisor() {
   # If the port is already set, then skip initialization
   port=$(sqlite3 "$legacy_db" "SELECT value FROM config WHERE key='listenPortOverride'")
-  [ "$port" = "$legacy_port" ] && return
+  [ "$port" = "$fallback_port" ] && return
 
   # Stop the old supervisor and enable the proxy
   stop_supervisor
@@ -104,15 +104,16 @@ else
   setup_supervisor
 fi
 
-# Set the legacy supervisor address for the proxy
-LEGACY_SUPERVISOR_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${legacy_port}"
+# Set the fallback supervisor address for the proxy
+FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${fallback_port}"
 
 # Make variables available for the new process
 export BALENA_API_ENDPOINT
 export BALENA_UUID
 export BALENA_API_KEY
 export BALENA_POLL_INTERVAL
-export LEGACY_SUPERVISOR_ADDRESS
+export FALLBACK_ADDRESS
+export RUST_LOG
 
 # Start the new supervisor
 exec theseus

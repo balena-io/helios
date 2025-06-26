@@ -77,15 +77,15 @@ impl Remote {
     }
 }
 #[derive(Clone, Debug)]
-/// Legacy proxy configurations
-pub struct Legacy {
+/// Fallback proxy configurations
+pub struct Fallback {
     pub uri: Uri,
 }
 
-impl Legacy {
+impl Fallback {
     pub fn from_env() -> Result<Self> {
-        let uri = env::var("LEGACY_SUPERVISOR_ADDRESS")
-            .with_context(|| "LEGACY_SUPERVISOR_ADDRESS undefined")?
+        let uri = env::var("FALLBACK_ADDRESS")
+            .with_context(|| "FALLBACK_ADDRESS undefined")?
             .parse()?;
         Ok(Self { uri })
     }
@@ -96,7 +96,7 @@ pub struct Config {
     pub uuid: String,
     pub local: Local,
     pub balena: Remote,
-    pub legacy: Legacy,
+    pub fallback: Fallback,
 }
 
 impl Config {
@@ -104,13 +104,13 @@ impl Config {
         let uuid = env::var("BALENA_UUID").with_context(|| "Device UUID should be provided")?;
         let local = Local::from_env()?;
         let balena = Remote::from_env()?;
-        let legacy = Legacy::from_env()?;
+        let fallback = Fallback::from_env()?;
 
         Ok(Self {
             uuid,
             local,
             balena,
-            legacy,
+            fallback,
         })
     }
 }

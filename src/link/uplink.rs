@@ -225,7 +225,7 @@ impl Drop for UplinkService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Legacy, Local, Remote};
+    use crate::config::{Fallback, Local, Remote};
     use mockito::Server;
     use serde_json::json;
     use std::time::Duration;
@@ -243,8 +243,8 @@ mod tests {
                 min_interval_ms: 10,
                 max_jitter_delay_ms: 10, // Minimal jitter for tests
             },
-            legacy: Legacy {
-                uri: "http://legacy.test".parse().unwrap(),
+            fallback: Fallback {
+                uri: "http://fallback.test".parse().unwrap(),
             },
         }
     }
@@ -569,7 +569,7 @@ mod tests {
                 min_interval_ms: 10,
                 max_jitter_delay_ms: 0, // No jitter for precise timing
             },
-            legacy: Legacy {
+            fallback: Fallback {
                 uri: "http://legacy.test".parse().unwrap(),
             },
         };
