@@ -1,4 +1,80 @@
 - commits:
+    - subject: Add target state overrides system
+      hash: 1a0f59afa629b820fb35eaa374cf6ea23b123da2
+      body: |
+        Implement app-specific configuration overrides that read `override.json`
+        files from /mnt/temp/apps/{app-uuid}/ and apply them to target state.
+        Includes comprehensive test coverage and dependency injection for
+        file system operations.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Implement target state caching and interception in proxy
+      hash: b2b5b3c79d0e8d10ea8d34116bae3255439bdea2
+      body: |
+        Intercept /v3/device/{uuid}/state requests from legacy supervisor
+        and serve from locally cached target state instead of proxying
+        to remote API. Returns 503 with Retry-After: 15 when no target
+        state is cached yet.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add uplink service for target state polling
+      hash: 2ac811d6f4f1317b52e2cc9f4d06d9b3aaebd9d9
+      body: >
+        Implement UplinkService that polls target state from the API and
+        notifies
+
+        subscribers of changes. Includes jitter for load balancing, manual fetch
+
+        triggers, and comprehensive error handling.
+
+
+        - Add rand dependency for jitter calculation
+
+        - Create link module with uplink service implementation
+
+        - Add max_jitter_delay_ms configuration option
+
+        - Integrate uplink service into main application flow
+
+        - Add extensive test coverage for polling, updates, and error scenarios
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add HTTP client functionality
+      hash: 264165166132c8d6a109aa95932bde219f426144
+      body: |
+        Introduce new request module with comprehensive HTTP client
+        capabilities including GET/POST methods, JSON handling,
+        error management, and timeout configuration. Add reqwest
+        and related networking dependencies to support external
+        API communication and data fetching operations.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor configuration
+      hash: 7512d558497e9bce0da3dcdfd305ee3e6e13169c
+      body: |
+        Add some configuration variables and organize the Config type in
+        preparation for adding target state poll feature.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.1.0
+  title: ""
+  date: 2025-06-26T02:38:50.602Z
+- commits:
     - subject: Refactor code and rename repository
       hash: 4f5bb07536d91a12c7fe5f7aa453c6c6efe60a92
       body: ""

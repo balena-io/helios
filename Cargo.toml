@@ -1,6 +1,6 @@
 [package]
 name = "theseus"
-version = "0.0.3"
+version = "0.1.0"
 edition = "2021"
 description = "Next-gen experimental balenaSupervisor"
 homepage = "https://github.com/balena-io-experimental/theseus"
