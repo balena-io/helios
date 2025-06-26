@@ -3,28 +3,114 @@ use hyper::Uri;
 use std::env;
 
 #[derive(Clone, Debug)]
+/// Local API configurations
+pub struct Local {
+    /// Local listen port
+    pub port: u16,
+}
+
+impl Local {
+    pub fn from_env() -> Result<Self> {
+        let port = env::var("BALENA_SUPERVISOR_PORT")
+            .unwrap_or_else(|_| "48484".to_string())
+            .parse::<u16>()?;
+
+        Ok(Self { port })
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Remote API configurations
+pub struct Remote {
+    /// Remote API endpoint.
+    ///
+    /// Defaults to https://api.balena-cloud.com
+    pub uri: Uri,
+
+    /// Remote API key
+    pub api_key: Option<String>,
+
+    //// Remote API poll interval in milliseconds
+    ///
+    /// Defaults to 15 mins (900000ms)
+    pub poll_interval_ms: u64,
+
+    /// Remote API request timeout
+    ///
+    /// Defaults to 59 secs
+    pub request_timeout_ms: u64,
+
+    /// API rate limiting interval in milliseconds
+    pub min_interval_ms: u64,
+
+    /// API target state poll max jitter delay
+    ///
+    /// NOTE: the jitter has as objective to reduce the load on networks that have
+    /// devices on the 1000s. It's not meant to ease the load on the API as the backend performs
+    /// other operations to deal with scaling issues
+    pub max_jitter_delay_ms: u64,
+}
+
+impl Remote {
+    /// Load configurations from environment
+    pub fn from_env() -> Result<Self> {
+        let uri = env::var("BALENA_API_ENDPOINT")
+            .unwrap_or_else(|_| "https://api.balena-cloud.com".to_string())
+            .parse()?;
+        let api_key = env::var("BALENA_API_KEY").ok();
+        let poll_interval_ms = env::var("BALENA_POLL_INTERVAL")
+            .unwrap_or_else(|_| "900000".to_string())
+            .parse::<u64>()?;
+        let request_timeout_ms = env::var("BALENA_REQUEST_TIMEOUT")
+            .unwrap_or_else(|_| "59000".to_string())
+            .parse::<u64>()?;
+
+        Ok(Self {
+            uri,
+            api_key,
+            poll_interval_ms,
+            request_timeout_ms,
+            // Not configurable via env vars
+            min_interval_ms: 15 * 1000,
+            max_jitter_delay_ms: 60 * 1000,
+        })
+    }
+}
+#[derive(Clone, Debug)]
+/// Fallback proxy configurations
+pub struct Fallback {
+    pub uri: Uri,
+}
+
+impl Fallback {
+    pub fn from_env() -> Result<Self> {
+        let uri = env::var("FALLBACK_ADDRESS")
+            .with_context(|| "FALLBACK_ADDRESS undefined")?
+            .parse()?;
+        Ok(Self { uri })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
-    pub local_api_port: u16,
-    pub balena_api_uri: Uri,
-    pub legacy_supervisor_uri: Uri,
+    pub uuid: String,
+    pub local: Local,
+    pub balena: Remote,
+    pub fallback: Fallback,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let local_api_port = env::var("BALENA_SUPERVISOR_PORT")
-            .unwrap_or_else(|_| "48484".to_string())
-            .parse::<u16>()?;
-        let balena_api_uri = env::var("BALENA_API_ENDPOINT")
-            .unwrap_or_else(|_| "https://api.balena-cloud.com".to_string())
-            .parse()?;
-        let legacy_supervisor_uri = env::var("LEGACY_SUPERVISOR_ADDRESS")
-            .with_context(|| "LEGACY_SUPERVISOR_ADDRESS undefined")?
-            .parse()?;
+        let uuid = env::var("BALENA_UUID").with_context(|| "Device UUID should be provided")?;
+        let local = Local::from_env()?;
+        let balena = Remote::from_env()?;
+        let fallback = Fallback::from_env()?;
 
         Ok(Self {
-            local_api_port,
-            balena_api_uri,
-            legacy_supervisor_uri,
+            uuid,
+            local,
+            balena,
+            fallback,
         })
     }
 }
