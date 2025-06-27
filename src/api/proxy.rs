@@ -10,7 +10,7 @@ use hyper::Uri;
 use tracing::info;
 
 pub struct ProxyConfig {
-    pub remote_uri: Uri,
+    pub remote_uri: Option<Uri>,
     pub fallback_uri: Option<Uri>,
 }
 
@@ -65,12 +65,18 @@ pub async fn proxy(
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        Some(&state.proxy.remote_uri)
+        if let Some(ref remote_uri) = state.proxy.remote_uri {
+            remote_uri
+        } else {
+            // No remote API available, return 503 with Retry-After header
+            // tell the fallback to retry in 10 minutes
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", HeaderValue::from_static("600"));
+            return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
+        }
+    } else if let Some(ref fallback_uri) = state.proxy.fallback_uri {
+        fallback_uri
     } else {
-        state.proxy.fallback_uri.as_ref()
-    };
-
-    let Some(target_endpoint) = target_endpoint else {
         // No fallback configured, return 404
         return Ok((StatusCode::NOT_FOUND).into_response());
     };
@@ -153,7 +159,7 @@ mod tests {
 
         ApiState {
             proxy: Arc::new(ProxyConfig {
-                remote_uri,
+                remote_uri: Some(remote_uri),
                 fallback_uri: Some(fallback_uri),
             }),
             https_client: client,
@@ -172,12 +178,30 @@ mod tests {
 
         ApiState {
             proxy: Arc::new(ProxyConfig {
-                remote_uri,
+                remote_uri: Some(remote_uri),
                 fallback_uri: Some(fallback_uri),
             }),
             https_client: client,
             uuid: "test-device-uuid".to_string(),
             target_state: Arc::new(RwLock::new(target)),
+        }
+    }
+
+    fn create_test_state_with_none_uris(
+        remote_uri: Option<Uri>,
+        fallback_uri: Option<Uri>,
+    ) -> ApiState {
+        let https = HttpsConnector::new();
+        let client = Client::builder(TokioExecutor::new()).build(https);
+
+        ApiState {
+            proxy: Arc::new(ProxyConfig {
+                remote_uri,
+                fallback_uri,
+            }),
+            https_client: client,
+            uuid: "test-device-uuid".to_string(),
+            target_state: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -467,5 +491,70 @@ mod tests {
         assert!(result.is_ok());
 
         remote_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_request_with_no_remote_uri() {
+        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state_with_none_uris(None, Some(fallback_uri));
+
+        let request = create_test_request("/test", Some("Supervisor/1.0.0"));
+
+        let result = proxy(State(state), request).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "600");
+    }
+
+    #[tokio::test]
+    async fn test_non_supervisor_request_with_no_fallback_uri() {
+        let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
+        let state = create_test_state_with_none_uris(Some(remote_uri), None);
+
+        let request = create_test_request("/test", Some("CustomClient/1.0"));
+
+        let result = proxy(State(state), request).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_target_state_interception_with_no_remote_uri() {
+        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state_with_none_uris(None, Some(fallback_uri));
+
+        let request = create_test_request(
+            "/device/v3/test-device-uuid/state",
+            Some("Supervisor/1.0.0"),
+        );
+
+        let result = proxy(State(state), request).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "15");
+    }
+
+    #[tokio::test]
+    async fn test_both_remote_and_fallback_uris_none() {
+        let state = create_test_state_with_none_uris(None, None);
+
+        let supervisor_request = create_test_request("/test", Some("Supervisor/1.0.0"));
+        let result = proxy(State(state.clone()), supervisor_request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "600");
+
+        let non_supervisor_request = create_test_request("/test", Some("CustomClient/1.0"));
+        let result = proxy(State(state), non_supervisor_request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

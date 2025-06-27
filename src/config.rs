@@ -23,8 +23,8 @@ pub struct Local {
 #[derive(Clone, Debug, Parser)]
 /// Remote API configurations
 pub struct Remote {
-    #[arg(long = "remote-api-endpoint", env = "REMOTE_API_ENDPOINT", default_value = "https://api.balena-cloud.com", value_name = "uri", help = "Remote API endpoint", value_parser = parse_uri)]
-    pub api_endpoint: Uri,
+    #[arg(long = "remote-api-endpoint", env = "REMOTE_API_ENDPOINT", value_name = "uri", help = "Remote API endpoint", value_parser = parse_uri)]
+    pub api_endpoint: Option<Uri>,
 
     #[arg(
         long = "remote-api-key",

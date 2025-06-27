@@ -11,7 +11,7 @@ use config::Config;
 use link::UplinkService;
 use overrides::Overrides;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -23,7 +23,14 @@ use tracing_subscriber::{
 async fn main() -> Result<()> {
     // Initialize tracing subscriber for human-readable logs
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
+        .with(
+            EnvFilter::try_from_default_env().unwrap_or(
+                EnvFilter::default()
+                    .add_directive("debug".parse()?)
+                    .add_directive("hyper=error".parse()?)
+                    .add_directive("bollard=error".parse()?),
+            ),
+        )
         .with(
             fmt::layer()
                 .with_writer(std::io::stderr)
@@ -32,7 +39,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("Supervisor started");
+    info!("Service started");
 
     let config = Config::parse();
     info!("Configuration loaded successfully");
@@ -40,18 +47,18 @@ async fn main() -> Result<()> {
 
     let api = Api::new(config.clone());
 
-    if config.remote.api_key.is_some() {
+    // Only start poll if there is an API endpoint
+    if let Some(api_endpoint) = config.remote.api_endpoint.clone() {
         let overrides = Overrides::new(config.uuid.clone());
 
-        info!("Starting target state poll");
+        info!("Starting target state poll to {api_endpoint}");
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _ = UplinkService::new(config, tx).await?;
+        let _ = UplinkService::new(api_endpoint, config, tx).await?;
 
         // Get a copy of the API state to pass on the target
         let api_state = api.get_state();
         tokio::spawn(async move {
             while let Some(directive) = rx.recv().await {
-                debug!("received target state request");
                 // Override the target state from `/mnt/temp/apps`
                 let target_with_overrides = overrides.apply(directive.target.clone()).await;
 
@@ -60,6 +67,8 @@ async fn main() -> Result<()> {
                 api_state.set_target_state(target_with_overrides).await;
             }
         });
+    } else {
+        warn!("No remote API endpoint provided, running in unmanaged mode")
     }
 
     api.start().await?;

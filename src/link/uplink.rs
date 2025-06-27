@@ -63,13 +63,16 @@ impl UplinkService {
     ///     println!("New target state: {:?}", request.target);
     /// }
     /// ```
-    pub async fn new(config: Config, subscriber: mpsc::UnboundedSender<Directive>) -> Result<Self> {
+    pub async fn new(
+        api_endpoint: Uri,
+        config: Config,
+        subscriber: mpsc::UnboundedSender<Directive>,
+    ) -> Result<Self> {
         let (command_tx, command_rx) = mpsc::channel(1); // Lossy channel with capacity 1
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Build the target state endpoint by replacing any existing path
-        let endpoint_uri = config.remote.api_endpoint.clone();
-        let mut endpoint_parts = endpoint_uri.into_parts();
+        let mut endpoint_parts = api_endpoint.into_parts();
         endpoint_parts.path_and_query = Some(PathAndQuery::from_maybe_shared(format!(
             "/device/v3/{}/state",
             config.uuid
@@ -231,12 +234,12 @@ mod tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    fn test_config(endpoint: String, api_key: Option<String>) -> Config {
+    fn test_config(api_key: Option<String>) -> Config {
         Config {
             uuid: "test-device-uuid".to_string(),
             local: Local { port: 48484 },
             remote: Remote {
-                api_endpoint: endpoint.parse().unwrap(),
+                api_endpoint: None,
                 api_key,
                 poll_interval_ms: 100, // Short for tests
                 request_timeout_ms: 5000,
@@ -250,10 +253,10 @@ mod tests {
     #[tokio::test]
     async fn test_target_state_service_creation() {
         let server = Server::new_async().await;
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        let service = UplinkService::new(config, tx).await;
+        let service = UplinkService::new(server.url().parse().unwrap(), config, tx).await;
         assert!(service.is_ok());
     }
 
@@ -270,9 +273,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _service = UplinkService::new(config, tx).await.unwrap();
+        let _service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Wait for the first poll
         let request = timeout(Duration::from_millis(500), rx.recv())
@@ -303,9 +306,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let service = UplinkService::new(config, tx).await.unwrap();
+        let service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // First, consume the initial poll result
         let initial_request = timeout(Duration::from_millis(500), rx.recv())
@@ -364,9 +367,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let service = UplinkService::new(config, tx).await.unwrap();
+        let service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Wait for initial state
         let initial_request = timeout(Duration::from_millis(200), rx.recv())
@@ -413,9 +416,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _service = UplinkService::new(config, tx).await.unwrap();
+        let _service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Should receive the message
         let request = timeout(Duration::from_millis(200), rx.recv())
@@ -445,9 +448,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let service = UplinkService::new(config, tx).await.unwrap();
+        let service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Send multiple concurrent updates rapidly - due to lossy channel, some may be dropped
         service.trigger_fetch(FetchOpts::default());
@@ -477,10 +480,10 @@ mod tests {
     #[tokio::test]
     async fn test_service_shutdown() {
         let server = Server::new_async().await;
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let service = UplinkService::new(config, tx).await.unwrap();
+        let service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Drop the service
         drop(service);
@@ -505,9 +508,9 @@ mod tests {
             .create_async()
             .await;
 
-        let config = test_config(server.url(), Some("test-token".to_string()));
+        let config = test_config(Some("test-token".to_string()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _service = UplinkService::new(config, tx).await.unwrap();
+        let _service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Should not receive any notifications due to API errors
         let result = timeout(Duration::from_millis(200), rx.recv()).await;
@@ -560,7 +563,7 @@ mod tests {
             uuid: "test-device-uuid".to_string(),
             local: Local { port: 48484 },
             remote: Remote {
-                api_endpoint: server.url().parse().unwrap(),
+                api_endpoint: None,
                 api_key: Some("test-token".to_string()),
                 poll_interval_ms: 150, // 150ms interval
                 request_timeout_ms: 5000,
@@ -571,7 +574,7 @@ mod tests {
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _service = UplinkService::new(config, tx).await.unwrap();
+        let _service = UplinkService::new(server.url().parse().unwrap(), config, tx).await.unwrap();
 
         // Record times when we receive notifications
         let start_time = std::time::Instant::now();
