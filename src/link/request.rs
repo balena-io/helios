@@ -1134,8 +1134,7 @@ mod tests {
         // Verify that at least 1 second passed (respecting the retry-after header)
         assert!(
             elapsed >= Duration::from_millis(900),
-            "Request should have waited for retry-after, but only took {:?}",
-            elapsed
+            "Request should have waited for retry-after, but only took {elapsed:#?}",
         );
         assert_eq!(result.value, Some(json!({"status": "success"})));
         assert!(result.modified);
@@ -1513,7 +1512,7 @@ mod tests {
 
         match result {
             Err(PatchError::Status(400)) => {}
-            _ => panic!("Expected status 400, got {:?}", result),
+            _ => panic!("Expected status 400, got {result:?}"),
         }
         mock.assert_async().await;
     }

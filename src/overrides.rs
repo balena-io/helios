@@ -106,7 +106,7 @@ impl Overrides {
         {
             for (app_uuid, app_config) in apps_obj.iter_mut() {
                 let override_path =
-                    PathBuf::from(format!("/mnt/temp/apps/{}/override.json", app_uuid));
+                    PathBuf::from(format!("/mnt/temp/apps/{app_uuid}/override.json"));
 
                 // If there is an override for the app in the temp
                 // directory then use that instead of the target state.

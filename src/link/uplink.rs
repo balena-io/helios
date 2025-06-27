@@ -595,8 +595,7 @@ mod tests {
         let time_between = notification_times[1] - notification_times[0];
         assert!(
             time_between >= Duration::from_millis(130), // Allow some tolerance for test timing
-            "Time between polls should be at least 150ms, but was {:?}",
-            time_between
+            "Time between polls should be at least 150ms, but was {time_between:?}",
         );
 
         mock.assert_async().await;
