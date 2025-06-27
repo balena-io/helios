@@ -6,6 +6,7 @@ mod overrides;
 
 use anyhow::Result;
 use api::Api;
+use clap::Parser;
 use config::Config;
 use link::UplinkService;
 use overrides::Overrides;
@@ -33,13 +34,13 @@ async fn main() -> Result<()> {
 
     info!("Supervisor started");
 
-    let config = Config::from_env()?;
+    let config = Config::parse();
     info!("Configuration loaded successfully");
     debug!("{:#?}", config);
 
     let api = Api::new(config.clone());
 
-    if config.balena.api_key.is_some() {
+    if config.remote.api_key.is_some() {
         let overrides = Overrides::new(config.uuid.clone());
 
         info!("Starting target state poll");

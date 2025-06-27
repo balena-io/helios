@@ -1,116 +1,98 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use clap::Parser;
 use hyper::Uri;
-use std::env;
 
-#[derive(Clone, Debug)]
+fn parse_uri(s: &str) -> Result<Uri> {
+    let uri = s.parse()?;
+    Ok(uri)
+}
+
+#[derive(Clone, Debug, Parser)]
 /// Local API configurations
 pub struct Local {
-    /// Local listen port
+    #[arg(
+        long = "local-port",
+        env = "LOCAL_PORT",
+        default_value = "48484",
+        value_name = "port",
+        help = "Local API listen port"
+    )]
     pub port: u16,
 }
 
-impl Local {
-    pub fn from_env() -> Result<Self> {
-        let port = env::var("BALENA_SUPERVISOR_PORT")
-            .unwrap_or_else(|_| "48484".to_string())
-            .parse::<u16>()?;
-
-        Ok(Self { port })
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Parser)]
 /// Remote API configurations
 pub struct Remote {
-    /// Remote API endpoint.
-    ///
-    /// Defaults to https://api.balena-cloud.com
-    pub uri: Uri,
+    #[arg(long = "remote-api-endpoint", env = "REMOTE_API_ENDPOINT", default_value = "https://api.balena-cloud.com", value_name = "uri", help = "Remote API endpoint", value_parser = parse_uri)]
+    pub api_endpoint: Uri,
 
-    /// Remote API key
+    #[arg(
+        long = "remote-api-key",
+        env = "REMOTE_API_KEY",
+        value_name = "key",
+        help = "Remote API key"
+    )]
     pub api_key: Option<String>,
 
-    //// Remote API poll interval in milliseconds
-    ///
-    /// Defaults to 15 mins (900000ms)
+    #[arg(
+        long = "remote-poll-interval-ms",
+        env = "REMOTE_POLL_INTERVAL",
+        default_value = "900000",
+        value_name = "poll_interval_ms",
+        help = "Remote API poll interval in milliseconds"
+    )]
     pub poll_interval_ms: u64,
 
-    /// Remote API request timeout
-    ///
-    /// Defaults to 59 secs
+    #[arg(
+        long = "remote-request-timeout-ms",
+        env = "REMOTE_REQUEST_TIMEOUT",
+        default_value = "59000",
+        value_name = "request_timeout_ms",
+        help = "Remote API request timeout in milliseconds"
+    )]
     pub request_timeout_ms: u64,
 
-    /// API rate limiting interval in milliseconds
+    #[arg(
+        long = "remote-min-interval-ms",
+        default_value = "10000",
+        value_name = "min_interval_ms",
+        help = "API rate limiting interval in milliseconds"
+    )]
     pub min_interval_ms: u64,
 
-    /// API target state poll max jitter delay
-    ///
-    /// NOTE: the jitter has as objective to reduce the load on networks that have
-    /// devices on the 1000s. It's not meant to ease the load on the API as the backend performs
-    /// other operations to deal with scaling issues
+    #[arg(
+        long = "remote-max-jitter-delay-ms",
+        default_value = "60000",
+        value_name = "max_jitter_delay_ms",
+        help = "API target state poll max jitter delay in milliseconds"
+    )]
     pub max_jitter_delay_ms: u64,
 }
 
-impl Remote {
-    /// Load configurations from environment
-    pub fn from_env() -> Result<Self> {
-        let uri = env::var("BALENA_API_ENDPOINT")
-            .unwrap_or_else(|_| "https://api.balena-cloud.com".to_string())
-            .parse()?;
-        let api_key = env::var("BALENA_API_KEY").ok();
-        let poll_interval_ms = env::var("BALENA_POLL_INTERVAL")
-            .unwrap_or_else(|_| "900000".to_string())
-            .parse::<u64>()?;
-        let request_timeout_ms = env::var("BALENA_REQUEST_TIMEOUT")
-            .unwrap_or_else(|_| "59000".to_string())
-            .parse::<u64>()?;
-
-        Ok(Self {
-            uri,
-            api_key,
-            poll_interval_ms,
-            request_timeout_ms,
-            // Not configurable via env vars
-            min_interval_ms: 15 * 1000,
-            max_jitter_delay_ms: 60 * 1000,
-        })
-    }
-}
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Parser)]
 /// Fallback proxy configurations
 pub struct Fallback {
-    pub uri: Uri,
+    #[arg(long = "fallback-address", env = "FALLBACK_ADDRESS", value_name = "uri", help = "Fallback URI to proxy unsupported requests to", value_parser = parse_uri)]
+    pub address: Uri,
 }
 
-impl Fallback {
-    pub fn from_env() -> Result<Self> {
-        let uri = env::var("FALLBACK_ADDRESS")
-            .with_context(|| "FALLBACK_ADDRESS undefined")?
-            .parse()?;
-        Ok(Self { uri })
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Parser)]
+#[command(about = "Next-gen experimental balenaSupervisor")]
 pub struct Config {
+    #[arg(
+        long = "uuid",
+        env = "DEVICE_UUID",
+        value_name = "uuid",
+        help = "Device UUID"
+    )]
     pub uuid: String,
+
+    #[command(flatten)]
     pub local: Local,
-    pub balena: Remote,
+
+    #[command(flatten)]
+    pub remote: Remote,
+
+    #[command(flatten)]
     pub fallback: Fallback,
-}
-
-impl Config {
-    pub fn from_env() -> Result<Self> {
-        let uuid = env::var("BALENA_UUID").with_context(|| "Device UUID should be provided")?;
-        let local = Local::from_env()?;
-        let balena = Remote::from_env()?;
-        let fallback = Fallback::from_env()?;
-
-        Ok(Self {
-            uuid,
-            local,
-            balena,
-            fallback,
-        })
-    }
 }

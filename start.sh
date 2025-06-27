@@ -14,13 +14,13 @@ fallback_port=${FALLBACK_PORT:-48480}
 unset FALLBACK_PORT
 
 # Read credentials from config.json
-BALENA_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
-BALENA_UUID="$(jq -r .uuid /mnt/boot/config.json)"
-BALENA_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
-BALENA_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
+DEVICE_UUID="$(jq -r .uuid /mnt/boot/config.json)"
+REMOTE_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
+REMOTE_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
+REMOTE_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
 
 # Check for required variables
-for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_API_ENDPOINT; do
+for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS REMOTE_API_ENDPOINT; do
   eval val="\$$var"
   if [ -z "$val" ]; then
     echo "Error: variable '$var' is not set" >&2
@@ -104,16 +104,11 @@ else
   setup_supervisor
 fi
 
-# Set the fallback supervisor address for the proxy
-FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${fallback_port}"
-
 # Make variables available for the new process
-export BALENA_API_ENDPOINT
-export BALENA_UUID
-export BALENA_API_KEY
-export BALENA_POLL_INTERVAL
-export FALLBACK_ADDRESS
+export REMOTE_API_ENDPOINT
+export REMOTE_API_KEY
+export REMOTE_POLL_INTERVAL
 export RUST_LOG
 
 # Start the new supervisor
-exec theseus
+exec theseus --uuid "$DEVICE_UUID" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:${fallback_port}"

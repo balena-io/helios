@@ -68,7 +68,7 @@ impl UplinkService {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Build the target state endpoint by replacing any existing path
-        let endpoint_uri = config.balena.uri.clone();
+        let endpoint_uri = config.remote.api_endpoint.clone();
         let mut endpoint_parts = endpoint_uri.into_parts();
         endpoint_parts.path_and_query = Some(PathAndQuery::from_maybe_shared(format!(
             "/device/v3/{}/state",
@@ -76,11 +76,11 @@ impl UplinkService {
         ))?);
         let endpoint = Uri::from_parts(endpoint_parts)?.to_string();
 
-        let request_config = RequestConfig::from_config(&config.balena)
-            .with_api_token(config.balena.api_key.unwrap_or_default());
+        let request_config = RequestConfig::from_config(&config.remote)
+            .with_api_token(config.remote.api_key.unwrap_or_default());
 
-        let poll_interval = Duration::from_millis(config.balena.poll_interval_ms);
-        let max_jitter = Duration::from_millis(config.balena.max_jitter_delay_ms);
+        let poll_interval = Duration::from_millis(config.remote.poll_interval_ms);
+        let max_jitter = Duration::from_millis(config.remote.max_jitter_delay_ms);
 
         tokio::spawn(Self::background_task(
             endpoint,
@@ -235,8 +235,8 @@ mod tests {
         Config {
             uuid: "test-device-uuid".to_string(),
             local: Local { port: 48484 },
-            balena: Remote {
-                uri: endpoint.parse().unwrap(),
+            remote: Remote {
+                api_endpoint: endpoint.parse().unwrap(),
                 api_key,
                 poll_interval_ms: 100, // Short for tests
                 request_timeout_ms: 5000,
@@ -244,7 +244,7 @@ mod tests {
                 max_jitter_delay_ms: 10, // Minimal jitter for tests
             },
             fallback: Fallback {
-                uri: "http://fallback.test".parse().unwrap(),
+                address: "http://fallback.test".parse().unwrap(),
             },
         }
     }
@@ -561,8 +561,8 @@ mod tests {
         let config = Config {
             uuid: "test-device-uuid".to_string(),
             local: Local { port: 48484 },
-            balena: Remote {
-                uri: server.url().parse().unwrap(),
+            remote: Remote {
+                api_endpoint: server.url().parse().unwrap(),
                 api_key: Some("test-token".to_string()),
                 poll_interval_ms: 150, // 150ms interval
                 request_timeout_ms: 5000,
@@ -570,7 +570,7 @@ mod tests {
                 max_jitter_delay_ms: 0, // No jitter for precise timing
             },
             fallback: Fallback {
-                uri: "http://legacy.test".parse().unwrap(),
+                address: "http://legacy.test".parse().unwrap(),
             },
         };
 
