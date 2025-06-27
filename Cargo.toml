@@ -38,7 +38,11 @@ tracing-subscriber = { version = "0.3.19", features = [
   "ansi",
 ] }
 anyhow = "1.0.98"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "brotli"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "brotli",
+] }
 serde_json = "1.0"
 thiserror = "2"
 rand = "0.9.1"

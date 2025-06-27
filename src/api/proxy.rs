@@ -11,7 +11,7 @@ use tracing::info;
 
 pub struct ProxyConfig {
     pub remote_uri: Uri,
-    pub fallback_uri: Uri,
+    pub fallback_uri: Option<Uri>,
 }
 
 async fn handle_target_state_request(state: &ApiState) -> Result<Response, ProxyError> {
@@ -65,9 +65,14 @@ pub async fn proxy(
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        &state.proxy.remote_uri
+        Some(&state.proxy.remote_uri)
     } else {
-        &state.proxy.fallback_uri
+        state.proxy.fallback_uri.as_ref()
+    };
+
+    let Some(target_endpoint) = target_endpoint else {
+        // No fallback configured, return 404
+        return Ok((StatusCode::NOT_FOUND).into_response());
     };
 
     // Record the target address for the request
@@ -149,7 +154,7 @@ mod tests {
         ApiState {
             proxy: Arc::new(ProxyConfig {
                 remote_uri,
-                fallback_uri,
+                fallback_uri: Some(fallback_uri),
             }),
             https_client: client,
             uuid: "test-device-uuid".to_string(),
@@ -168,7 +173,7 @@ mod tests {
         ApiState {
             proxy: Arc::new(ProxyConfig {
                 remote_uri,
-                fallback_uri,
+                fallback_uri: Some(fallback_uri),
             }),
             https_client: client,
             uuid: "test-device-uuid".to_string(),

@@ -70,13 +70,6 @@ pub struct Remote {
 }
 
 #[derive(Clone, Debug, Parser)]
-/// Fallback proxy configurations
-pub struct Fallback {
-    #[arg(long = "fallback-address", env = "FALLBACK_ADDRESS", value_name = "uri", help = "Fallback URI to proxy unsupported requests to", value_parser = parse_uri)]
-    pub address: Uri,
-}
-
-#[derive(Clone, Debug, Parser)]
 #[command(about = "Next-gen experimental balenaSupervisor")]
 pub struct Config {
     #[arg(
@@ -93,6 +86,6 @@ pub struct Config {
     #[command(flatten)]
     pub remote: Remote,
 
-    #[command(flatten)]
-    pub fallback: Fallback,
+    #[arg(long = "fallback-address", env = "FALLBACK_ADDRESS", value_name = "uri", help = "Fallback URI to redirect unsupported API requests", value_parser = parse_uri)]
+    pub fallback_address: Option<Uri>,
 }

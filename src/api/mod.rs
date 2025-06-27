@@ -40,7 +40,7 @@ impl ApiState {
 
         Self {
             proxy: Arc::new(ProxyConfig {
-                fallback_uri: config.fallback.address,
+                fallback_uri: config.fallback_address,
                 remote_uri: config.remote.api_endpoint,
             }),
             https_client: client,
