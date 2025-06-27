@@ -1,14 +1,21 @@
 mod proxy;
 
 use crate::config::Config;
-use crate::link::UplinkService;
+use crate::link::{FetchOpts, UplinkService};
 use proxy::{proxy, ProxyConfig};
 
-use axum::{body::Body, Router};
+use axum::{
+    body::{Body, Bytes},
+    extract::State,
+    http::StatusCode,
+    routing::post,
+    Router,
+};
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use serde::Deserialize;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,6 +25,41 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
+
+#[derive(Deserialize)]
+struct UpdateRequest {
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    cancel: bool,
+}
+
+// Handle /v1/update requests
+//
+// This will trigger a fetch to the API (unless unmanaged)
+async fn handle_update(State(state): State<ApiState>, body: Bytes) -> StatusCode {
+    if let Some(uplink) = state.uplink.as_ref() {
+        let (force, cancel) = if body.is_empty() {
+            // Empty payload, use defaults
+            (false, false)
+        } else {
+            // Try to parse JSON
+            match serde_json::from_slice::<UpdateRequest>(&body) {
+                Ok(request) => (request.force, request.cancel),
+                Err(_) => (false, false), // Invalid JSON, use defaults
+            }
+        };
+
+        uplink.trigger_fetch(FetchOpts {
+            reemit: true,
+            force,
+            cancel,
+        });
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
 
 #[derive(Clone)]
 struct ApiState {
@@ -83,7 +125,7 @@ impl Api {
 
     pub async fn start(&self) -> anyhow::Result<()> {
         let app = Router::new()
-            // TODO: intercept /v1/update and call the local planner
+            .route("/v1/update", post(handle_update))
             // Default to proxying requests if there is no handler
             .fallback(proxy)
             .layer(TraceLayer::new_for_http())

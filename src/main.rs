@@ -6,19 +6,53 @@ mod overrides;
 
 use anyhow::Result;
 use api::Api;
+use axum::http::uri::PathAndQuery;
 use clap::Parser;
 use config::Config;
-use link::UplinkService;
+use hyper::Uri;
+use link::{Directive, UplinkService};
 use overrides::Overrides;
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, field, info, instrument, warn, Span};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
     util::SubscriberInitExt,
     EnvFilter,
 };
+
+/// Notify the fallback service of a state update via POST to /v1/update
+#[instrument(skip_all, fields(force = directive.force, cancel = directive.cancel, response = field::Empty), err)]
+async fn notify_fallback(
+    client: &reqwest::Client,
+    fallback_address: Uri,
+    fallback_api_key: &Option<String>,
+    directive: &Directive,
+) -> Result<()> {
+    // Build the URI from the address parts
+    let mut addr_parts = fallback_address.into_parts();
+    addr_parts.path_and_query = if let Some(apikey) = fallback_api_key {
+        Some(PathAndQuery::from_maybe_shared(format!(
+            "/v1/update?apikey={apikey}",
+        ))?)
+    } else {
+        Some(PathAndQuery::from_maybe_shared("/v1/update")?)
+    };
+    let url = Uri::from_parts(addr_parts)?.to_string();
+
+    let payload = json!({
+        "force": directive.force,
+        "cancel": directive.cancel
+    });
+
+    let response = client.post(&url).json(&payload).send().await?;
+
+    Span::current().record("response", response.status().as_u16());
+
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,10 +88,15 @@ async fn main() -> Result<()> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let uplink = UplinkService::new(api_endpoint, config.clone(), tx).await?;
 
-        let api = Arc::new(Api::new(config).with_uplink(uplink));
+        let api = Arc::new(Api::new(config.clone()).with_uplink(uplink));
 
         let api_ref = Arc::clone(&api);
+        let fallback_address = config.fallback_address.clone();
+        let fallback_api_key = config.fallback_api_key.clone();
         tokio::spawn(async move {
+            // Create HTTP client for fallback notifications
+            let client = reqwest::Client::new();
+
             while let Some(directive) = rx.recv().await {
                 // Override the target state from `/mnt/temp/apps`
                 let target_with_overrides = overrides.apply(directive.target.clone()).await;
@@ -65,6 +104,17 @@ async fn main() -> Result<()> {
                 // Update the API target state, this will be returned by the API in
                 // polling requests from the legacy supervisor
                 api_ref.set_target_state(target_with_overrides).await;
+
+                // Notify fallback supervisor if configured
+                if let Some(ref fallback_addr) = fallback_address {
+                    let _ = notify_fallback(
+                        &client,
+                        fallback_addr.clone(),
+                        &fallback_api_key,
+                        &directive,
+                    )
+                    .await;
+                }
             }
         });
         api

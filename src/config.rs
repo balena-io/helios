@@ -88,4 +88,12 @@ pub struct Config {
 
     #[arg(long = "fallback-address", env = "FALLBACK_ADDRESS", value_name = "uri", help = "Fallback URI to redirect unsupported API requests", value_parser = parse_uri)]
     pub fallback_address: Option<Uri>,
+
+    #[arg(
+        long = "fallback-api-key",
+        value_name = "key",
+        env = "FALLBACK_API_KEY",
+        help = "API key to perform requests to fallback URI"
+    )]
+    pub fallback_api_key: Option<String>,
 }

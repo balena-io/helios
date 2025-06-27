@@ -232,6 +232,7 @@ mod tests {
                 max_jitter_delay_ms: 10, // Minimal jitter for tests
             },
             fallback_address: "http://fallback.test".parse().ok(),
+            fallback_api_key: None,
         }
     }
 
@@ -570,6 +571,7 @@ mod tests {
                 max_jitter_delay_ms: 0, // No jitter for precise timing
             },
             fallback_address: "http://legacy.test".parse().ok(),
+            fallback_api_key: None,
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();

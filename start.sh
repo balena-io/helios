@@ -17,7 +17,7 @@ REMOTE_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
 REMOTE_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
 
 # Check for required variables
-for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS REMOTE_API_ENDPOINT; do
+for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_SUPERVISOR_API_KEY; do
   eval val="\$$var"
   if [ -z "$val" ]; then
     echo "Error: variable '$var' is not set" >&2
@@ -107,4 +107,4 @@ export REMOTE_API_KEY
 export REMOTE_POLL_INTERVAL
 
 # Start the new supervisor
-exec theseus --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port"
+exec theseus --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port" --fallback-api-key "${BALENA_SUPERVISOR_API_KEY}"
