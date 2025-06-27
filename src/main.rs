@@ -10,6 +10,7 @@ use clap::Parser;
 use config::Config;
 use link::UplinkService;
 use overrides::Overrides;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use tracing_subscriber::{
@@ -45,18 +46,17 @@ async fn main() -> Result<()> {
     info!("Configuration loaded successfully");
     debug!("{:#?}", config);
 
-    let api = Api::new(config.clone());
-
     // Only start poll if there is an API endpoint
-    if let Some(api_endpoint) = config.remote.api_endpoint.clone() {
+    let api = if let Some(api_endpoint) = config.remote.api_endpoint.clone() {
         let overrides = Overrides::new(config.uuid.clone());
 
         info!("Starting target state poll to {api_endpoint}");
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let _ = UplinkService::new(api_endpoint, config, tx).await?;
+        let uplink = UplinkService::new(api_endpoint, config.clone(), tx).await?;
 
-        // Get a copy of the API state to pass on the target
-        let api_state = api.get_state();
+        let api = Arc::new(Api::new(config).with_uplink(uplink));
+
+        let api_ref = Arc::clone(&api);
         tokio::spawn(async move {
             while let Some(directive) = rx.recv().await {
                 // Override the target state from `/mnt/temp/apps`
@@ -64,12 +64,14 @@ async fn main() -> Result<()> {
 
                 // Update the API target state, this will be returned by the API in
                 // polling requests from the legacy supervisor
-                api_state.set_target_state(target_with_overrides).await;
+                api_ref.set_target_state(target_with_overrides).await;
             }
         });
+        api
     } else {
-        warn!("No remote API endpoint provided, running in unmanaged mode")
-    }
+        warn!("No remote API endpoint provided, running in unmanaged mode");
+        Arc::new(Api::new(config.clone()))
+    };
 
     api.start().await?;
 

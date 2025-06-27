@@ -1,6 +1,7 @@
 mod proxy;
 
 use crate::config::Config;
+use crate::link::UplinkService;
 use proxy::{proxy, ProxyConfig};
 
 use axum::{body::Body, Router};
@@ -19,7 +20,7 @@ use tracing::info;
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 #[derive(Clone)]
-pub struct ApiState {
+struct ApiState {
     /// Proxy configuration
     proxy: Arc<ProxyConfig>,
 
@@ -28,6 +29,9 @@ pub struct ApiState {
 
     /// Device UUID
     uuid: String,
+
+    /// Uplink connection to the remote API
+    uplink: Arc<Option<UplinkService>>,
 
     /// Cached target state from uplink service
     target_state: Arc<RwLock<Option<Value>>>,
@@ -45,13 +49,9 @@ impl ApiState {
             }),
             https_client: client,
             uuid: config.uuid,
+            uplink: Arc::new(None),
             target_state: Arc::new(RwLock::new(None)),
         }
-    }
-
-    pub async fn set_target_state(&self, target: Value) {
-        let mut state = self.target_state.write().await;
-        *state = Some(target);
     }
 
     pub async fn get_target_state(&self) -> Option<Value> {
@@ -71,8 +71,14 @@ impl Api {
         Self { config, state }
     }
 
-    pub fn get_state(&self) -> ApiState {
-        self.state.clone()
+    pub fn with_uplink(mut self, uplink: UplinkService) -> Self {
+        self.state.uplink = Arc::new(Some(uplink));
+        self
+    }
+
+    pub async fn set_target_state(&self, target: Value) {
+        let mut state = self.state.target_state.write().await;
+        *state = Some(target);
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {

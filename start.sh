@@ -6,9 +6,6 @@ set -e
 DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
-# Use debug logging by default, disabling logs dependenc
-RUST_LOG=${RUST_LOG:-debug,hyper=error,bollard=error}
-
 # Supervisor fallback port
 fallback_port=${FALLBACK_PORT:-48480}
 unset FALLBACK_PORT
@@ -108,7 +105,6 @@ fi
 export REMOTE_API_ENDPOINT
 export REMOTE_API_KEY
 export REMOTE_POLL_INTERVAL
-export RUST_LOG
 
 # Start the new supervisor
-exec theseus --uuid "$DEVICE_UUID" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:${fallback_port}"
+exec theseus --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port"
