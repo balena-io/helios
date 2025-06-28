@@ -86,7 +86,7 @@ impl ApiState {
 
         Self {
             proxy: Arc::new(ProxyConfig {
-                fallback_uri: config.fallback_address,
+                fallback_uri: config.fallback.address,
                 remote_uri: config.remote.api_endpoint,
             }),
             https_client: client,
@@ -131,11 +131,12 @@ impl Api {
             .layer(TraceLayer::new_for_http())
             .with_state(self.state.clone());
 
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", self.config.local.port).parse()?;
+        let listen_addr: SocketAddr =
+            format!("{}:{}", self.config.local.address, self.config.local.port).parse()?;
 
         // Try to bind to the local address
         let listener = TcpListener::bind(listen_addr).await?;
-        info!("API Listening on {}", self.config.local.port);
+        info!("API Listening on {}", listen_addr);
 
         axum::serve(listener, app).await?;
         Ok(())

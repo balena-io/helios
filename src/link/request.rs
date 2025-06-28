@@ -135,9 +135,9 @@ impl RequestConfig {
     /// ```
     pub fn from_config(remote: &crate::config::Remote) -> Self {
         Self {
-            timeout: Duration::from_millis(remote.request_timeout_ms),
-            min_interval: Duration::from_millis(remote.min_interval_ms),
-            max_backoff: Duration::from_millis(remote.poll_interval_ms),
+            timeout: remote.request_timeout,
+            min_interval: remote.min_interval,
+            max_backoff: remote.poll_interval,
             api_token: None,
         }
     }

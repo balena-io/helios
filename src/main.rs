@@ -1,17 +1,7 @@
-mod api;
-mod config;
-pub mod control;
-pub mod link;
-mod overrides;
-
 use anyhow::Result;
-use api::Api;
 use axum::http::uri::PathAndQuery;
 use clap::Parser;
-use config::Config;
 use hyper::Uri;
-use link::{Directive, UplinkService};
-use overrides::Overrides;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -22,6 +12,19 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     EnvFilter,
 };
+
+mod api;
+mod cli;
+mod config;
+pub mod control;
+pub mod link;
+mod overrides;
+
+use api::Api;
+use cli::{Cli, Commands};
+use config::Config;
+use link::{Directive, UplinkService};
+use overrides::Overrides;
 
 /// Notify the fallback service of a state update via POST to /v1/update
 #[instrument(skip_all, fields(force = directive.force, cancel = directive.cancel, response = field::Empty), err)]
@@ -74,12 +77,35 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Register {
+            remote,
+            provisioning_key,
+        }) => {
+            info!(
+                "Starting device registration with key: {}",
+                provisioning_key
+            );
+            debug!("Remote config: {:#?}", remote);
+            todo!("Implement register command");
+        }
+        None => {
+            // Main service mode
+            let config = Config::load(&cli)?;
+            info!("Configuration loaded successfully");
+            debug!("{:#?}", config);
+
+            start_supervising(config).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn start_supervising(config: Config) -> Result<()> {
     info!("Service started");
-
-    let config = Config::parse();
-    info!("Configuration loaded successfully");
-    debug!("{:#?}", config);
-
     // Only start poll if there is an API endpoint
     let api = if let Some(api_endpoint) = config.remote.api_endpoint.clone() {
         let overrides = Overrides::new(config.uuid.clone());
@@ -91,8 +117,8 @@ async fn main() -> Result<()> {
         let api = Arc::new(Api::new(config.clone()).with_uplink(uplink));
 
         let api_ref = Arc::clone(&api);
-        let fallback_address = config.fallback_address.clone();
-        let fallback_api_key = config.fallback_api_key.clone();
+        let fallback_address = config.fallback.address.clone();
+        let fallback_api_key = config.fallback.api_key.clone();
         tokio::spawn(async move {
             // Create HTTP client for fallback notifications
             let client = reqwest::Client::new();

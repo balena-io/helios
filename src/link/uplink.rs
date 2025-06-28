@@ -80,8 +80,8 @@ impl UplinkService {
         let request_config = RequestConfig::from_config(&config.remote)
             .with_api_token(config.remote.api_key.unwrap_or_default());
 
-        let poll_interval = Duration::from_millis(config.remote.poll_interval_ms);
-        let max_jitter = Duration::from_millis(config.remote.max_poll_jitter_ms);
+        let poll_interval = config.remote.poll_interval;
+        let max_jitter = config.remote.max_poll_jitter;
 
         tokio::spawn(Self::background_task(
             endpoint,
@@ -213,7 +213,7 @@ impl UplinkService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Local, Remote};
+    use crate::config::{Fallback, Local, Remote};
     use mockito::Server;
     use serde_json::json;
     use std::time::Duration;
@@ -222,17 +222,22 @@ mod tests {
     fn test_config(api_key: Option<String>) -> Config {
         Config {
             uuid: "test-device-uuid".to_string(),
-            local: Local { port: 48484 },
+            local: Local {
+                port: 48484,
+                address: std::net::Ipv4Addr::new(127, 0, 0, 1),
+            },
             remote: Remote {
                 api_endpoint: None,
                 api_key,
-                poll_interval_ms: 100, // Short for tests
-                request_timeout_ms: 5000,
-                min_interval_ms: 10,
-                max_poll_jitter_ms: 10, // Minimal jitter for tests
+                poll_interval: Duration::from_millis(100), // Short for tests
+                request_timeout: Duration::from_millis(5000),
+                min_interval: Duration::from_millis(10),
+                max_poll_jitter: Duration::from_millis(10), // Minimal jitter for tests
             },
-            fallback_address: "http://fallback.test".parse().ok(),
-            fallback_api_key: None,
+            fallback: Fallback {
+                address: "http://fallback.test".parse().ok(),
+                api_key: None,
+            },
         }
     }
 
@@ -561,17 +566,22 @@ mod tests {
         // Set a short poll interval (150ms) for testing
         let config = Config {
             uuid: "test-device-uuid".to_string(),
-            local: Local { port: 48484 },
+            local: Local {
+                port: 48484,
+                address: std::net::Ipv4Addr::new(127, 0, 0, 1),
+            },
             remote: Remote {
                 api_endpoint: None,
                 api_key: Some("test-token".to_string()),
-                poll_interval_ms: 150, // 150ms interval
-                request_timeout_ms: 5000,
-                min_interval_ms: 10,
-                max_poll_jitter_ms: 0, // No jitter for precise timing
+                poll_interval: Duration::from_millis(150), // 150ms interval
+                request_timeout: Duration::from_millis(5000),
+                min_interval: Duration::from_millis(10),
+                max_poll_jitter: Duration::from_millis(0), // No jitter for precise timing
             },
-            fallback_address: "http://legacy.test".parse().ok(),
-            fallback_api_key: None,
+            fallback: Fallback {
+                address: "http://legacy.test".parse().ok(),
+                api_key: None,
+            },
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();

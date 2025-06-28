@@ -1,99 +1,215 @@
 use anyhow::Result;
-use clap::Parser;
 use hyper::Uri;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
+use std::time::Duration;
+use tracing::debug;
+use uuid::Uuid;
 
-fn parse_uri(s: &str) -> Result<Uri> {
-    let uri = s.parse()?;
-    Ok(uri)
-}
+use crate::cli::Cli;
 
-#[derive(Clone, Debug, Parser)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Local API configurations
 pub struct Local {
-    #[arg(
-        long = "local-port",
-        env = "LOCAL_PORT",
-        default_value = "48484",
-        value_name = "port",
-        help = "Local API listen port"
-    )]
     pub port: u16,
+    pub address: Ipv4Addr,
 }
 
-#[derive(Clone, Debug, Parser)]
+impl Default for Local {
+    fn default() -> Self {
+        Self {
+            port: 48484,
+            address: Ipv4Addr::new(127, 0, 0, 1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Remote API configurations
 pub struct Remote {
-    #[arg(long = "remote-api-endpoint", env = "REMOTE_API_ENDPOINT", value_name = "uri", help = "Remote API endpoint", value_parser = parse_uri)]
+    #[serde(
+        deserialize_with = "deserialize_optional_uri",
+        serialize_with = "serialize_optional_uri",
+        default
+    )]
     pub api_endpoint: Option<Uri>,
-
-    #[arg(
-        long = "remote-api-key",
-        env = "REMOTE_API_KEY",
-        value_name = "key",
-        help = "Remote API key"
-    )]
     pub api_key: Option<String>,
-
-    #[arg(
-        long = "remote-poll-interval-ms",
-        env = "REMOTE_POLL_INTERVAL",
-        default_value = "900000",
-        value_name = "poll_interval_ms",
-        help = "Remote API poll interval in milliseconds"
+    #[serde(
+        deserialize_with = "deserialize_duration_from_ms",
+        serialize_with = "serialize_duration_to_ms"
     )]
-    pub poll_interval_ms: u64,
-
-    #[arg(
-        long = "remote-request-timeout-ms",
-        env = "REMOTE_REQUEST_TIMEOUT",
-        default_value = "59000",
-        value_name = "request_timeout_ms",
-        help = "Remote API request timeout in milliseconds"
+    pub poll_interval: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration_from_ms",
+        serialize_with = "serialize_duration_to_ms"
     )]
-    pub request_timeout_ms: u64,
-
-    #[arg(
-        long = "remote-min-interval-ms",
-        default_value = "10000",
-        value_name = "min_interval_ms",
-        help = "API rate limiting interval in milliseconds"
+    pub request_timeout: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration_from_ms",
+        serialize_with = "serialize_duration_to_ms"
     )]
-    pub min_interval_ms: u64,
-
-    #[arg(
-        long = "remote-max-poll-jitter-ms",
-        default_value = "60000",
-        value_name = "max_poll_jitter_ms",
-        help = "API target state poll max jitter in milliseconds"
+    pub min_interval: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration_from_ms",
+        serialize_with = "serialize_duration_to_ms"
     )]
-    pub max_poll_jitter_ms: u64,
+    pub max_poll_jitter: Duration,
 }
 
-#[derive(Clone, Debug, Parser)]
-#[command(about = "Next-gen experimental balenaSupervisor")]
+impl Default for Remote {
+    fn default() -> Self {
+        Self {
+            api_endpoint: None,
+            api_key: None,
+            poll_interval: Duration::from_millis(900000),
+            request_timeout: Duration::from_millis(59000),
+            min_interval: Duration::from_millis(10000),
+            max_poll_jitter: Duration::from_millis(60000),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+/// Fallback API configurations
+pub struct Fallback {
+    #[serde(
+        deserialize_with = "deserialize_optional_uri",
+        serialize_with = "serialize_optional_uri",
+        default
+    )]
+    pub address: Option<Uri>,
+    pub api_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Config {
-    #[arg(
-        long = "uuid",
-        env = "DEVICE_UUID",
-        value_name = "uuid",
-        help = "Device UUID"
-    )]
+    #[serde(default = "generate_uuid")]
     pub uuid: String,
-
-    #[command(flatten)]
+    #[serde(default)]
     pub local: Local,
-
-    #[command(flatten)]
+    #[serde(default)]
     pub remote: Remote,
+    #[serde(default)]
+    pub fallback: Fallback,
+}
 
-    #[arg(long = "fallback-address", env = "FALLBACK_ADDRESS", value_name = "uri", help = "Fallback URI to redirect unsupported API requests", value_parser = parse_uri)]
-    pub fallback_address: Option<Uri>,
+fn generate_uuid() -> String {
+    Uuid::new_v4().simple().to_string()
+}
 
-    #[arg(
-        long = "fallback-api-key",
-        value_name = "key",
-        env = "FALLBACK_API_KEY",
-        help = "API key to perform requests to fallback URI"
-    )]
-    pub fallback_api_key: Option<String>,
+impl Config {
+    pub fn load(cli: &Cli) -> Result<Self> {
+        let config_path = get_config_path();
+
+        // Start with default config
+        let mut config = if config_path.exists() {
+            // Load from file if it exists
+            debug!("Loading config from {}", config_path.display());
+            let contents = fs::read_to_string(&config_path)?;
+            serde_json::from_str::<Config>(&contents).unwrap_or_default()
+        } else {
+            // Create default config
+            Config::default()
+        };
+
+        // Apply CLI overrides in order of precedence
+        if let Some(uuid) = &cli.uuid {
+            config.uuid = uuid.clone();
+        }
+        if let Some(port) = cli.local_port {
+            config.local.port = port;
+        }
+        if let Some(address) = cli.local_address {
+            config.local.address = address;
+        }
+        if let Some(endpoint) = &cli.remote_api_endpoint {
+            config.remote.api_endpoint = Some(endpoint.clone());
+        }
+        if let Some(key) = &cli.remote_api_key {
+            config.remote.api_key = Some(key.clone());
+        }
+        if let Some(interval) = cli.remote.remote_poll_interval_ms {
+            config.remote.poll_interval = Duration::from_millis(interval);
+        }
+        if let Some(timeout) = cli.remote.remote_request_timeout_ms {
+            config.remote.request_timeout = Duration::from_millis(timeout);
+        }
+        if let Some(min_interval) = cli.remote.remote_min_interval_ms {
+            config.remote.min_interval = Duration::from_millis(min_interval);
+        }
+        if let Some(jitter) = cli.remote.remote_max_poll_jitter_ms {
+            config.remote.max_poll_jitter = Duration::from_millis(jitter);
+        }
+        if let Some(address) = &cli.fallback_address {
+            config.fallback.address = Some(address.clone());
+        }
+        if let Some(key) = &cli.fallback_api_key {
+            config.fallback.api_key = Some(key.clone());
+        }
+
+        // If UUID is still empty after all sources, generate one
+        if config.uuid.is_empty() {
+            config.uuid = generate_uuid();
+        }
+
+        Ok(config)
+    }
+}
+
+fn get_config_path() -> PathBuf {
+    if let Some(config_dir) = dirs::config_dir() {
+        config_dir.join(env!("CARGO_PKG_NAME")).join("config.json")
+    } else {
+        // Fallback to home directory if config dir is not available
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join(env!("CARGO_PKG_NAME"))
+            .join("config.json")
+    }
+}
+
+fn deserialize_optional_uri<'de, D>(deserializer: D) -> std::result::Result<Option<Uri>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
+
+fn serialize_optional_uri<S>(
+    uri: &Option<Uri>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match uri {
+        Some(uri) => serializer.serialize_some(&uri.to_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_duration_from_ms<'de, D>(deserializer: D) -> std::result::Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let ms: u64 = serde::Deserialize::deserialize(deserializer)?;
+    Ok(Duration::from_millis(ms))
+}
+
+fn serialize_duration_to_ms<S>(
+    duration: &Duration,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u64(duration.as_millis() as u64)
 }
