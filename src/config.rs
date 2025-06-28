@@ -61,12 +61,12 @@ pub struct Remote {
     pub min_interval_ms: u64,
 
     #[arg(
-        long = "remote-max-jitter-delay-ms",
+        long = "remote-max-poll-jitter-ms",
         default_value = "60000",
-        value_name = "max_jitter_delay_ms",
-        help = "API target state poll max jitter delay in milliseconds"
+        value_name = "max_poll_jitter_ms",
+        help = "API target state poll max jitter in milliseconds"
     )]
-    pub max_jitter_delay_ms: u64,
+    pub max_poll_jitter_ms: u64,
 }
 
 #[derive(Clone, Debug, Parser)]

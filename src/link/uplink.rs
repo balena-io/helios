@@ -81,7 +81,7 @@ impl UplinkService {
             .with_api_token(config.remote.api_key.unwrap_or_default());
 
         let poll_interval = Duration::from_millis(config.remote.poll_interval_ms);
-        let max_jitter = Duration::from_millis(config.remote.max_jitter_delay_ms);
+        let max_jitter = Duration::from_millis(config.remote.max_poll_jitter_ms);
 
         tokio::spawn(Self::background_task(
             endpoint,
@@ -229,7 +229,7 @@ mod tests {
                 poll_interval_ms: 100, // Short for tests
                 request_timeout_ms: 5000,
                 min_interval_ms: 10,
-                max_jitter_delay_ms: 10, // Minimal jitter for tests
+                max_poll_jitter_ms: 10, // Minimal jitter for tests
             },
             fallback_address: "http://fallback.test".parse().ok(),
             fallback_api_key: None,
@@ -568,7 +568,7 @@ mod tests {
                 poll_interval_ms: 150, // 150ms interval
                 request_timeout_ms: 5000,
                 min_interval_ms: 10,
-                max_jitter_delay_ms: 0, // No jitter for precise timing
+                max_poll_jitter_ms: 0, // No jitter for precise timing
             },
             fallback_address: "http://legacy.test".parse().ok(),
             fallback_api_key: None,
