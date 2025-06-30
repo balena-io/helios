@@ -99,20 +99,14 @@ impl IntoResponse for FallbackError {
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, fields(force = request.force, cancel = request.cancel, response = field::Empty), err)]
 pub async fn trigger_legacy_update(
-    fallback_uri: Option<Uri>,
+    fallback_uri: Uri,
     fallback_key: Option<String>,
     request: &UpdateRequest,
 ) -> Result<()> {
     let client = reqwest::Client::new();
-    let fallback_address = if let Some(addr) = fallback_uri {
-        addr
-    } else {
-        Span::current().record("response", 404);
-        return Ok(());
-    };
 
     // Build the URI from the address parts
-    let mut addr_parts = fallback_address.into_parts();
+    let mut addr_parts = fallback_uri.into_parts();
     addr_parts.path_and_query = if let Some(apikey) = fallback_key.clone() {
         Some(PathAndQuery::from_maybe_shared(format!(
             "/v1/update?apikey={apikey}",

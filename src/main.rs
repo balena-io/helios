@@ -1,11 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::http::uri::PathAndQuery;
+use bollard::Docker;
 use clap::Parser;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::watch, time::Instant};
-use tracing::{debug, info, info_span, instrument, trace, warn, Instrument};
+use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -13,16 +14,20 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
+use mahler::worker::{Ready, Worker};
+
 mod api;
 mod cli;
 mod config;
 mod fallback;
+mod models;
 mod overrides;
 pub mod request;
 
 use cli::{Cli, Commands};
 use config::Config;
 use fallback::{trigger_legacy_update, FallbackState};
+use models::{Device, TargetDevice};
 use overrides::Overrides;
 use request::{Get, RequestConfig};
 
@@ -132,6 +137,17 @@ struct UpdateRequest {
     cancel: bool,
 }
 
+pub fn create_worker(initial: Device) -> Result<Worker<Device, Ready, TargetDevice>> {
+    // Initialize the connection
+    let docker = Docker::connect_with_defaults()?;
+
+    Worker::new()
+        // TODO: .jobs(...)
+        .resource(docker)
+        .initial_state(initial)
+        .with_context(|| "failed to create initial worker")
+}
+
 #[instrument(name = "helios", skip_all, err)]
 async fn start_helios(config: Config) -> Result<()> {
     info!("starting");
@@ -161,18 +177,30 @@ async fn start_helios(config: Config) -> Result<()> {
     let listener = TcpListener::bind(address).await?;
     debug!("bound to local address {addr_str}");
 
+    // Create a mahler Worker instance
+    // TODO: read initial state from the engine
+    let mut worker = create_worker(Device {
+        uuid: config.uuid.clone(),
+        images: HashMap::new(),
+    })?;
+
     tokio::spawn(async move {
         info!("starting");
         loop {
             let mut update_req = UpdateRequest::default();
-            let target_state = tokio::select! {
+            let (target_device, fallback_target) = tokio::select! {
                 // By default, the loop waits for the next poll
                 _ = tokio::time::sleep_until(next_poll_time) => {
                     let (response, next_poll) = poll_target(&mut poll_client, &config).await;
                     next_poll_time = next_poll;
 
-                    if let Some(tgt) = response {
-                        tgt
+                    if let Some(fallback_tgt) = response {
+                        // Apply overrides
+                        let fallback_tgt = overrides.apply(fallback_tgt.clone()).await;
+
+                        // TODO: we'll need to reject the target if it cannot be deserialized
+                        let tgt_device = serde_json::from_value::<TargetDevice>(fallback_tgt.clone()).ok();
+                        (tgt_device, Some(fallback_tgt))
                     }
                     else {
                         continue;
@@ -190,8 +218,11 @@ async fn start_helios(config: Config) -> Result<()> {
                     next_poll_time = next_poll;
                     update_req = update_request_rx.borrow_and_update().clone();
 
-                    if let Some(tgt) = response {
-                        tgt
+                    if let Some(fallback_tgt) = response {
+                        // Apply overrides
+                        let fallback_tgt = overrides.apply(fallback_tgt.clone()).await;
+                        let tgt_device = serde_json::from_value::<TargetDevice>(fallback_tgt.clone()).ok();
+                        (tgt_device, Some(fallback_tgt))
                     }
                     else {
                         continue;
@@ -199,25 +230,42 @@ async fn start_helios(config: Config) -> Result<()> {
                 }
             };
 
-            // Override the target state from `/mnt/temp/apps`
-            let target_with_overrides = overrides.apply(target_state.clone()).await;
+            // try to apply changes
+            if let Some(device) = target_device {
+                worker = match worker.seek_target(device).await {
+                    Ok(w)  => w,
+                    Err(e) => {
+                        // this might be a bug in either in mahler or in one of the tasks
+                        // see: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
+                        error!("unexpected error happened while applying target: {e}");
+                        // TODO: re-load initial state
+                        create_worker(Device {
+                            uuid: config.uuid.clone(),
+                            images: HashMap::new(),
+                        })?
+                    }
+                }
+            }
 
             // Update the global state
-            fallback_state.set_target_state(target_with_overrides).await;
+            if let Some(fallback) = fallback_target {
+                fallback_state.set_target_state(fallback).await;
 
-            // TODO: try to apply changes
-
-            // trigger an update on the fallback
-            let _ = trigger_legacy_update(
-                config.fallback.address.clone(),
-                config.fallback.api_key.clone(),
-                &update_req,
-            )
-            .await;
+                // trigger an update on the fallback
+                if let Some(fallback_uri) = config.fallback.address.clone() {
+                    let _ = trigger_legacy_update(
+                        fallback_uri,
+                        config.fallback.api_key.clone(),
+                        &update_req,
+                    )
+                    .await;
+                }
+            }
 
             // TODO: report state to API
         }
-    }.instrument(info_span!("loop")));
+        Ok(()) as Result<()>
+    }.instrument(info_span!("main")));
 
     // Start the API
     api::start(listener, update_request_tx, api_fallback_state).await?;
