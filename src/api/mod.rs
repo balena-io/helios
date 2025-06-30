@@ -15,7 +15,6 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use std::net::{IpAddr, SocketAddr};
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
@@ -87,7 +86,10 @@ impl Api {
         })
     }
 
-    pub async fn start(&self, address: IpAddr, port: u16) -> anyhow::Result<()> {
+    /// Start the API
+    ///
+    /// Receives a TCP listener already bound to the right address and port
+    pub async fn start(&self, listener: TcpListener) -> anyhow::Result<()> {
         let app = Router::new()
             .route("/v1/update", post(trigger_update))
             // Default to proxying requests if there is no handler
@@ -95,12 +97,7 @@ impl Api {
             .layer(TraceLayer::new_for_http())
             .with_state(self.0.clone());
 
-        let listen_addr: SocketAddr = SocketAddr::new(address, port);
-
-        // Try to bind to the local address
-        let listener = TcpListener::bind(listen_addr).await?;
-        info!("API Listening on {}", listen_addr);
-
+        info!("API started");
         axum::serve(listener, app).await?;
         Ok(())
     }

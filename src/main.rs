@@ -4,8 +4,9 @@ use clap::Parser;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
+    net::TcpListener,
     sync::{watch, RwLock},
     time::Instant,
 };
@@ -236,7 +237,12 @@ async fn start_supervising(config: Config) -> Result<()> {
         update_request_tx,
     );
 
-    let local = config.local.clone();
+    // Try to bind to the API port first, this will avoid doing an extra poll
+    // if the local port is taken
+    let address = SocketAddr::new(config.local.address, config.local.port);
+    let addr_str = address.to_string();
+    let listener = TcpListener::bind(address).await?;
+    debug!("Bound to local address {addr_str}");
 
     tokio::spawn(async move {
         loop {
@@ -305,7 +311,7 @@ async fn start_supervising(config: Config) -> Result<()> {
     });
 
     // Start the API
-    api.start(local.address, local.port).await?;
+    api.start(listener).await?;
 
     Ok(())
 }
