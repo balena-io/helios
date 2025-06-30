@@ -1,10 +1,5 @@
 use reqwest::StatusCode;
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::{field, instrument, Span};
 
@@ -53,6 +48,15 @@ impl From<TryGetError> for GetError {
     }
 }
 
+impl From<TryPatchError> for PatchError {
+    fn from(err: TryPatchError) -> Self {
+        match err {
+            TryPatchError::Status(status) => PatchError(status.as_u16()),
+            TryPatchError::WillRetry(_, _) => unreachable!(),
+        }
+    }
+}
+
 /// HTTP GET response containing the parsed JSON body and modification status.
 #[derive(Debug, Clone)]
 pub struct GetResponse {
@@ -74,40 +78,12 @@ enum TryPatchError {
     Status(StatusCode),
 }
 
-#[derive(Debug, Clone, Error)]
-pub enum PatchError {
-    /// Request was completed with an error
-    #[error("Request failed with status code {0}")]
-    Status(u16),
-
-    /// Request was interrupted because the Patch client was dropped or a newer patch replaced the
-    /// request
-    #[error("Request was not completed")]
-    Incomplete,
-}
+#[derive(Debug, Error)]
+#[error("Request failed with status code {0}")]
+pub struct PatchError(pub u16);
 
 /// HTTP PATCH response
 pub type PatchResponse = ();
-
-/// A Future that resolves when a PATCH request completes or is interrupted.
-///
-/// The patch processing continues in the background whether this Future is awaited or not.
-/// When awaited, it returns Ok(()) for success or a PatchError for failures.
-pub struct PatchRequest {
-    result_rx: tokio::sync::oneshot::Receiver<Result<PatchResponse, PatchError>>,
-}
-
-impl Future for PatchRequest {
-    type Output = Result<(), PatchError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.result_rx).poll(cx) {
-            Poll::Ready(Ok(result)) => Poll::Ready(result),
-            Poll::Ready(Err(_)) => Poll::Ready(Err(PatchError::Incomplete)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
 
 /// Configuration for HTTP request behavior including timeouts, rate limiting, and backoff.
 #[derive(Clone)]
@@ -473,32 +449,15 @@ impl Get {
     }
 }
 
-/// HTTP PATCH client with background flushing, natural batching, and rate limiting.
+/// HTTP PATCH client with rate limiting and automatic retries.
 ///
-/// Queues PATCH requests and flushes them in the background to reduce server load.
-/// Rapid successive updates naturally batch together as newer state overwrites
-/// pending state before transmission.
+/// Supports blocking patch operations with exponential backoff for error handling.
 pub struct Patch {
-    patch_tx: tokio::sync::mpsc::UnboundedSender<PatchCommand>,
-    metrics_rx: tokio::sync::watch::Receiver<RequestMetrics>,
-    flush_notify: std::sync::Arc<tokio::sync::Notify>,
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
-}
-
-#[derive(Debug)]
-enum PatchCommand {
-    UpdateState(
-        serde_json::Value,
-        Option<tokio::sync::oneshot::Sender<Result<(), PatchError>>>,
-    ),
+    state: RequestState,
 }
 
 impl Patch {
-    /// Creates a new PATCH client with background flushing for the specified endpoint.
-    ///
-    /// Automatically starts a background task that handles periodic flushing and
-    /// responds to manual flush notifications. The task is terminated when the
-    /// Patch instance is dropped.
+    /// Creates a new PATCH client for the specified endpoint.
     ///
     /// # Arguments
     /// * `endpoint` - The full URL to make PATCH requests to
@@ -518,202 +477,52 @@ impl Patch {
     /// let client = Patch::new("https://api.example.com/device/state", config);
     /// ```
     pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
-        let (patch_tx, patch_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (metrics_tx, metrics_rx) = tokio::sync::watch::channel(RequestMetrics {
-            success_count: 0,
-            error_count: 0,
-        });
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        let flush_notify = std::sync::Arc::new(tokio::sync::Notify::new());
-
-        let service = Self {
-            patch_tx,
-            metrics_rx,
-            flush_notify: flush_notify.clone(),
-            shutdown_tx: shutdown_tx.clone(),
-        };
-        let endpoint = endpoint.into();
-
-        // Spawn background task
-        tokio::spawn(async move {
-            Self::background_task(
-                RequestState::new(endpoint, config),
-                patch_rx,
-                metrics_tx,
-                flush_notify,
-                shutdown_rx,
-            )
-            .await;
-        });
-
-        service
+        Self {
+            state: RequestState::new(endpoint.into(), config),
+        }
     }
 
-    /// Queues a new state for transmission to the server.
+    /// Performs an HTTP PATCH request with automatic retries and error handling.
     ///
-    /// Returns a PatchResponse that can be awaited to know when the patch completes
-    /// or is interrupted. The patch processing continues in the background whether
-    /// the returned future is awaited or not.
-    ///
-    /// If multiple patch calls are made rapidly, newer state overwrites pending
-    /// state (natural batching), reducing server load and network traffic.
+    /// Blocks until the request completes successfully or fails with a permanent error.
+    /// Uses exponential backoff for retryable errors (rate limiting, server errors).
     ///
     /// # Arguments
     /// * `new_state` - JSON value representing the new state to send
     ///
     /// # Returns
-    /// A PatchResponse future that resolves to:
-    /// - `Ok(())` if the request was successful (2xx status code)
-    /// - `Err(PatchError::Status(status))` if the request failed with an error status
-    /// - `Err(PatchError::Incomplete)` if this request was overwritten by a newer one or the client was dropped
+    /// * `Ok(())` - Request was successful (2xx status code)
+    /// * `Err(PatchError)` - Authentication failed or permanent client error
     ///
     /// # Example
     /// ```rust,ignore
     /// use serde_json::json;
     ///
-    /// // Fire and forget (processing continues in background)
-    /// let _response = client.patch(json!({"status": "running"}));
-    ///
-    /// // Wait for completion
-    /// let result = client.patch(json!({"status": "idle"})).await;
-    /// match result {
-    ///     Ok(()) => {
-    ///         println!("Patch succeeded");
-    ///     }
-    ///     Err(PatchError::Status(status)) => {
-    ///         println!("Patch failed with status: {}", status);
-    ///     }
-    ///     Err(PatchError::Incomplete) => {
-    ///         println!("Request was replaced by a newer one or client was dropped");
-    ///     }
-    /// }
+    /// let result = client.patch(json!({"status": "running"})).await?;
+    /// println!("Patch succeeded");
     /// ```
-    pub fn patch(&mut self, new_state: serde_json::Value) -> PatchRequest {
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-
-        if self
-            .patch_tx
-            .send(PatchCommand::UpdateState(new_state, Some(result_tx)))
-            .is_ok()
-        {
-            self.flush_notify.notify_one();
-        }
-
-        PatchRequest { result_rx }
-    }
-
-    async fn background_task(
-        mut state: RequestState,
-        mut patch_rx: tokio::sync::mpsc::UnboundedReceiver<PatchCommand>,
-        metrics_tx: tokio::sync::watch::Sender<RequestMetrics>,
-        flush_notify: std::sync::Arc<tokio::sync::Notify>,
-        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    ) {
-        let mut pending_state: Option<serde_json::Value> = None;
-        let mut current_result_tx: Option<tokio::sync::oneshot::Sender<Result<(), PatchError>>> =
-            None;
-
+    #[instrument(skip_all, fields(tries=field::Empty), err)]
+    pub async fn patch(
+        &mut self,
+        new_state: serde_json::Value,
+    ) -> Result<PatchResponse, PatchError> {
+        let mut tries = 1;
         loop {
-            tokio::select! {
-                _ = shutdown_rx.recv() => {
-                    break;
-                }
-                cmd = patch_rx.recv() => {
-                    match cmd {
-                        Some(PatchCommand::UpdateState(new_state, result_tx)) => {
-                            // If there's a previous pending request, notify it was replaced
-                            if let Some(old_tx) = current_result_tx.take() {
-                                let _ = old_tx.send(Err(PatchError::Incomplete));
-                            }
-
-                            // Update the pending state and result channel
-                            pending_state = Some(new_state);
-                            current_result_tx = result_tx;
-                        }
-                        None => break, // Channel closed
-                    }
-                }
-                _ = flush_notify.notified() => {
-                    // Small delay to allow batching of rapid requests
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-
-                    // Drain any additional updates that came in during the delay
-                    while let Ok(cmd) = patch_rx.try_recv() {
-                        match cmd {
-                            PatchCommand::UpdateState(new_state, result_tx) => {
-                                // If there's a previous pending request, notify it was replaced
-                                if let Some(old_tx) = current_result_tx.take() {
-                                    let _ = old_tx.send(Err(PatchError::Incomplete));
-                                }
-
-                                pending_state = Some(new_state);
-                                current_result_tx = result_tx;
-                            }
-                        }
-                    }
-
-                    Self::handle_pending_state(&mut state, &mut pending_state, &mut current_result_tx, &metrics_tx).await;
-                }
-                _ = tokio::time::sleep(state.current_backoff), if pending_state.is_some() => {
-                    Self::handle_pending_state(&mut state, &mut pending_state, &mut current_result_tx, &metrics_tx).await;
-                }
-            }
-        }
-    }
-
-    async fn handle_pending_state(
-        state: &mut RequestState,
-        pending_state: &mut Option<serde_json::Value>,
-        current_result_tx: &mut Option<tokio::sync::oneshot::Sender<Result<(), PatchError>>>,
-        metrics_tx: &tokio::sync::watch::Sender<RequestMetrics>,
-    ) {
-        if let Some(state_to_send) = pending_state.take() {
-            let result_tx = current_result_tx.take();
-
-            match Self::try_patch(state, state_to_send.clone()).await {
+            match Self::try_patch(&mut self.state, new_state.clone()).await {
                 Ok(_status) => {
-                    // Notify success
-                    if let Some(tx) = result_tx {
-                        let _ = tx.send(Ok(()));
-                    }
-
-                    let _ = metrics_tx.send(RequestMetrics {
-                        success_count: state.success_count,
-                        error_count: state.error_count,
-                    });
+                    Span::current().record("tries", tries);
+                    return Ok(());
                 }
                 Err(TryPatchError::WillRetry(_, _)) => {
-                    // Retryable error - put state back and retry later with backoff
-                    *pending_state = Some(state_to_send);
-                    *current_result_tx = result_tx; // Keep the result channel for retry
-
-                    let _ = metrics_tx.send(RequestMetrics {
-                        success_count: state.success_count,
-                        error_count: state.error_count,
-                    });
+                    tries += 1;
+                    continue;
                 }
-                Err(TryPatchError::Status(status)) => {
-                    if status.is_server_error() {
-                        // 5xx server errors - retry with backoff
-                        *pending_state = Some(state_to_send);
-                        *current_result_tx = result_tx; // Keep the result channel for retry
-                    } else {
-                        // 4xx client errors - notify and don't retry
-                        if let Some(tx) = result_tx {
-                            let _ = tx.send(Err(PatchError::Status(status.as_u16())));
-                        }
-                    }
-
-                    let _ = metrics_tx.send(RequestMetrics {
-                        success_count: state.success_count,
-                        error_count: state.error_count,
-                    });
-                }
+                Err(e) => return Err(e.into()),
             }
         }
     }
 
-    #[instrument(name = "patch", skip_all, fields(status=field::Empty), err)]
+    #[instrument(skip_all, fields(status=field::Empty), err)]
     async fn try_patch(
         state: &mut RequestState,
         state_to_send: serde_json::Value,
@@ -735,6 +544,7 @@ impl Patch {
         let response = match request.send().await {
             Ok(value) => value,
             Err(e) => {
+                // Re-try network errors
                 state.record_failure(None);
                 return Err(TryPatchError::WillRetry(
                     e.to_string(),
@@ -781,24 +591,17 @@ impl Patch {
 
     /// Returns current request metrics including success and error counts.
     ///
-    /// Tracks metrics for background PATCH requests, including successful
-    /// transmissions and various error conditions (authentication, rate limiting, etc.).
-    ///
     /// # Example
     /// ```rust,ignore
     /// let metrics = client.metrics();
     /// println!("PATCH success rate: {:.1}%", metrics.success_rate());
-    /// println!("Total background requests: {}", metrics.total_requests());
+    /// println!("Total requests: {}", metrics.total_requests());
     /// ```
     pub fn metrics(&self) -> RequestMetrics {
-        *self.metrics_rx.borrow()
-    }
-}
-
-impl Drop for Patch {
-    fn drop(&mut self) {
-        // Send shutdown signal to the background task
-        let _ = self.shutdown_tx.send(());
+        RequestMetrics {
+            success_count: self.state.success_count,
+            error_count: self.state.error_count,
+        }
     }
 }
 
@@ -931,19 +734,31 @@ mod tests {
 
         let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
 
-        client.patch(json!({"status": "updated"}));
-
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        client.patch(json!({"status": "updated"})).await.unwrap();
 
         mock.assert_async().await;
     }
 
     #[tokio::test]
-    async fn test_patch_request_batching() {
+    async fn test_patch_request_sequential() {
         let mut server = Server::new_async().await;
         let endpoint = server.url();
 
-        let mock = server
+        let mock1 = server
+            .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "first"})))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let mock2 = server
+            .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "second"})))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let mock3 = server
             .mock("PATCH", "/")
             .match_body(Matcher::Json(json!({"status": "final"})))
             .with_status(200)
@@ -952,13 +767,13 @@ mod tests {
 
         let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
 
-        client.patch(json!({"status": "first"}));
-        client.patch(json!({"status": "second"}));
-        client.patch(json!({"status": "final"}));
+        client.patch(json!({"status": "first"})).await.unwrap();
+        client.patch(json!({"status": "second"})).await.unwrap();
+        client.patch(json!({"status": "final"})).await.unwrap();
 
-        tokio::time::sleep(Duration::from_millis(15)).await;
-
-        mock.assert_async().await;
+        mock1.assert_async().await;
+        mock2.assert_async().await;
+        mock3.assert_async().await;
     }
 
     #[tokio::test]
@@ -978,9 +793,7 @@ mod tests {
         assert_eq!(metrics_before.success_count, 0);
         assert_eq!(metrics_before.error_count, 0);
 
-        client.patch(json!({"status": "test"}));
-
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        client.patch(json!({"status": "test"})).await.unwrap();
 
         let metrics_after = client.metrics();
         assert_eq!(metrics_after.success_count, 1);
@@ -1144,147 +957,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_patch_drop_terminates_task() {
-        let server = Server::new_async().await;
-        let endpoint = server.url();
-
-        // Create a patch request and immediately drop it
-        {
-            let _client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-            // Request goes out of scope here and should be dropped
-        }
-
-        // Give some time for the drop to take effect
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // If the task is properly terminated, this test should complete without hanging
-        // The fact that we reach this point means the drop worked correctly
-    }
-
-    #[tokio::test]
-    async fn test_patch_permanent_error_discards_state() {
+    async fn test_patch_error_handling() {
         let mut server = Server::new_async().await;
         let endpoint = server.url();
 
-        // First request returns 500 error
-        let mock0 = server
-            .mock("PATCH", "/")
-            .with_status(500)
-            .create_async()
-            .await;
-
-        // Second request returns 400 Bad Request
+        // First request returns 400 Bad Request
         let mock1 = server
             .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "will_fail"})))
             .with_status(400)
             .create_async()
             .await;
 
-        // Thid request should succeed (new patch request)
+        // Second request should succeed
         let mock2 = server
             .mock("PATCH", "/")
-            .match_body(Matcher::Json(json!({"status": "new_request"})))
+            .match_body(Matcher::Json(json!({"status": "success"})))
             .with_status(200)
             .create_async()
             .await;
 
         let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
 
-        // Send first patch that will fail with 500
-        client.patch(json!({"status": "will_fail"}));
+        // First patch fails with 400
+        let result1 = client.patch(json!({"status": "will_fail"})).await;
+        assert!(matches!(result1, Err(PatchError(400))));
 
-        // Wait for the failed request to be processed
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        // Second patch should succeed
+        client.patch(json!({"status": "success"})).await.unwrap();
 
-        // Send second patch that will fail with 400
-        client.patch(json!({"status": "will_also_fail"}));
-
-        // Wait for the failed request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
-
-        // Send third patch - this should succeed and not be blocked by the second
-        // and time should have been reset at this point
-        client.patch(json!({"status": "new_request"}));
-
-        // Wait for the second request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
-
-        mock0.assert_async().await;
         mock1.assert_async().await;
         mock2.assert_async().await;
     }
 
     #[tokio::test]
-    async fn test_patch_authentication_error_discards_state() {
+    async fn test_patch_authentication_error() {
         let mut server = Server::new_async().await;
         let endpoint = server.url();
 
         // First request returns 401 Unauthorized
         let mock1 = server
             .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "will_fail_auth"})))
             .with_status(401)
             .create_async()
             .await;
 
-        // Second request should succeed (new patch request)
+        // Second request should succeed
         let mock2 = server
             .mock("PATCH", "/")
-            .match_body(Matcher::Json(json!({"status": "new_after_auth_error"})))
+            .match_body(Matcher::Json(json!({"status": "success"})))
             .with_status(200)
             .create_async()
             .await;
 
         let mut client = Patch::new(endpoint, test_config().with_api_token("invalid-token"));
 
-        // Send first patch that will fail with 401
-        client.patch(json!({"status": "will_fail_auth"}));
+        // First patch fails with 401
+        let result1 = client.patch(json!({"status": "will_fail_auth"})).await;
+        assert!(matches!(result1, Err(PatchError(401))));
 
-        // Wait for the failed request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
-
-        // Send second patch - this should succeed and not be blocked by the first
-        client.patch(json!({"status": "new_after_auth_error"}));
-
-        // Wait for the second request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
-
-        mock1.assert_async().await;
-        mock2.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_not_found_error_discards_state() {
-        let mut server = Server::new_async().await;
-        let endpoint = server.url();
-
-        // First request returns 404 Not Found
-        let mock1 = server
-            .mock("PATCH", "/")
-            .with_status(404)
-            .create_async()
-            .await;
-
-        // Second request should succeed (new patch request)
-        let mock2 = server
-            .mock("PATCH", "/")
-            .match_body(Matcher::Json(json!({"status": "new_after_404"})))
-            .with_status(200)
-            .create_async()
-            .await;
-
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-
-        // Send first patch that will fail with 404
-        client.patch(json!({"status": "will_fail_404"}));
-
-        // Wait for the failed request to be processed
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        // Send second patch - this should succeed and not be blocked by the first
-        client.patch(json!({"status": "new_after_404"}));
-
-        // Wait for the second request to be processed
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Second patch should succeed
+        client.patch(json!({"status": "success"})).await.unwrap();
 
         mock1.assert_async().await;
         mock2.assert_async().await;
@@ -1322,11 +1056,19 @@ mod tests {
 
         let mut client = Patch::new(endpoint, config);
 
-        // Send patch that will be rate limited and then retried
-        client.patch(json!({"status": "will_be_rate_limited"}));
+        // Send patch that will be rate limited and then retried - this should block until success
+        let start_time = std::time::Instant::now();
+        client
+            .patch(json!({"status": "will_be_rate_limited"}))
+            .await
+            .unwrap();
+        let elapsed = start_time.elapsed();
 
-        // Wait for both the rate limited request and the retry
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        // Verify that at least 1 second passed (respecting the retry-after header)
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "Request should have waited for retry-after, but only took {elapsed:#?}",
+        );
 
         mock1.assert_async().await;
         mock2.assert_async().await;
@@ -1337,7 +1079,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let endpoint = server.url();
 
-        // First request will fail due to server shutdown (network error)
+        // First request will fail with server error
         let mock1 = server
             .mock("PATCH", "/")
             .match_body(Matcher::Json(json!({"status": "network_test"})))
@@ -1363,63 +1105,14 @@ mod tests {
 
         let mut client = Patch::new(endpoint, config);
 
-        // Send patch that will fail with server error and then be retried
-        client.patch(json!({"status": "network_test"}));
-
-        // Wait for both the failed request and the retry
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        mock1.assert_async().await;
-        mock2.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_new_request_overwrites_pending_retry() {
-        let mut server = Server::new_async().await;
-        let endpoint = server.url();
-
-        // First request returns 500 (will be retried)
-        let mock1 = server
-            .mock("PATCH", "/")
-            .with_status(500)
-            .create_async()
-            .await;
-
-        // Only the newer request should be sent on retry
-        let mock2 = server
-            .mock("PATCH", "/")
-            .match_body(Matcher::Json(json!({"status": "newer_request"})))
-            .with_status(200)
-            .create_async()
-            .await;
-
-        let config = RequestConfig {
-            timeout: Duration::from_secs(10),
-            min_interval: Duration::from_millis(10),
-            max_backoff: Duration::from_millis(100),
-            api_token: None,
-        }
-        .with_api_token("test-token");
-
-        let mut client = Patch::new(endpoint, config);
-
-        // Send first patch that will fail
-        client.patch(json!({"status": "will_fail"}));
-
-        // Wait for the failure
-        tokio::time::sleep(Duration::from_millis(25)).await;
-
-        // Send new patch before retry happens - this should overwrite the pending retry
-        client.patch(json!({"status": "newer_request"}));
-
-        // Wait for the retry/new request
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Send patch that will fail with server error and then be retried - this should block until success
+        client
+            .patch(json!({"status": "network_test"}))
+            .await
+            .unwrap();
 
         mock1.assert_async().await;
         mock2.assert_async().await;
-
-        // Verify the first request body was never retried
-        // (this is implicitly tested by mock2 matching only the newer request)
     }
 
     #[tokio::test]
@@ -1462,103 +1155,18 @@ mod tests {
         let mut client = Patch::new(endpoint, config);
 
         // Send 409 request - should fail permanently
-        client.patch(json!({"status": "conflict_test"}));
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        let result1 = client.patch(json!({"status": "conflict_test"})).await;
+        assert!(matches!(result1, Err(PatchError(409))));
 
         // Send 502 request - should be retried and eventually succeed
-        client.patch(json!({"status": "server_error_test"}));
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        client
+            .patch(json!({"status": "server_error_test"}))
+            .await
+            .unwrap();
 
         mock_409.assert_async().await;
         mock_502_fail.assert_async().await;
         mock_502_success.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_response_success() {
-        let mut server = Server::new_async().await;
-        let endpoint = server.url();
-
-        let mock = server
-            .mock("PATCH", "/")
-            .with_status(201)
-            .create_async()
-            .await;
-
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-
-        let request = client.patch(json!({"status": "test"}));
-        let result = request.await;
-
-        assert!(result.is_ok());
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_response_client_error() {
-        let mut server = Server::new_async().await;
-        let endpoint = server.url();
-
-        let mock = server
-            .mock("PATCH", "/")
-            .with_status(400)
-            .create_async()
-            .await;
-
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-
-        let request = client.patch(json!({"status": "test"}));
-        let result = request.await;
-
-        match result {
-            Err(PatchError::Status(400)) => {}
-            _ => panic!("Expected status 400, got {result:?}"),
-        }
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_response_replaced() {
-        let mut server = Server::new_async().await;
-        let endpoint = server.url();
-
-        let mock = server
-            .mock("PATCH", "/")
-            .match_body(Matcher::Json(json!({"status": "final"})))
-            .with_status(200)
-            .create_async()
-            .await;
-
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-
-        let request1 = client.patch(json!({"status": "first"}));
-        let request2 = client.patch(json!({"status": "second"}));
-        let request3 = client.patch(json!({"status": "final"}));
-
-        let result1 = request1.await;
-        let result2 = request2.await;
-        let result3 = request3.await;
-
-        assert!(matches!(result1, Err(PatchError::Incomplete)));
-        assert!(matches!(result2, Err(PatchError::Incomplete)));
-        assert!(result3.is_ok());
-
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_patch_response_dropped() {
-        let server = Server::new_async().await;
-        let endpoint = server.url();
-
-        let request = {
-            let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
-            client.patch(json!({"status": "will_be_dropped"}))
-            // request is dropped here
-        };
-
-        let response = request.await;
-        assert!(matches!(response, Err(PatchError::Incomplete)));
     }
 
     #[test]
