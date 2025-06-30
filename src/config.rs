@@ -9,15 +9,16 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::cli::Cli;
+use crate::fallback::FallbackConfig;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 /// Local API configurations
-pub struct Local {
+pub struct LocalConfig {
     pub port: u16,
     pub address: IpAddr,
 }
 
-impl Default for Local {
+impl Default for LocalConfig {
     fn default() -> Self {
         Self {
             port: 48484,
@@ -28,7 +29,7 @@ impl Default for Local {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 /// Remote API configurations
-pub struct Remote {
+pub struct RemoteConfig {
     #[serde(
         deserialize_with = "deserialize_optional_uri",
         serialize_with = "serialize_optional_uri",
@@ -58,7 +59,7 @@ pub struct Remote {
     pub max_poll_jitter: Duration,
 }
 
-impl Default for Remote {
+impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             api_endpoint: None,
@@ -72,27 +73,15 @@ impl Default for Remote {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
-/// Fallback API configurations
-pub struct Fallback {
-    #[serde(
-        deserialize_with = "deserialize_optional_uri",
-        serialize_with = "serialize_optional_uri",
-        default
-    )]
-    pub address: Option<Uri>,
-    pub api_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default = "generate_uuid")]
     pub uuid: String,
     #[serde(default)]
-    pub local: Local,
+    pub local: LocalConfig,
     #[serde(default)]
-    pub remote: Remote,
+    pub remote: RemoteConfig,
     #[serde(default)]
-    pub fallback: Fallback,
+    pub fallback: FallbackConfig,
 }
 
 fn generate_uuid() -> String {
@@ -171,7 +160,11 @@ fn get_config_path() -> PathBuf {
     }
 }
 
-fn deserialize_optional_uri<'de, D>(deserializer: D) -> std::result::Result<Option<Uri>, D::Error>
+// NOTE: this is only exported for use on fallback.rs
+// Consider moving into its own module if needed somewhere else
+pub fn deserialize_optional_uri<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Uri>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -183,7 +176,9 @@ where
     }
 }
 
-fn serialize_optional_uri<S>(
+// NOTE: this is only exported for use on fallback.rs
+// Consider moving into its own module if needed somewhere else
+pub fn serialize_optional_uri<S>(
     uri: &Option<Uri>,
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error>

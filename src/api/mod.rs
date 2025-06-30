@@ -1,26 +1,11 @@
-mod fallback;
+use crate::fallback::{proxy_legacy, FallbackState};
+use crate::{FallbackTarget, UpdateRequest};
 
-use crate::config::Config;
-use crate::{GlobalState, TargetState, UpdateRequest};
-use fallback::{proxy_legacy, FallbackProxy};
-
-use axum::{
-    body::{Body, Bytes},
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Router,
-};
-use hyper_tls::HttpsConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Router};
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
 use tracing::info;
-
-pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 // Handle /v1/update requests
 //
@@ -44,43 +29,27 @@ async fn trigger_update(State(state): State<ApiState>, body: Bytes) -> StatusCod
 
 #[derive(Clone)]
 #[allow(unused)]
-struct ApiState {
-    // The fallback proxy configuration
-    pub proxy: FallbackProxy,
-
-    // Shared Supervisor state
-    pub global: GlobalState,
+pub struct ApiState {
+    // The fallback proxy state
+    pub fallback_state: FallbackState,
 
     // Sender for target state requests
-    pub target_state_tx: Sender<Option<TargetState>>,
+    pub target_state_tx: Sender<Option<FallbackTarget>>,
 
     // Sender for update requests
     pub update_request_tx: Sender<UpdateRequest>,
-
-    /// Shared https client for remote connections
-    pub https_client: HttpsClient,
 }
 
 pub struct Api(ApiState);
 
 impl Api {
     pub fn new(
-        config: &Config,
-        state: GlobalState,
-        target_state_tx: Sender<Option<TargetState>>,
+        fallback_state: FallbackState,
+        target_state_tx: Sender<Option<FallbackTarget>>,
         update_request_tx: Sender<UpdateRequest>,
     ) -> Self {
-        let https = HttpsConnector::new();
-        let https_client = Client::builder(TokioExecutor::new()).build(https);
-
         Self(ApiState {
-            proxy: FallbackProxy {
-                remote_uri: config.remote.api_endpoint.clone(),
-                fallback_uri: config.fallback.address.clone(),
-                uuid: config.uuid.clone(),
-            },
-            https_client,
-            global: state,
+            fallback_state,
             target_state_tx,
             update_request_tx,
         })

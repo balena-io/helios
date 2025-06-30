@@ -109,7 +109,7 @@ impl RequestConfig {
     /// let config = RequestConfig::from_remote_config(&remote_config)
     ///     .with_api_token("your-api-token");
     /// ```
-    pub fn from_config(remote: &crate::config::Remote) -> Self {
+    pub fn from_config(remote: &crate::config::RemoteConfig) -> Self {
         Self {
             timeout: remote.request_timeout,
             min_interval: remote.min_interval,

@@ -3,14 +3,9 @@ use axum::http::uri::PathAndQuery;
 use clap::Parser;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::{
-    net::TcpListener,
-    sync::{watch, RwLock},
-    time::Instant,
-};
-use tracing::{debug, field, info, instrument, warn, Span};
+use std::{net::SocketAddr, time::Duration};
+use tokio::{net::TcpListener, sync::watch, time::Instant};
+use tracing::{debug, info, warn};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -22,12 +17,14 @@ mod api;
 mod cli;
 mod config;
 pub mod control;
+mod fallback;
 mod overrides;
 pub mod request;
 
 use api::Api;
 use cli::{Cli, Commands};
 use config::Config;
+use fallback::{trigger_legacy_update, FallbackState, FallbackTarget};
 use overrides::Overrides;
 use request::{Get, RequestConfig};
 
@@ -126,40 +123,6 @@ async fn fetch_target_state(
     }
 }
 
-/// Notify the fallback service of a state update via POST to /v1/update
-#[instrument(skip_all, fields(force = request.force, cancel = request.cancel, response = field::Empty), err)]
-async fn notify_fallback(config: &Config, request: &UpdateRequest) -> Result<()> {
-    let client = reqwest::Client::new();
-    let fallback_address = if let Some(addr) = config.fallback.address.clone() {
-        addr
-    } else {
-        Span::current().record("response", 404);
-        return Ok(());
-    };
-
-    // Build the URI from the address parts
-    let mut addr_parts = fallback_address.into_parts();
-    addr_parts.path_and_query = if let Some(apikey) = config.fallback.api_key.clone() {
-        Some(PathAndQuery::from_maybe_shared(format!(
-            "/v1/update?apikey={apikey}",
-        ))?)
-    } else {
-        Some(PathAndQuery::from_maybe_shared("/v1/update")?)
-    };
-    let url = Uri::from_parts(addr_parts)?.to_string();
-
-    let payload = json!({
-        "force": request.force,
-        "cancel": request.cancel
-    });
-
-    let response = client.post(&url).json(&payload).send().await?;
-
-    Span::current().record("response", response.status().as_u16());
-
-    Ok(())
-}
-
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[allow(unused)]
 /// An update request coming from the API
@@ -172,43 +135,6 @@ struct UpdateRequest {
     cancel: bool,
 }
 
-// This will become a proper type
-pub type TargetState = serde_json::Value;
-
-/// The supervisor state
-struct InnerState {
-    // TODO: add status
-    // TODO: add current_state
-
-    // The current target state
-    target_state: Option<TargetState>,
-}
-
-#[derive(Clone)]
-// Global service state.
-//
-// This is shared between the main loop and the API and is used for keeping state synchronized
-// between those two threads.
-//
-// Only the main loop can update the global state
-pub struct GlobalState(Arc<RwLock<InnerState>>);
-
-impl GlobalState {
-    fn new() -> Self {
-        Self(Arc::new(RwLock::new(InnerState { target_state: None })))
-    }
-
-    pub async fn target_state(&self) -> Option<TargetState> {
-        let inner = self.0.read().await;
-        inner.target_state.clone()
-    }
-
-    async fn set_target_state(&self, target_state: TargetState) {
-        let mut inner = self.0.write().await;
-        inner.target_state = Some(target_state)
-    }
-}
-
 async fn start_supervising(config: Config) -> Result<()> {
     info!("Service started");
 
@@ -219,23 +145,22 @@ async fn start_supervising(config: Config) -> Result<()> {
         warn!("No remote API endpoint provided, running in unmanaged mode");
     }
 
-    let global_state = GlobalState::new();
+    let fallback_state = FallbackState::new(
+        config.uuid.clone(),
+        config.remote.api_endpoint.clone(),
+        config.fallback.address.clone(),
+    );
     let overrides = Overrides::new(config.uuid.clone());
 
     // Set-up a channel to receive target state requests coming from the API
     // TODO: we still need to implement this endpoint
-    let (target_state_tx, mut target_state_rx) = watch::channel::<Option<TargetState>>(None);
+    let (target_state_tx, mut target_state_rx) = watch::channel::<Option<FallbackTarget>>(None);
 
     // Set-up a channel to receive update requests coming from the API
     let (update_request_tx, mut update_request_rx) =
         watch::channel::<UpdateRequest>(UpdateRequest::default());
 
-    let api = Api::new(
-        &config,
-        global_state.clone(),
-        target_state_tx,
-        update_request_tx,
-    );
+    let api = Api::new(fallback_state.clone(), target_state_tx, update_request_tx);
 
     // Try to bind to the API port first, this will avoid doing an extra poll
     // if the local port is taken
@@ -299,12 +224,17 @@ async fn start_supervising(config: Config) -> Result<()> {
             let target_with_overrides = overrides.apply(target_state.clone()).await;
 
             // Update the global state
-            global_state.set_target_state(target_with_overrides).await;
+            fallback_state.set_target_state(target_with_overrides).await;
 
             // TODO: try to apply changes
 
             // trigger an update on the fallback
-            let _ = notify_fallback(&config, &update_req).await;
+            let _ = trigger_legacy_update(
+                config.fallback.address.clone(),
+                config.fallback.api_key.clone(),
+                &update_req,
+            )
+            .await;
 
             // TODO: report state to API
         }
