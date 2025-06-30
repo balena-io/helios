@@ -1,4 +1,54 @@
 - commits:
+    - subject: Move caching fields from RequestState to Get struct
+      hash: bb7ac8e84cbedfddfff8e8a858cb1a851160fe46
+      body: >
+        Move cached_state and etag fields from shared RequestState to Get struct
+
+        since they are only used by GET requests for ETag-based caching:
+
+
+        - Remove cached_state and etag from RequestState
+
+        - Add cached_state and etag fields to Get struct
+
+        - Rename cached_state to cached
+
+        - Update Get::new() to initialize new caching fields
+
+        - Update try_get() method to use local caching fields instead of
+        RequestState
+
+
+        This reduces memory usage for Patch instances and makes the separation
+
+        of concerns clearer between generic request state and GET-specific
+        caching.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Simplify Patch struct to use blocking interface like Get
+      hash: fca0683b882e4304fbaa608d15bf4458bf103a70
+      body: |
+        Replace background task architecture with synchronous blocking pattern:
+        - Remove async background task spawning and channel communication
+        - Make patch() method require &mut self and block until completion
+        - Use same retry loop pattern as Get struct with try_patch()
+        - Remove PatchRequest future type and PatchError::Incomplete variant
+        - Update all tests to use new blocking .await pattern
+        - Remove batching and request replacement behavior
+
+        This simplifies the API and makes Patch consistent with Get behavior.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.2
+  title: ""
+  date: 2025-06-30T23:26:57.584Z
+- commits:
     - subject: Rename ghcr package to 'helios'
       hash: 5edae0feb86dac69b8769f537dad02b82d0a69b5
       body: ""
