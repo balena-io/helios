@@ -1,4 +1,86 @@
 - commits:
+    - subject: Bind to local port before starting poll
+      hash: 0e2bf3328fc84d70c847e68990df4866e94a1407
+      body: |
+        This prevents triggering a poll if the supervisor local port
+        is taken.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Rename the project to Helios and update README
+      hash: c20a62adf86bdf5a3c03edaf04dae5736d39b1ce
+      body: |
+        Do some additional configuration tweaks as well.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Simplify the main service loop
+      hash: 84152451f7a57859d7a95beaa99e70761adde795
+      body: |
+        This removes UpdateService and moves the target state handling
+        behavior to the main loop for simplicity.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Setup layered configuration approach
+      hash: fa020ecdc89bc302beb4ae25564772437effabc6
+      body: |
+        Add layered configuration support, prioritizing command line arguments,
+        then env vars then config.json in the system configuration
+        directory, then defaults
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Handle /v1/update requests
+      hash: a7b46d831c5f1795ecf757138eb5154da57040d0
+      body: |
+        The call now triggers a state poll and a subsequent notification to the
+        fallback if defined
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make remote api endpoint optional
+      hash: 8793a589cd183ab80b91346bdba51aa7d80d98c6
+      body: |
+        No api endpoint is equivalent to unmanaged mode
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make fallback address optional
+      hash: fecb4ff1441044e5e57b3897201b49a3270ede85
+      body: |
+        Unsupported paths will return 404 if the fallback address is not defined
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use Clap for parsing arguments and env vars
+      hash: 08ab44de5bed9bc4fbef1521261ad12e9e493f41
+      body: |
+        This makes the binary more useful on its own without the need to run in
+        a container.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.0
+  title: ""
+  date: 2025-06-30T20:58:21.199Z
+- commits:
     - subject: Add target state overrides system
       hash: 1a0f59afa629b820fb35eaa374cf6ea23b123da2
       body: |
