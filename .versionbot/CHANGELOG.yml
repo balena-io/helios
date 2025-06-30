@@ -1,4 +1,16 @@
 - commits:
+    - subject: Rename ghcr package to 'helios'
+      hash: 5edae0feb86dac69b8769f537dad02b82d0a69b5
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.1
+  title: ""
+  date: 2025-06-30T21:42:59.886Z
+- commits:
     - subject: Bind to local port before starting poll
       hash: 0e2bf3328fc84d70c847e68990df4866e94a1407
       body: |
