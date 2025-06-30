@@ -2,7 +2,7 @@ mod fallback;
 
 use crate::config::Config;
 use crate::{GlobalState, TargetState, UpdateRequest};
-use fallback::proxy_legacy;
+use fallback::{proxy_legacy, FallbackProxy};
 
 use axum::{
     body::{Body, Bytes},
@@ -15,7 +15,7 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
@@ -46,8 +46,8 @@ async fn trigger_update(State(state): State<ApiState>, body: Bytes) -> StatusCod
 #[derive(Clone)]
 #[allow(unused)]
 struct ApiState {
-    // Global config
-    pub config: Config,
+    // The fallback proxy configuration
+    pub proxy: FallbackProxy,
 
     // Shared Supervisor state
     pub global: GlobalState,
@@ -66,7 +66,7 @@ pub struct Api(ApiState);
 
 impl Api {
     pub fn new(
-        config: Config,
+        config: &Config,
         state: GlobalState,
         target_state_tx: Sender<Option<TargetState>>,
         update_request_tx: Sender<UpdateRequest>,
@@ -75,7 +75,11 @@ impl Api {
         let https_client = Client::builder(TokioExecutor::new()).build(https);
 
         Self(ApiState {
-            config,
+            proxy: FallbackProxy {
+                remote_uri: config.remote.api_endpoint.clone(),
+                fallback_uri: config.fallback.address.clone(),
+                uuid: config.uuid.clone(),
+            },
             https_client,
             global: state,
             target_state_tx,
@@ -83,7 +87,7 @@ impl Api {
         })
     }
 
-    pub async fn start(&self) -> anyhow::Result<()> {
+    pub async fn start(&self, address: IpAddr, port: u16) -> anyhow::Result<()> {
         let app = Router::new()
             .route("/v1/update", post(trigger_update))
             // Default to proxying requests if there is no handler
@@ -91,11 +95,7 @@ impl Api {
             .layer(TraceLayer::new_for_http())
             .with_state(self.0.clone());
 
-        let listen_addr: SocketAddr = format!(
-            "{}:{}",
-            self.0.config.local.address, self.0.config.local.port
-        )
-        .parse()?;
+        let listen_addr: SocketAddr = SocketAddr::new(address, port);
 
         // Try to bind to the local address
         let listener = TcpListener::bind(listen_addr).await?;

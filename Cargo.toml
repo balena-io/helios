@@ -1,12 +1,12 @@
 [package]
-name = "theseus"
+name = "helios"
 version = "0.1.0"
 edition = "2021"
-description = "Next-gen experimental balenaSupervisor"
-homepage = "https://github.com/balena-io-experimental/theseus"
+description = "Balena's on-device agent"
+homepage = "https://github.com/balena-io-experimental/helios"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/balena-io-experimental/theseus"
+repository = "https://github.com/balena-io-experimental/helios"
 publish = false
 
 [dependencies]

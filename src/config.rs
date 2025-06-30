@@ -2,7 +2,7 @@ use anyhow::Result;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
@@ -14,14 +14,14 @@ use crate::cli::Cli;
 /// Local API configurations
 pub struct Local {
     pub port: u16,
-    pub address: Ipv4Addr,
+    pub address: IpAddr,
 }
 
 impl Default for Local {
     fn default() -> Self {
         Self {
             port: 48484,
-            address: Ipv4Addr::new(127, 0, 0, 1),
+            address: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         }
     }
 }

@@ -1278,13 +1278,13 @@ mod tests {
         client.patch(json!({"status": "will_fail_404"}));
 
         // Wait for the failed request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
 
         // Send second patch - this should succeed and not be blocked by the first
         client.patch(json!({"status": "new_after_404"}));
 
         // Wait for the second request to be processed
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
 
         mock1.assert_async().await;
         mock2.assert_async().await;

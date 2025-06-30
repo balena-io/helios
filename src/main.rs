@@ -230,11 +230,13 @@ async fn start_supervising(config: Config) -> Result<()> {
         watch::channel::<UpdateRequest>(UpdateRequest::default());
 
     let api = Api::new(
-        config.clone(),
+        &config,
         global_state.clone(),
         target_state_tx,
         update_request_tx,
     );
+
+    let local = config.local.clone();
 
     tokio::spawn(async move {
         loop {
@@ -302,7 +304,8 @@ async fn start_supervising(config: Config) -> Result<()> {
         }
     });
 
-    api.start().await?;
+    // Start the API
+    api.start(local.address, local.port).await?;
 
     Ok(())
 }

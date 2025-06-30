@@ -12,9 +12,16 @@ unset FALLBACK_PORT
 
 # Read credentials from config.json
 DEVICE_UUID="$(jq -r .uuid /mnt/boot/config.json)"
-REMOTE_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
-REMOTE_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
-REMOTE_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
+HELIOS_REMOTE_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
+HELIOS_REMOTE_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
+HELIOS_REMOTE_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
+
+# Set some limits on service configuration
+if [ -n "$HELIOS_REMOTE_POLL_INTERVAL_MS" ] && [ "$HELIOS_REMOTE_POLL_INTERVAL_MS" -lt 900000 ]; then
+  HELIOS_REMOTE_POLL_INTERVAL=900000
+fi
+unset HELIOS_REMOTE_MAX_POLL_JITTER_MS
+unset HELIOS_REMOTE_MIN_INTERVAL_MS
 
 # Check for required variables
 for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_SUPERVISOR_API_KEY; do
@@ -102,9 +109,9 @@ else
 fi
 
 # Make variables available for the new process
-export REMOTE_API_ENDPOINT
-export REMOTE_API_KEY
-export REMOTE_POLL_INTERVAL
+export HELIOS_REMOTE_API_ENDPOINT
+export HELIOS_REMOTE_API_KEY
+export HELIOS_REMOTE_POLL_INTERVAL
 
 # Start the new supervisor
-exec theseus --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port" --fallback-api-key "${BALENA_SUPERVISOR_API_KEY}"
+exec helios --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port" --fallback-api-key "${BALENA_SUPERVISOR_API_KEY}" --local-address 0.0.0.0

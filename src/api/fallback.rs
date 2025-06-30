@@ -10,6 +10,13 @@ use tracing::info;
 use super::ApiState;
 use crate::GlobalState;
 
+#[derive(Clone)]
+pub struct FallbackProxy {
+    pub uuid: String,
+    pub remote_uri: Option<Uri>,
+    pub fallback_uri: Option<Uri>,
+}
+
 async fn handle_target_state_request(global: &GlobalState) -> Result<Response, ProxyError> {
     // Try to serve from local cache
     if let Some(target) = global.target_state().await {
@@ -53,7 +60,7 @@ pub async fn proxy_legacy(
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", state.config.uuid);
+        let expected_path = format!("/device/v3/{}/state", state.proxy.uuid);
 
         if path == expected_path {
             return handle_target_state_request(&state.global).await;
@@ -62,7 +69,7 @@ pub async fn proxy_legacy(
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        if let Some(ref remote_uri) = state.config.remote.api_endpoint {
+        if let Some(ref remote_uri) = state.proxy.remote_uri {
             remote_uri
         } else {
             // No remote API available, return 503 with Retry-After header
@@ -71,7 +78,7 @@ pub async fn proxy_legacy(
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref fallback_uri) = state.config.fallback.address {
+    } else if let Some(ref fallback_uri) = state.proxy.fallback_uri {
         fallback_uri
     } else {
         // No fallback configured, return 404
@@ -140,10 +147,7 @@ impl IntoResponse for ProxyError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        config::{Config, Fallback, Remote},
-        TargetState, UpdateRequest,
-    };
+    use crate::{TargetState, UpdateRequest};
 
     use super::*;
     use axum::http::Method;
@@ -158,26 +162,17 @@ mod tests {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        let config = Config {
-            uuid: "test-device-uuid".to_string(),
-            remote: Remote {
-                api_endpoint: Some(remote_uri),
-                ..Default::default()
-            },
-            fallback: Fallback {
-                address: Some(fallback_uri),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
         let global = GlobalState::new();
         let (target_state_tx, _) = watch::channel(None);
         let (update_request_tx, _) = watch::channel(UpdateRequest::default());
 
         ApiState {
             global,
-            config,
+            proxy: FallbackProxy {
+                remote_uri: Some(remote_uri),
+                fallback_uri: Some(fallback_uri),
+                uuid: "test-device-uuid".to_string(),
+            },
             https_client: client,
             target_state_tx,
             update_request_tx,
@@ -192,19 +187,6 @@ mod tests {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        let config = Config {
-            uuid: "test-device-uuid".to_string(),
-            remote: Remote {
-                api_endpoint: Some(remote_uri),
-                ..Default::default()
-            },
-            fallback: Fallback {
-                address: Some(fallback_uri),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
         let global = GlobalState::new();
         if let Some(tgt) = target {
             global.set_target_state(tgt).await;
@@ -215,7 +197,11 @@ mod tests {
 
         ApiState {
             global,
-            config,
+            proxy: FallbackProxy {
+                remote_uri: Some(remote_uri),
+                fallback_uri: Some(fallback_uri),
+                uuid: "test-device-uuid".to_string(),
+            },
             https_client: client,
             target_state_tx,
             update_request_tx,
@@ -229,27 +215,17 @@ mod tests {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        let config = Config {
-            uuid: "test-device-uuid".to_string(),
-            remote: Remote {
-                api_endpoint: remote_uri,
-                ..Default::default()
-            },
-            fallback: Fallback {
-                address: fallback_uri,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
         let global = GlobalState::new();
-
         let (target_state_tx, _) = watch::channel(None);
         let (update_request_tx, _) = watch::channel(UpdateRequest::default());
 
         ApiState {
             global,
-            config,
+            proxy: FallbackProxy {
+                remote_uri,
+                fallback_uri,
+                uuid: "test-device-uuid".to_string(),
+            },
             https_client: client,
             target_state_tx,
             update_request_tx,
