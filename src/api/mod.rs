@@ -1,8 +1,8 @@
-mod proxy;
+mod fallback;
 
 use crate::config::Config;
-use crate::link::{FetchOpts, UplinkService};
-use proxy::{proxy, ProxyConfig};
+use crate::{GlobalState, TargetState, UpdateRequest};
+use fallback::proxy_legacy;
 
 use axum::{
     body::{Body, Bytes},
@@ -15,124 +15,87 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use serde::Deserialize;
-use serde_json::Value;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
-#[derive(Deserialize)]
-struct UpdateRequest {
-    #[serde(default)]
-    force: bool,
-    #[serde(default)]
-    cancel: bool,
-}
-
 // Handle /v1/update requests
 //
-// This will trigger a fetch to the API (unless unmanaged)
-async fn handle_update(State(state): State<ApiState>, body: Bytes) -> StatusCode {
-    if let Some(uplink) = state.uplink.as_ref() {
-        let (force, cancel) = if body.is_empty() {
-            // Empty payload, use defaults
-            (false, false)
-        } else {
-            // Try to parse JSON
-            match serde_json::from_slice::<UpdateRequest>(&body) {
-                Ok(request) => (request.force, request.cancel),
-                Err(_) => (false, false), // Invalid JSON, use defaults
-            }
-        };
-
-        uplink.trigger_fetch(FetchOpts {
-            reemit: true,
-            force,
-            cancel,
-        });
-        StatusCode::ACCEPTED
+// This will trigger a fetch and an update to the API
+async fn trigger_update(State(state): State<ApiState>, body: Bytes) -> StatusCode {
+    let request = if body.is_empty() {
+        // Empty payload, use defaults
+        UpdateRequest::default()
     } else {
-        StatusCode::SERVICE_UNAVAILABLE
+        // Try to parse JSON
+        serde_json::from_slice::<UpdateRequest>(&body).unwrap_or_default()
+    };
+
+    if state.update_request_tx.send(request).is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE;
     }
+
+    // XXX: should we return something else if unmanaged?
+    StatusCode::ACCEPTED
 }
 
 #[derive(Clone)]
+#[allow(unused)]
 struct ApiState {
-    /// Proxy configuration
-    proxy: Arc<ProxyConfig>,
+    // Global config
+    pub config: Config,
+
+    // Shared Supervisor state
+    pub global: GlobalState,
+
+    // Sender for target state requests
+    pub target_state_tx: Sender<Option<TargetState>>,
+
+    // Sender for update requests
+    pub update_request_tx: Sender<UpdateRequest>,
 
     /// Shared https client for remote connections
-    https_client: HttpsClient,
-
-    /// Device UUID
-    uuid: String,
-
-    /// Uplink connection to the remote API
-    uplink: Arc<Option<UplinkService>>,
-
-    /// Cached target state from uplink service
-    target_state: Arc<RwLock<Option<Value>>>,
+    pub https_client: HttpsClient,
 }
 
-impl ApiState {
-    pub fn new(config: Config) -> Self {
-        let https = HttpsConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(https);
-
-        Self {
-            proxy: Arc::new(ProxyConfig {
-                fallback_uri: config.fallback.address,
-                remote_uri: config.remote.api_endpoint,
-            }),
-            https_client: client,
-            uuid: config.uuid,
-            uplink: Arc::new(None),
-            target_state: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    pub async fn get_target_state(&self) -> Option<Value> {
-        let state = self.target_state.read().await;
-        state.clone()
-    }
-}
-
-pub struct Api {
-    config: Config,
-    state: ApiState,
-}
+pub struct Api(ApiState);
 
 impl Api {
-    pub fn new(config: Config) -> Self {
-        let state = ApiState::new(config.clone());
-        Self { config, state }
-    }
+    pub fn new(
+        config: Config,
+        state: GlobalState,
+        target_state_tx: Sender<Option<TargetState>>,
+        update_request_tx: Sender<UpdateRequest>,
+    ) -> Self {
+        let https = HttpsConnector::new();
+        let https_client = Client::builder(TokioExecutor::new()).build(https);
 
-    pub fn with_uplink(mut self, uplink: UplinkService) -> Self {
-        self.state.uplink = Arc::new(Some(uplink));
-        self
-    }
-
-    pub async fn set_target_state(&self, target: Value) {
-        let mut state = self.state.target_state.write().await;
-        *state = Some(target);
+        Self(ApiState {
+            config,
+            https_client,
+            global: state,
+            target_state_tx,
+            update_request_tx,
+        })
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
         let app = Router::new()
-            .route("/v1/update", post(handle_update))
+            .route("/v1/update", post(trigger_update))
             // Default to proxying requests if there is no handler
-            .fallback(proxy)
+            .fallback(proxy_legacy)
             .layer(TraceLayer::new_for_http())
-            .with_state(self.state.clone());
+            .with_state(self.0.clone());
 
-        let listen_addr: SocketAddr =
-            format!("{}:{}", self.config.local.address, self.config.local.port).parse()?;
+        let listen_addr: SocketAddr = format!(
+            "{}:{}",
+            self.0.config.local.address, self.0.config.local.port
+        )
+        .parse()?;
 
         // Try to bind to the local address
         let listener = TcpListener::bind(listen_addr).await?;

@@ -1,5 +1,3 @@
-use super::ApiState;
-
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -9,15 +7,14 @@ use axum::{
 use hyper::Uri;
 use tracing::info;
 
-pub struct ProxyConfig {
-    pub remote_uri: Option<Uri>,
-    pub fallback_uri: Option<Uri>,
-}
+use super::ApiState;
+use crate::GlobalState;
 
-async fn handle_target_state_request(state: &ApiState) -> Result<Response, ProxyError> {
+async fn handle_target_state_request(global: &GlobalState) -> Result<Response, ProxyError> {
     // Try to serve from local cache
-    if let Some(target) = state.get_target_state().await {
+    if let Some(target) = global.target_state().await {
         info!("returning cached target state");
+        // XXX:
         let response_body =
             serde_json::to_string(&target).map_err(ProxyError::JsonSerialization)?;
 
@@ -40,8 +37,8 @@ async fn handle_target_state_request(state: &ApiState) -> Result<Response, Proxy
 
 /// Proxy requests to/from fallback supervisor to the relevant target
 ///
-/// This is the fallback API behavior while we the supervisor migration is ongoing
-pub async fn proxy(
+/// This is the fallback API behavior while the supervisor migration is ongoing
+pub async fn proxy_legacy(
     State(state): State<ApiState>,
     request: Request,
 ) -> Result<Response, ProxyError> {
@@ -56,16 +53,16 @@ pub async fn proxy(
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", state.uuid);
+        let expected_path = format!("/device/v3/{}/state", state.config.uuid);
 
         if path == expected_path {
-            return handle_target_state_request(&state).await;
+            return handle_target_state_request(&state.global).await;
         }
     }
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        if let Some(ref remote_uri) = state.proxy.remote_uri {
+        if let Some(ref remote_uri) = state.config.remote.api_endpoint {
             remote_uri
         } else {
             // No remote API available, return 503 with Retry-After header
@@ -74,7 +71,7 @@ pub async fn proxy(
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref fallback_uri) = state.proxy.fallback_uri {
+    } else if let Some(ref fallback_uri) = state.config.fallback.address {
         fallback_uri
     } else {
         // No fallback configured, return 404
@@ -143,6 +140,11 @@ impl IntoResponse for ProxyError {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        config::{Config, Fallback, Remote},
+        TargetState, UpdateRequest,
+    };
+
     use super::*;
     use axum::http::Method;
     use hyper_tls::HttpsConnector;
@@ -150,61 +152,107 @@ mod tests {
     use hyper_util::rt::TokioExecutor;
     use mockito::Server;
     use serde_json::json;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
+    use tokio::sync::watch;
 
     fn create_test_state(remote_uri: Uri, fallback_uri: Uri) -> ApiState {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        ApiState {
-            proxy: Arc::new(ProxyConfig {
-                remote_uri: Some(remote_uri),
-                fallback_uri: Some(fallback_uri),
-            }),
-            uplink: Arc::new(None),
-            https_client: client,
+        let config = Config {
             uuid: "test-device-uuid".to_string(),
-            target_state: Arc::new(RwLock::new(None)),
+            remote: Remote {
+                api_endpoint: Some(remote_uri),
+                ..Default::default()
+            },
+            fallback: Fallback {
+                address: Some(fallback_uri),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let global = GlobalState::new();
+        let (target_state_tx, _) = watch::channel(None);
+        let (update_request_tx, _) = watch::channel(UpdateRequest::default());
+
+        ApiState {
+            global,
+            config,
+            https_client: client,
+            target_state_tx,
+            update_request_tx,
         }
     }
 
-    fn create_test_state_with_target(
+    async fn create_test_state_with_target(
         remote_uri: Uri,
         fallback_uri: Uri,
-        target: Option<serde_json::Value>,
+        target: Option<TargetState>,
     ) -> ApiState {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        ApiState {
-            proxy: Arc::new(ProxyConfig {
-                remote_uri: Some(remote_uri),
-                fallback_uri: Some(fallback_uri),
-            }),
-            uplink: Arc::new(None),
-            https_client: client,
+        let config = Config {
             uuid: "test-device-uuid".to_string(),
-            target_state: Arc::new(RwLock::new(target)),
+            remote: Remote {
+                api_endpoint: Some(remote_uri),
+                ..Default::default()
+            },
+            fallback: Fallback {
+                address: Some(fallback_uri),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let global = GlobalState::new();
+        if let Some(tgt) = target {
+            global.set_target_state(tgt).await;
+        }
+
+        let (target_state_tx, _) = watch::channel(None);
+        let (update_request_tx, _) = watch::channel(UpdateRequest::default());
+
+        ApiState {
+            global,
+            config,
+            https_client: client,
+            target_state_tx,
+            update_request_tx,
         }
     }
 
-    fn create_test_state_with_none_uris(
+    async fn create_test_state_with_none_uris(
         remote_uri: Option<Uri>,
         fallback_uri: Option<Uri>,
     ) -> ApiState {
         let https = HttpsConnector::new();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        ApiState {
-            proxy: Arc::new(ProxyConfig {
-                remote_uri,
-                fallback_uri,
-            }),
-            uplink: Arc::new(None),
-            https_client: client,
+        let config = Config {
             uuid: "test-device-uuid".to_string(),
-            target_state: Arc::new(RwLock::new(None)),
+            remote: Remote {
+                api_endpoint: remote_uri,
+                ..Default::default()
+            },
+            fallback: Fallback {
+                address: fallback_uri,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let global = GlobalState::new();
+
+        let (target_state_tx, _) = watch::channel(None);
+        let (update_request_tx, _) = watch::channel(UpdateRequest::default());
+
+        ApiState {
+            global,
+            config,
+            https_client: client,
+            target_state_tx,
+            update_request_tx,
         }
     }
 
@@ -234,7 +282,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         remote_mock.assert_async().await;
@@ -256,7 +304,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         fallback_mock.assert_async().await;
@@ -278,7 +326,7 @@ mod tests {
 
         let request = create_test_request("/test", None);
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         fallback_mock.assert_async().await;
@@ -300,7 +348,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("MySupervisor/1.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         fallback_mock.assert_async().await;
@@ -322,7 +370,7 @@ mod tests {
 
         let request = create_test_request("/api/v1/test?param=value", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         mock.assert_async().await;
@@ -344,7 +392,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -361,7 +409,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -386,14 +434,15 @@ mod tests {
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
         let state =
-            create_test_state_with_target(remote_uri, fallback_uri, Some(target_state.clone()));
+            create_test_state_with_target(remote_uri, fallback_uri, Some(target_state.clone()))
+                .await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -408,14 +457,14 @@ mod tests {
     async fn test_target_state_interception_without_cached_state() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state_with_target(remote_uri, fallback_uri, None);
+        let state = create_test_state_with_target(remote_uri, fallback_uri, None).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -436,11 +485,12 @@ mod tests {
         let remote_uri: Uri = server.url().parse().unwrap();
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state_with_target(remote_uri, fallback_uri, Some(target_state));
+        let state =
+            create_test_state_with_target(remote_uri, fallback_uri, Some(target_state)).await;
 
         let request = create_test_request("/device/v3/wrong-uuid/state", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         remote_mock.assert_async().await;
@@ -459,14 +509,15 @@ mod tests {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let fallback_uri: Uri = server.url().parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state_with_target(remote_uri, fallback_uri, Some(target_state));
+        let state =
+            create_test_state_with_target(remote_uri, fallback_uri, Some(target_state)).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("CustomClient/1.0"),
         );
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         fallback_mock.assert_async().await;
@@ -485,12 +536,13 @@ mod tests {
         let remote_uri: Uri = server.url().parse().unwrap();
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state_with_target(remote_uri, fallback_uri, Some(target_state));
+        let state =
+            create_test_state_with_target(remote_uri, fallback_uri, Some(target_state)).await;
 
         let request =
             create_test_request("/device/v3/test-device-uuid/logs", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         remote_mock.assert_async().await;
@@ -499,11 +551,11 @@ mod tests {
     #[tokio::test]
     async fn test_supervisor_request_with_no_remote_uri() {
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state_with_none_uris(None, Some(fallback_uri));
+        let state = create_test_state_with_none_uris(None, Some(fallback_uri)).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -514,11 +566,11 @@ mod tests {
     #[tokio::test]
     async fn test_non_supervisor_request_with_no_fallback_uri() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let state = create_test_state_with_none_uris(Some(remote_uri), None);
+        let state = create_test_state_with_none_uris(Some(remote_uri), None).await;
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -528,14 +580,14 @@ mod tests {
     #[tokio::test]
     async fn test_target_state_interception_with_no_remote_uri() {
         let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state_with_none_uris(None, Some(fallback_uri));
+        let state = create_test_state_with_none_uris(None, Some(fallback_uri)).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy(State(state), request).await;
+        let result = proxy_legacy(State(state), request).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -545,17 +597,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_both_remote_and_fallback_uris_none() {
-        let state = create_test_state_with_none_uris(None, None);
+        let state = create_test_state_with_none_uris(None, None).await;
 
         let supervisor_request = create_test_request("/test", Some("Supervisor/1.0.0"));
-        let result = proxy(State(state.clone()), supervisor_request).await;
+        let result = proxy_legacy(State(state.clone()), supervisor_request).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "600");
 
         let non_supervisor_request = create_test_request("/test", Some("CustomClient/1.0"));
-        let result = proxy(State(state), non_supervisor_request).await;
+        let result = proxy_legacy(State(state), non_supervisor_request).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);

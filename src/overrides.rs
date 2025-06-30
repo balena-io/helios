@@ -87,7 +87,7 @@ impl Overrides {
     /// Apply overrides to target state by reading override.json files for each app.
     ///
     /// For each app-uuid in the device's target state, this function looks for a file at
-    /// `/mnt/temp/apps/{app-uuid}/override.json`. If the file exists and contains
+    /// `/tmp/balena-supervisor/apps/{app-uuid}/override.json`. If the file exists and contains
     /// valid JSON, it replaces the corresponding app configuration with the
     /// override content.
     ///
@@ -105,8 +105,9 @@ impl Overrides {
             .and_then(|apps| apps.as_object_mut())
         {
             for (app_uuid, app_config) in apps_obj.iter_mut() {
-                let override_path =
-                    PathBuf::from(format!("/mnt/temp/apps/{app_uuid}/override.json"));
+                let override_path = PathBuf::from(format!(
+                    "/tmp/balena-supervisor/apps/{app_uuid}/override.json"
+                ));
 
                 // If there is an override for the app in the temp
                 // directory then use that instead of the target state.
@@ -120,16 +121,16 @@ impl Overrides {
         result
     }
 
-    /// Clear all override.json files under /mnt/temp/apps/
+    /// Clear all override.json files under /tmp/balena-supervisor/apps/
     ///
     /// This function recursively searches for override.json files in all app
-    /// directories under /mnt/temp/apps/ and removes them.
+    /// directories under /tmp/balena-supervisor/apps/ and removes them.
     ///
     /// # Returns
     /// Result indicating success or failure of the cleanup operation
     #[allow(dead_code)]
     pub async fn clear(&self) {
-        let apps_dir = Path::new("/mnt/temp/apps");
+        let apps_dir = Path::new("/tmp/balena-supervisor/apps");
 
         if !self.fs.exists(apps_dir).await {
             return;
@@ -220,13 +221,13 @@ mod tests {
         }
 
         async fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
-            // For mock, we'll simulate the /mnt/temp/apps directory structure
-            if path == Path::new("/mnt/temp/apps") {
+            // For mock, we'll simulate the /tmp/balena-supervisor/apps directory structure
+            if path == Path::new("/tmp/balena-supervisor/apps") {
                 let mut dirs = Vec::new();
                 for file_path in self.files.keys() {
                     if let Some(parent) = file_path.parent() {
                         if parent.starts_with(path) && parent != path {
-                            // Find the immediate subdirectory under /mnt/temp/apps
+                            // Find the immediate subdirectory under /tmp/balena-supervisor/apps
                             if let Ok(relative) = parent.strip_prefix(path) {
                                 if let Some(first_component) = relative.components().next() {
                                     let subdir = path.join(first_component);
@@ -273,7 +274,7 @@ mod tests {
     async fn test_apply_with_valid_override() {
         let mut mock_fs = MockFileSystem::new();
         mock_fs.add_file(
-            "/mnt/temp/apps/app-uuid-1/override.json",
+            "/tmp/balena-supervisor/apps/app-uuid-1/override.json",
             json!({
                 "name": "overridden-app",
                 "id": 456,
@@ -312,7 +313,7 @@ mod tests {
     async fn test_apply_with_invalid_json() {
         let mut mock_fs = MockFileSystem::new();
         mock_fs.add_file(
-            "/mnt/temp/apps/app-uuid-1/override.json",
+            "/tmp/balena-supervisor/apps/app-uuid-1/override.json",
             "invalid json content",
         );
 
@@ -358,11 +359,11 @@ mod tests {
     async fn test_apply_multiple_apps() {
         let mut mock_fs = MockFileSystem::new();
         mock_fs.add_file(
-            "/mnt/temp/apps/app-uuid-1/override.json",
+            "/tmp/balena-supervisor/apps/app-uuid-1/override.json",
             json!({"name": "overridden-app-1"}).to_string(),
         );
         mock_fs.add_file(
-            "/mnt/temp/apps/app-uuid-2/override.json",
+            "/tmp/balena-supervisor/apps/app-uuid-2/override.json",
             json!({"name": "overridden-app-2"}).to_string(),
         );
 
@@ -409,8 +410,8 @@ mod tests {
     #[tokio::test]
     async fn test_clear_with_files() {
         let mut mock_fs = MockFileSystem::new();
-        mock_fs.add_file("/mnt/temp/apps/app1/override.json", "{}");
-        mock_fs.add_file("/mnt/temp/apps/app2/override.json", "{}");
+        mock_fs.add_file("/tmp/balena-supervisor/apps/app1/override.json", "{}");
+        mock_fs.add_file("/tmp/balena-supervisor/apps/app2/override.json", "{}");
 
         // Get a handle to the deleted files list before moving mock_fs
         let deleted_files = mock_fs.get_deleted_files_handle();
@@ -420,7 +421,11 @@ mod tests {
 
         // Verify files were deleted
         let deleted = deleted_files.lock().unwrap();
-        assert!(deleted.contains(&PathBuf::from("/mnt/temp/apps/app1/override.json")));
-        assert!(deleted.contains(&PathBuf::from("/mnt/temp/apps/app2/override.json")));
+        assert!(deleted.contains(&PathBuf::from(
+            "/tmp/balena-supervisor/apps/app1/override.json"
+        )));
+        assert!(deleted.contains(&PathBuf::from(
+            "/tmp/balena-supervisor/apps/app2/override.json"
+        )));
     }
 }
