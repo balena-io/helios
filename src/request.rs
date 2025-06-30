@@ -201,8 +201,6 @@ struct RequestState {
     client: reqwest::Client,
     endpoint: String,
     config: RequestConfig,
-    cached_state: Option<serde_json::Value>,
-    etag: Option<String>,
     next_retry: Option<Instant>,
     current_backoff: Duration,
     success_count: u64,
@@ -218,8 +216,6 @@ impl RequestState {
             client: reqwest::Client::new(),
             endpoint,
             config,
-            cached_state: None,
-            etag: None,
             next_retry: None,
             current_backoff,
             success_count: 0,
@@ -271,6 +267,8 @@ impl RequestState {
 /// the server returns 304 Not Modified or when errors occur.
 pub struct Get {
     state: RequestState,
+    cached: Option<serde_json::Value>,
+    etag: Option<String>,
 }
 
 impl Get {
@@ -307,6 +305,8 @@ impl Get {
     pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
         Self {
             state: RequestState::new(endpoint.into(), config),
+            cached: None,
+            etag: None,
         }
     }
 
@@ -325,7 +325,7 @@ impl Get {
             request = request.header("Authorization", format!("Bearer {api_token}"));
         }
 
-        if let Some(etag) = &self.state.etag {
+        if let Some(etag) = &self.etag {
             request = request.header("If-None-Match", etag);
         }
 
@@ -357,8 +357,8 @@ impl Get {
                     }
                 };
 
-                self.state.cached_state = Some(json.clone());
-                self.state.etag = new_etag;
+                self.cached = Some(json.clone());
+                self.etag = new_etag;
                 self.state.record_success();
 
                 Ok(GetResponse {
@@ -369,7 +369,7 @@ impl Get {
             StatusCode::NOT_MODIFIED => {
                 self.state.record_success();
                 Ok(GetResponse {
-                    value: self.state.cached_state.clone(),
+                    value: self.cached.clone(),
                     modified: false,
                 })
             }
