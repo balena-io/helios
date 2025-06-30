@@ -1,94 +1,103 @@
-mod proxy;
+mod fallback;
 
 use crate::config::Config;
-use proxy::{proxy, ProxyConfig};
+use crate::{GlobalState, TargetState, UpdateRequest};
+use fallback::{proxy_legacy, FallbackProxy};
 
-use axum::{body::Body, Router};
+use axum::{
+    body::{Body, Bytes},
+    extract::State,
+    http::StatusCode,
+    routing::post,
+    Router,
+};
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use serde_json::Value;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
+// Handle /v1/update requests
+//
+// This will trigger a fetch and an update to the API
+async fn trigger_update(State(state): State<ApiState>, body: Bytes) -> StatusCode {
+    let request = if body.is_empty() {
+        // Empty payload, use defaults
+        UpdateRequest::default()
+    } else {
+        // Try to parse JSON
+        serde_json::from_slice::<UpdateRequest>(&body).unwrap_or_default()
+    };
+
+    if state.update_request_tx.send(request).is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    // XXX: should we return something else if unmanaged?
+    StatusCode::ACCEPTED
+}
+
 #[derive(Clone)]
-pub struct ApiState {
-    /// Proxy configuration
-    proxy: Arc<ProxyConfig>,
+#[allow(unused)]
+struct ApiState {
+    // The fallback proxy configuration
+    pub proxy: FallbackProxy,
+
+    // Shared Supervisor state
+    pub global: GlobalState,
+
+    // Sender for target state requests
+    pub target_state_tx: Sender<Option<TargetState>>,
+
+    // Sender for update requests
+    pub update_request_tx: Sender<UpdateRequest>,
 
     /// Shared https client for remote connections
-    https_client: HttpsClient,
-
-    /// Device UUID
-    uuid: String,
-
-    /// Cached target state from uplink service
-    target_state: Arc<RwLock<Option<Value>>>,
+    pub https_client: HttpsClient,
 }
 
-impl ApiState {
-    pub fn new(config: Config) -> Self {
-        let https = HttpsConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(https);
-
-        Self {
-            proxy: Arc::new(ProxyConfig {
-                fallback_uri: config.fallback.uri,
-                remote_uri: config.balena.uri,
-            }),
-            https_client: client,
-            uuid: config.uuid,
-            target_state: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    pub async fn set_target_state(&self, target: Value) {
-        let mut state = self.target_state.write().await;
-        *state = Some(target);
-    }
-
-    pub async fn get_target_state(&self) -> Option<Value> {
-        let state = self.target_state.read().await;
-        state.clone()
-    }
-}
-
-pub struct Api {
-    config: Config,
-    state: ApiState,
-}
+pub struct Api(ApiState);
 
 impl Api {
-    pub fn new(config: Config) -> Self {
-        let state = ApiState::new(config.clone());
-        Self { config, state }
+    pub fn new(
+        config: &Config,
+        state: GlobalState,
+        target_state_tx: Sender<Option<TargetState>>,
+        update_request_tx: Sender<UpdateRequest>,
+    ) -> Self {
+        let https = HttpsConnector::new();
+        let https_client = Client::builder(TokioExecutor::new()).build(https);
+
+        Self(ApiState {
+            proxy: FallbackProxy {
+                remote_uri: config.remote.api_endpoint.clone(),
+                fallback_uri: config.fallback.address.clone(),
+                uuid: config.uuid.clone(),
+            },
+            https_client,
+            global: state,
+            target_state_tx,
+            update_request_tx,
+        })
     }
 
-    pub fn get_state(&self) -> ApiState {
-        self.state.clone()
-    }
-
-    pub async fn start(&self) -> anyhow::Result<()> {
+    /// Start the API
+    ///
+    /// Receives a TCP listener already bound to the right address and port
+    pub async fn start(&self, listener: TcpListener) -> anyhow::Result<()> {
         let app = Router::new()
-            // TODO: intercept /v1/update and call the local planner
+            .route("/v1/update", post(trigger_update))
             // Default to proxying requests if there is no handler
-            .fallback(proxy)
+            .fallback(proxy_legacy)
             .layer(TraceLayer::new_for_http())
-            .with_state(self.state.clone());
+            .with_state(self.0.clone());
 
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", self.config.local.port).parse()?;
-
-        // Try to bind to the local address
-        let listener = TcpListener::bind(listen_addr).await?;
-        info!("API Listening on {}", self.config.local.port);
-
+        info!("API started");
         axum::serve(listener, app).await?;
         Ok(())
     }

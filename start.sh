@@ -6,21 +6,25 @@ set -e
 DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
-# Use debug logging by default, disabling logs dependenc
-RUST_LOG=${RUST_LOG:-debug,hyper=error,bollard=error}
-
 # Supervisor fallback port
 fallback_port=${FALLBACK_PORT:-48480}
 unset FALLBACK_PORT
 
 # Read credentials from config.json
-BALENA_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
-BALENA_UUID="$(jq -r .uuid /mnt/boot/config.json)"
-BALENA_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
-BALENA_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
+DEVICE_UUID="$(jq -r .uuid /mnt/boot/config.json)"
+HELIOS_REMOTE_API_ENDPOINT="$(jq -r .apiEndpoint /mnt/boot/config.json)"
+HELIOS_REMOTE_API_KEY="$(jq -r .deviceApiKey /mnt/boot/config.json)"
+HELIOS_REMOTE_POLL_INTERVAL="$(jq -r .appUpdatePollInterval /mnt/boot/config.json)"
+
+# Set some limits on service configuration
+if [ -n "$HELIOS_REMOTE_POLL_INTERVAL_MS" ] && [ "$HELIOS_REMOTE_POLL_INTERVAL_MS" -lt 900000 ]; then
+  HELIOS_REMOTE_POLL_INTERVAL=900000
+fi
+unset HELIOS_REMOTE_MAX_POLL_JITTER_MS
+unset HELIOS_REMOTE_MIN_INTERVAL_MS
 
 # Check for required variables
-for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_API_ENDPOINT; do
+for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_SUPERVISOR_API_KEY; do
   eval val="\$$var"
   if [ -z "$val" ]; then
     echo "Error: variable '$var' is not set" >&2
@@ -104,16 +108,10 @@ else
   setup_supervisor
 fi
 
-# Set the fallback supervisor address for the proxy
-FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:${fallback_port}"
-
 # Make variables available for the new process
-export BALENA_API_ENDPOINT
-export BALENA_UUID
-export BALENA_API_KEY
-export BALENA_POLL_INTERVAL
-export FALLBACK_ADDRESS
-export RUST_LOG
+export HELIOS_REMOTE_API_ENDPOINT
+export HELIOS_REMOTE_API_KEY
+export HELIOS_REMOTE_POLL_INTERVAL
 
 # Start the new supervisor
-exec theseus
+exec helios --uuid "${DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port" --fallback-api-key "${BALENA_SUPERVISOR_API_KEY}" --local-address 0.0.0.0
