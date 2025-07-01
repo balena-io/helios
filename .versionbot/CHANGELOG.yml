@@ -1,4 +1,17 @@
 - commits:
+    - subject: Refactor all fallback utils into its own module
+      hash: 424bb2f8c610a44b880e968ef0ea5a3bfa3ce7fc
+      body: |
+        This removes the GlobalState (for now) and cleans up the API code
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.3
+  title: ""
+  date: 2025-07-01T01:44:42.399Z
+- commits:
     - subject: Move caching fields from RequestState to Get struct
       hash: bb7ac8e84cbedfddfff8e8a858cb1a851160fe46
       body: >
