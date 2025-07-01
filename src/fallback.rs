@@ -1,25 +1,115 @@
+use std::sync::Arc;
+
+use anyhow::Result;
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{uri::PathAndQuery, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use hyper::Uri;
-use tracing::info;
+use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::RwLock;
+use tracing::{field, info, instrument, Span};
 
-use super::ApiState;
-use crate::GlobalState;
+pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
+
+use crate::config::{deserialize_optional_uri, serialize_optional_uri};
+use crate::{api::ApiState, UpdateRequest};
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+/// Fallback API configurations
+pub struct FallbackConfig {
+    #[serde(
+        deserialize_with = "deserialize_optional_uri",
+        serialize_with = "serialize_optional_uri",
+        default
+    )]
+    pub address: Option<Uri>,
+    pub api_key: Option<String>,
+}
+
+pub type FallbackTarget = serde_json::Value;
 
 #[derive(Clone)]
-pub struct FallbackProxy {
+pub struct FallbackState {
     pub uuid: String,
     pub remote_uri: Option<Uri>,
     pub fallback_uri: Option<Uri>,
+    pub https_client: HttpsClient,
+    pub target: Arc<RwLock<Option<FallbackTarget>>>,
 }
 
-async fn handle_target_state_request(global: &GlobalState) -> Result<Response, ProxyError> {
+impl FallbackState {
+    pub fn new(uuid: String, remote_uri: Option<Uri>, fallback_uri: Option<Uri>) -> Self {
+        let https = HttpsConnector::new();
+        let https_client = Client::builder(TokioExecutor::new()).build(https);
+
+        Self {
+            uuid,
+            remote_uri,
+            fallback_uri,
+            target: Arc::new(RwLock::new(None)),
+            https_client,
+        }
+    }
+
+    pub async fn target_state(&self) -> Option<FallbackTarget> {
+        let target = self.target.read().await;
+        target.clone()
+    }
+
+    pub async fn set_target_state(&self, target_state: FallbackTarget) {
+        let mut target = self.target.write().await;
+        target.replace(target_state);
+    }
+}
+
+/// Trigger an update on the legacy supervisor
+#[instrument(skip_all, fields(force = request.force, cancel = request.cancel, response = field::Empty), err)]
+pub async fn trigger_legacy_update(
+    fallback_uri: Option<Uri>,
+    fallback_key: Option<String>,
+    request: &UpdateRequest,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+    let fallback_address = if let Some(addr) = fallback_uri {
+        addr
+    } else {
+        Span::current().record("response", 404);
+        return Ok(());
+    };
+
+    // Build the URI from the address parts
+    let mut addr_parts = fallback_address.into_parts();
+    addr_parts.path_and_query = if let Some(apikey) = fallback_key.clone() {
+        Some(PathAndQuery::from_maybe_shared(format!(
+            "/v1/update?apikey={apikey}",
+        ))?)
+    } else {
+        Some(PathAndQuery::from_maybe_shared("/v1/update")?)
+    };
+    let url = Uri::from_parts(addr_parts)?.to_string();
+
+    let payload = json!({
+        "force": request.force,
+        "cancel": request.cancel
+    });
+
+    let response = client.post(&url).json(&payload).send().await?;
+
+    Span::current().record("response", response.status().as_u16());
+
+    Ok(())
+}
+
+async fn handle_target_state_request(state: &FallbackState) -> Result<Response, ProxyError> {
     // Try to serve from local cache
-    if let Some(target) = global.target_state().await {
+    if let Some(target) = state.target_state().await {
         info!("returning cached target state");
         // XXX:
         let response_body =
@@ -46,7 +136,7 @@ async fn handle_target_state_request(global: &GlobalState) -> Result<Response, P
 ///
 /// This is the fallback API behavior while the supervisor migration is ongoing
 pub async fn proxy_legacy(
-    State(state): State<ApiState>,
+    State(ApiState { fallback_state, .. }): State<ApiState>,
     request: Request,
 ) -> Result<Response, ProxyError> {
     // Check if this is a target state request from the supervisor to the API
@@ -60,16 +150,16 @@ pub async fn proxy_legacy(
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", state.proxy.uuid);
+        let expected_path = format!("/device/v3/{}/state", fallback_state.uuid);
 
         if path == expected_path {
-            return handle_target_state_request(&state.global).await;
+            return handle_target_state_request(&fallback_state).await;
         }
     }
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        if let Some(ref remote_uri) = state.proxy.remote_uri {
+        if let Some(ref remote_uri) = fallback_state.remote_uri {
             remote_uri
         } else {
             // No remote API available, return 503 with Retry-After header
@@ -78,7 +168,7 @@ pub async fn proxy_legacy(
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref fallback_uri) = state.proxy.fallback_uri {
+    } else if let Some(ref fallback_uri) = fallback_state.fallback_uri {
         fallback_uri
     } else {
         // No fallback configured, return 404
@@ -105,7 +195,7 @@ pub async fn proxy_legacy(
     let proxy_request = hyper::Request::from_parts(parts, body);
 
     // Send the request
-    let response = state
+    let response = fallback_state
         .https_client
         .request(proxy_request)
         .await
@@ -147,33 +237,24 @@ impl IntoResponse for ProxyError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{TargetState, UpdateRequest};
+    use crate::{FallbackTarget, UpdateRequest};
 
     use super::*;
     use axum::http::Method;
-    use hyper_tls::HttpsConnector;
-    use hyper_util::client::legacy::Client;
-    use hyper_util::rt::TokioExecutor;
     use mockito::Server;
     use serde_json::json;
     use tokio::sync::watch;
 
     fn create_test_state(remote_uri: Uri, fallback_uri: Uri) -> ApiState {
-        let https = HttpsConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(https);
-
-        let global = GlobalState::new();
         let (target_state_tx, _) = watch::channel(None);
         let (update_request_tx, _) = watch::channel(UpdateRequest::default());
 
         ApiState {
-            global,
-            proxy: FallbackProxy {
-                remote_uri: Some(remote_uri),
-                fallback_uri: Some(fallback_uri),
-                uuid: "test-device-uuid".to_string(),
-            },
-            https_client: client,
+            fallback_state: FallbackState::new(
+                "test-device-uuid".to_string(),
+                Some(remote_uri),
+                Some(fallback_uri),
+            ),
             target_state_tx,
             update_request_tx,
         }
@@ -182,27 +263,23 @@ mod tests {
     async fn create_test_state_with_target(
         remote_uri: Uri,
         fallback_uri: Uri,
-        target: Option<TargetState>,
+        target: Option<FallbackTarget>,
     ) -> ApiState {
-        let https = HttpsConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(https);
+        let fallback_state = FallbackState::new(
+            "test-device-uuid".to_string(),
+            Some(remote_uri),
+            Some(fallback_uri),
+        );
 
-        let global = GlobalState::new();
         if let Some(tgt) = target {
-            global.set_target_state(tgt).await;
+            fallback_state.set_target_state(tgt).await;
         }
 
         let (target_state_tx, _) = watch::channel(None);
         let (update_request_tx, _) = watch::channel(UpdateRequest::default());
 
         ApiState {
-            global,
-            proxy: FallbackProxy {
-                remote_uri: Some(remote_uri),
-                fallback_uri: Some(fallback_uri),
-                uuid: "test-device-uuid".to_string(),
-            },
-            https_client: client,
+            fallback_state,
             target_state_tx,
             update_request_tx,
         }
@@ -212,21 +289,15 @@ mod tests {
         remote_uri: Option<Uri>,
         fallback_uri: Option<Uri>,
     ) -> ApiState {
-        let https = HttpsConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(https);
-
-        let global = GlobalState::new();
         let (target_state_tx, _) = watch::channel(None);
         let (update_request_tx, _) = watch::channel(UpdateRequest::default());
 
         ApiState {
-            global,
-            proxy: FallbackProxy {
+            fallback_state: FallbackState::new(
+                "test-device-uuid".to_string(),
                 remote_uri,
                 fallback_uri,
-                uuid: "test-device-uuid".to_string(),
-            },
-            https_client: client,
+            ),
             target_state_tx,
             update_request_tx,
         }
