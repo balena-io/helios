@@ -14,7 +14,7 @@ use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{field, info, instrument, Span};
+use tracing::{debug, field, instrument, Span};
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
@@ -137,7 +137,7 @@ pub async fn trigger_legacy_update(
 async fn handle_target_state_request(state: &FallbackState) -> Result<Response, FallbackError> {
     // Try to serve from local cache
     if let Some(target) = state.target_state().await {
-        info!("returning cached target state");
+        debug!("returning cached target state");
         // XXX:
         let response_body =
             serde_json::to_string(&target).map_err(FallbackError::JsonSerialization)?;
@@ -203,8 +203,8 @@ pub async fn proxy_legacy(
     };
 
     // Record the target address for the request
-    info!(
-        "target" = target_endpoint.to_string(),
+    debug!(
+        "target" = field::display(target_endpoint),
         "proxying request to"
     );
 

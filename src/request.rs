@@ -223,6 +223,10 @@ impl RequestState {
         }
     }
 
+    fn reset_interval(&mut self) {
+        self.current_backoff = self.config.min_interval;
+    }
+
     fn record_success(&mut self) {
         self.success_count += 1;
         self.current_backoff = self.config.min_interval;
@@ -310,9 +314,13 @@ impl Get {
         }
     }
 
-    #[instrument(skip_all, fields(status=field::Empty) err)]
+    #[instrument(skip_all, fields(response=field::Empty) err)]
     async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
+
+        // Reset the interval in case the future gets dropped before a response
+        // is received
+        self.state.reset_interval();
 
         let mut request = self
             .state
@@ -341,7 +349,7 @@ impl Get {
         };
         let status = response.status();
 
-        Span::current().record("status", status.as_u16());
+        Span::current().record("response", field::display(status));
         match status {
             status if status.is_success() => {
                 let new_etag = response
@@ -522,12 +530,16 @@ impl Patch {
         }
     }
 
-    #[instrument(skip_all, fields(status=field::Empty), err)]
+    #[instrument(skip_all, fields(response=field::Empty), err)]
     async fn try_patch(
         state: &mut RequestState,
         state_to_send: serde_json::Value,
     ) -> Result<StatusCode, TryPatchError> {
         state.wait_for_rate_limit().await;
+
+        // Reset the interval in case the future gets dropped before a response
+        // is received
+        state.reset_interval();
 
         let mut request = state
             .client
@@ -554,7 +566,7 @@ impl Patch {
         };
         let status = response.status();
 
-        Span::current().record("status", status.as_u16());
+        Span::current().record("response", field::display(status));
 
         match status {
             status if status.is_success() => {

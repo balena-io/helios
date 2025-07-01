@@ -5,7 +5,7 @@ use hyper::Uri;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::watch, time::Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, info_span, instrument, trace, warn, Instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -56,10 +56,9 @@ async fn main() -> Result<()> {
         None => {
             // Main service mode
             let config = Config::load(&cli)?;
-            info!("Configuration loaded successfully");
-            debug!("{:#?}", config);
+            trace!(config = ?config, "configuration loaded");
 
-            start_supervising(config).await?;
+            start_helios(config).await?;
         }
     }
 
@@ -95,7 +94,8 @@ fn calculate_jitter(max_jitter: &Duration) -> Duration {
     Duration::from_millis(jitter_ms)
 }
 
-async fn fetch_target_state(
+#[instrument(skip_all)]
+async fn poll_target(
     poll_client: &mut Option<Get>,
     config: &Config,
 ) -> (Option<serde_json::Value>, Instant) {
@@ -112,7 +112,7 @@ async fn fetch_target_state(
             Ok(response) if response.modified => (response.value, next_poll_time),
             Ok(_) => (None, next_poll_time),
             Err(e) => {
-                warn!("Target state poll failed: {e}");
+                warn!("poll failed: {e}");
                 (None, next_poll_time)
             }
         }
@@ -132,14 +132,15 @@ struct UpdateRequest {
     cancel: bool,
 }
 
-async fn start_supervising(config: Config) -> Result<()> {
-    info!("Service started");
+#[instrument(name = "helios", skip_all, err)]
+async fn start_helios(config: Config) -> Result<()> {
+    info!("starting");
 
     let mut poll_client = get_poll_client(&config)?;
     let mut next_poll_time = Instant::now();
 
     if poll_client.is_none() {
-        warn!("No remote API endpoint provided, running in unmanaged mode");
+        warn!("running in unmanaged mode");
     }
 
     let fallback_state = FallbackState::new(
@@ -158,15 +159,16 @@ async fn start_supervising(config: Config) -> Result<()> {
     let address = SocketAddr::new(config.local.address, config.local.port);
     let addr_str = address.to_string();
     let listener = TcpListener::bind(address).await?;
-    debug!("Bound to local address {addr_str}");
+    debug!("bound to local address {addr_str}");
 
     tokio::spawn(async move {
+        info!("starting");
         loop {
             let mut update_req = UpdateRequest::default();
             let target_state = tokio::select! {
                 // By default, the loop waits for the next poll
                 _ = tokio::time::sleep_until(next_poll_time) => {
-                    let (response, next_poll) = fetch_target_state(&mut poll_client, &config).await;
+                    let (response, next_poll) = poll_target(&mut poll_client, &config).await;
                     next_poll_time = next_poll;
 
                     if let Some(tgt) = response {
@@ -184,7 +186,7 @@ async fn start_supervising(config: Config) -> Result<()> {
                     }
 
                     // Get the target state and reset the timer
-                    let (response, next_poll) = fetch_target_state(&mut poll_client, &config).await;
+                    let (response, next_poll) = poll_target(&mut poll_client, &config).await;
                     next_poll_time = next_poll;
                     update_req = update_request_rx.borrow_and_update().clone();
 
@@ -215,7 +217,7 @@ async fn start_supervising(config: Config) -> Result<()> {
 
             // TODO: report state to API
         }
-    });
+    }.instrument(info_span!("loop")));
 
     // Start the API
     api::start(listener, update_request_tx, api_fallback_state).await?;
