@@ -556,6 +556,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
 
 [[package]]
+name = "futures-lite"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5edaec856126859abb19ed65f39e90fea3a9574b9707f13539acf4abf7eb532"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "futures-macro"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -676,6 +686,7 @@ dependencies = [
  "bollard",
  "clap",
  "dirs",
+ "futures-lite",
  "hyper",
  "hyper-tls",
  "hyper-util",
@@ -1126,9 +1137,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mahler"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b54f7d1aeb3b81d1dba60473117f61c0ac3cceacc0ce1aad3cbf20d7ec56884f"
+checksum = "33687639ac26950ead7ec58435e3da01b40d4306b18013faa9533ebcb8cf7be8"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -73,6 +73,5 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    // XXX: should we return something else if unmanaged?
     StatusCode::ACCEPTED
 }
