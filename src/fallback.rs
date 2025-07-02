@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -14,7 +14,7 @@ use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{debug, field, instrument, Span};
+use tracing::{debug, field, info, instrument, warn};
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
@@ -31,6 +31,12 @@ pub struct FallbackConfig {
     )]
     pub address: Option<Uri>,
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StateStatusResponse {
+    #[serde(rename = "appState")]
+    app_state: String,
 }
 
 pub type FallbackTarget = serde_json::Value;
@@ -97,8 +103,8 @@ impl IntoResponse for FallbackError {
 }
 
 /// Trigger an update on the legacy supervisor
-#[instrument(skip_all, fields(force = request.force, cancel = request.cancel, response = field::Empty), err)]
-pub async fn trigger_legacy_update(
+#[instrument(skip_all, fields(force = request.force, cancel = request.cancel), err)]
+pub async fn update_legacy(
     fallback_uri: Uri,
     fallback_key: Option<String>,
     request: &UpdateRequest,
@@ -106,7 +112,7 @@ pub async fn trigger_legacy_update(
     let client = reqwest::Client::new();
 
     // Build the URI from the address parts
-    let mut addr_parts = fallback_uri.into_parts();
+    let mut addr_parts = fallback_uri.clone().into_parts();
     addr_parts.path_and_query = if let Some(apikey) = fallback_key.clone() {
         Some(PathAndQuery::from_maybe_shared(format!(
             "/v1/update?apikey={apikey}",
@@ -114,16 +120,57 @@ pub async fn trigger_legacy_update(
     } else {
         Some(PathAndQuery::from_maybe_shared("/v1/update")?)
     };
-    let url = Uri::from_parts(addr_parts)?.to_string();
+    let update_url = Uri::from_parts(addr_parts)?.to_string();
 
     let payload = json!({
         "force": request.force,
         "cancel": request.cancel
     });
 
-    let response = client.post(&url).json(&payload).send().await?;
+    let response = loop {
+        match client.post(&update_url).json(&payload).send().await {
+            Ok(res) if res.status().is_success() => break res,
+            Ok(res) => warn!(
+                response = field::display(res.status()),
+                "received error response"
+            ),
+            Err(e) => warn!("legacy request failed: {e}"),
+        };
 
-    Span::current().record("response", response.status().as_u16());
+        // Back-off for a bit in case the supervisor is restarting
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    };
+    info!(
+        response = field::display(response.status()),
+        "request successful"
+    );
+
+    // Build the status check URI
+    let mut status_addr_parts = fallback_uri.into_parts();
+    status_addr_parts.path_and_query = if let Some(apikey) = fallback_key {
+        Some(PathAndQuery::from_maybe_shared(format!(
+            "/v2/state/status?apikey={apikey}",
+        ))?)
+    } else {
+        Some(PathAndQuery::from_maybe_shared("/v2/state/status")?)
+    };
+    let status_url = Uri::from_parts(status_addr_parts)?.to_string();
+
+    // Poll the status endpoint until appState is 'applied'
+    loop {
+        debug!("waiting for the state to settle");
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let status_response = client.get(&status_url).send().await?;
+
+        if status_response.status().is_success() {
+            let status: StateStatusResponse = status_response.json().await?;
+            if status.app_state == "applied" {
+                break;
+            }
+        }
+    }
+    debug!("state settled");
 
     Ok(())
 }
