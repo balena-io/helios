@@ -7,7 +7,7 @@ use tracing::warn;
 
 /// Trait for abstracting file system operations to enable dependency injection
 #[async_trait]
-pub trait FileSystem {
+trait FileSystem {
     /// Read the contents of a file as bytes
     async fn read(&self, path: &Path) -> Result<Vec<u8>>;
 

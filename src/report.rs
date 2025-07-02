@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::models::Device;
 
 #[derive(Serialize, Debug, Clone)]
-pub struct DeviceReport {}
+struct DeviceReport {}
 
 impl From<Device> for DeviceReport {
     fn from(_: Device) -> Self {

@@ -8,7 +8,7 @@ use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::cli::Cli;
+use crate::cmd::cli::Cli;
 use crate::fallback::FallbackConfig;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
