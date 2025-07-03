@@ -16,7 +16,6 @@ use tracing_subscriber::{
 mod api;
 mod cli;
 mod config;
-pub mod control;
 mod fallback;
 mod overrides;
 pub mod request;
