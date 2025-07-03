@@ -16,15 +16,13 @@ use tracing_subscriber::{
 mod api;
 mod cli;
 mod config;
-pub mod control;
 mod fallback;
 mod overrides;
 pub mod request;
 
-use api::Api;
 use cli::{Cli, Commands};
 use config::Config;
-use fallback::{trigger_legacy_update, FallbackState, FallbackTarget};
+use fallback::{trigger_legacy_update, FallbackState};
 use overrides::Overrides;
 use request::{Get, RequestConfig};
 
@@ -124,7 +122,6 @@ async fn fetch_target_state(
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
-#[allow(unused)]
 /// An update request coming from the API
 struct UpdateRequest {
     #[serde(default)]
@@ -150,17 +147,11 @@ async fn start_supervising(config: Config) -> Result<()> {
         config.remote.api_endpoint.clone(),
         config.fallback.address.clone(),
     );
+    let api_fallback_state = fallback_state.clone();
     let overrides = Overrides::new(config.uuid.clone());
 
-    // Set-up a channel to receive target state requests coming from the API
-    // TODO: we still need to implement this endpoint
-    let (target_state_tx, mut target_state_rx) = watch::channel::<Option<FallbackTarget>>(None);
-
     // Set-up a channel to receive update requests coming from the API
-    let (update_request_tx, mut update_request_rx) =
-        watch::channel::<UpdateRequest>(UpdateRequest::default());
-
-    let api = Api::new(fallback_state.clone(), target_state_tx, update_request_tx);
+    let (update_request_tx, mut update_request_rx) = watch::channel(UpdateRequest::default());
 
     // Try to bind to the API port first, this will avoid doing an extra poll
     // if the local port is taken
@@ -204,20 +195,6 @@ async fn start_supervising(config: Config) -> Result<()> {
                         continue;
                     }
                 }
-                // A new target state may also come from the API
-                changed = target_state_rx.changed() => {
-                    if changed.is_err() {
-                        // channel closed
-                        break;
-                    }
-
-                    if let Some(tgt) = target_state_rx.borrow_and_update().clone() {
-                        tgt
-                    }
-                    else {
-                        continue
-                    }
-                }
             };
 
             // Override the target state from `/mnt/temp/apps`
@@ -241,7 +218,7 @@ async fn start_supervising(config: Config) -> Result<()> {
     });
 
     // Start the API
-    api.start(listener).await?;
+    api::start(listener, update_request_tx, api_fallback_state).await?;
 
     Ok(())
 }
