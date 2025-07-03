@@ -1,4 +1,29 @@
 - commits:
+    - subject: Remove unecessary module nesting
+      hash: e4064d077a198e5004533e3000198a3e92fa5487
+      body: |
+        Also deletes unused files
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Refactor Supervisor API server
+      hash: 855a85a0a34e23217a6187d4278b674b776e1de5
+      body: >
+        - Dropped shared state
+
+        - Simplified API server and fallback code to not know anything about
+        each other
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.2.4
+  title: ""
+  date: 2025-07-03T15:15:06.672Z
+- commits:
     - subject: Refactor all fallback utils into its own module
       hash: 424bb2f8c610a44b880e968ef0ea5a3bfa3ce7fc
       body: |
