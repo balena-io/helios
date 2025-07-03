@@ -51,7 +51,7 @@ async-trait = "0.1"
 clap = { version = "4.0", features = ["derive", "env"] }
 dirs = "6.0.0"
 uuid = { version = "1.0", features = ["v4"] }
-mahler = "0.16.1"
+mahler = { version = "0.17.0" }
 bollard = "0.19.1"
 futures-lite = { version = "2.6.0", default-features = false }
 

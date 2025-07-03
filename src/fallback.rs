@@ -107,7 +107,7 @@ impl IntoResponse for FallbackError {
 pub async fn update_legacy(
     fallback_uri: Uri,
     fallback_key: Option<String>,
-    request: &UpdateRequest,
+    request: UpdateRequest,
 ) -> Result<()> {
     let client = reqwest::Client::new();
 

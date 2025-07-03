@@ -9,7 +9,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 use tokio::net::TcpListener;
 use tokio::sync::watch::{self, Receiver};
 use tokio::time::Instant;
-use tracing::{debug, error, field, info, instrument, warn, Span};
+use tracing::{debug, error, field, info, instrument, trace, warn, Span};
 
 use crate::models::{Device, TargetDevice};
 use crate::overrides::Overrides;
@@ -21,10 +21,8 @@ use crate::{
     UpdateRequest,
 };
 
-use mahler::{
-    worker::{Ready, SeekStatus, Worker},
-    workflow::Interrupt,
-};
+use mahler::worker::{Ready, SeekError, SeekStatus, Worker};
+use mahler::workflow::Interrupt;
 
 fn get_poll_client(config: &Config) -> Result<Option<Get>> {
     if let Some(uri) = config.remote.api_endpoint.clone() {
@@ -76,11 +74,11 @@ fn calculate_jitter(max_jitter: &Duration) -> Duration {
     Duration::from_millis(jitter_ms)
 }
 
+// Return type from poll_target
+type PollResult = (Option<serde_json::Value>, Instant);
+
 #[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn poll_target(
-    poll_client: &mut Option<Get>,
-    config: &Config,
-) -> (Option<serde_json::Value>, Instant) {
+async fn poll_target(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
     let jitter = calculate_jitter(&config.remote.max_poll_jitter);
     let mut next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
 
@@ -108,12 +106,15 @@ async fn poll_target(
     }
 }
 
+// Return type from send_report
+type LastReport = Option<Value>;
+
 #[instrument(skip_all, fields(success_rate=field::Empty))]
 async fn send_report(
     report_client: &mut Option<Patch>,
     current_state: Device,
-    last_report: Option<Value>,
-) -> Option<Value> {
+    last_report: LastReport,
+) -> LastReport {
     if let Some(client) = report_client {
         let report: Report = current_state.clone().into();
         let value = match serde_json::to_value(report) {
@@ -187,6 +188,10 @@ pub async fn helios(config: Config) -> Result<()> {
     }
 }
 
+// Helper types to make the code a bit more readable
+type LegacyFuture = Pin<Box<dyn Future<Output = Result<()>>>>;
+type SeekResult = Result<SeekStatus, SeekError>;
+
 #[instrument(name = "main", skip_all, err)]
 pub async fn start(
     config: Config,
@@ -207,183 +212,193 @@ pub async fn start(
     let overrides = Overrides::new(config.uuid.clone());
     let initial_state = load_initial_state(config.uuid.clone()).await?;
 
-    // Report initial state
-    let mut last_report = send_report(&mut report_client, initial_state.clone(), None).await;
-
     // Create a mahler Worker instance
-    let mut worker = create_worker(initial_state)?;
-
-    // Start following changes
+    // and start following changes
+    let mut worker = create_worker(initial_state.clone())?;
     let mut worker_stream = worker.follow();
 
+    // Store the last update request
     let mut update_req = UpdateRequest::default();
-    let mut skip_worker_apply = false;
+
+    // Reporting variables
+    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> =
+        Box::pin(send_report(&mut report_client, initial_state, None));
+    let mut last_report: Option<Value> = None;
+
+    // Seek target state
+    let mut seek_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
+    let mut is_apply_pending = false;
+    let mut interrupt = Interrupt::new();
+
+    // Legacy update variables
+    let mut legacy_update_future: LegacyFuture = Box::pin(future::pending());
+    let mut is_legacy_pending = false;
+
+    // Poll trigger variables
+    let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
+        Box::pin(poll_target(&mut poll_client, &config));
+    let mut is_poll_pending = true;
 
     // Main loop, polls state, applies changes and reports state
     // operations may be interrupted by an update request or a new target state
     // coming from the API
     loop {
-        let (target_device, fallback_target) = tokio::select! {
-            // By default, the loop waits for the next poll
-            _ = tokio::time::sleep_until(next_poll_time) => {
-                let (response, next_poll) = poll_target(&mut poll_client, &config).await;
-                next_poll_time = next_poll;
-                // reset the update request
-                update_req = UpdateRequest::default();
+        tokio::select! {
+            // Wake up on poll if not applying changes
+            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending && !is_poll_pending => {
+                // Start the poll future
+                drop(poll_future);
+                poll_future = Box::pin(poll_target(&mut poll_client, &config));
+                is_poll_pending = true;
 
-                if let Some(fallback_tgt) = response {
+                // Reset the update request
+                update_req = UpdateRequest::default();
+            }
+
+            // Handle poll completion
+            (response, next_poll) = &mut poll_future => {
+                // Reset the polling state
+                is_poll_pending = false;
+                poll_future = Box::pin(future::pending());
+                next_poll_time = next_poll;
+
+                if let Some(target_state) = response {
                     // Apply overrides
-                    let fallback_tgt = overrides.apply(fallback_tgt.clone()).await;
+                    let fallback_tgt = overrides.apply(target_state.clone()).await;
+
+                    // Set the fallback target for legacy supervisor requests
+                    fallback_state.set_target_state(fallback_tgt.clone()).await;
 
                     // TODO: we'll need to reject the target if it cannot be deserialized
-                    let tgt_device = serde_json::from_value::<TargetDevice>(fallback_tgt.clone()).ok();
-                    (tgt_device, Some(fallback_tgt))
-                }
-                else {
-                    continue;
+                    let tgt_device_opt = serde_json::from_value::<TargetDevice>(fallback_tgt).ok();
+
+                    // Apply the state unless waiting for a legacy apply
+                    if let (Some(target_device), false) = (tgt_device_opt, is_legacy_pending) {
+                        drop(seek_future);
+                        interrupt = Interrupt::new();
+                        seek_future = Box::pin(worker.seek_with_interrupt(target_device, interrupt.clone()));
+                        is_apply_pending = true;
+                    }
+                    else if let Some(fallback_uri) = config.fallback.address.clone() {
+                        // If we get here we are coming from a cancellation, so trigger
+                        // the legacy supervisor immediately
+                        legacy_update_future = Box::pin(update_legacy(
+                            fallback_uri.clone(),
+                            config.fallback.api_key.clone(),
+                            update_req.clone(),
+                        ));
+                        is_legacy_pending = true;
+                    }
                 }
             }
-            // An update request coming from the API can short circuit the timer
+
+            // Wake on update request
             update_requested = update_request_rx.changed() => {
-                update_requested?;
+                if update_requested.is_err() {
+                    // Not really an error, it just means the API closed
+                    trace!("request channel closed");
+                    break;
+                }
 
-                // Get the target state and reset the timer
-                let (response, next_poll) = poll_target(&mut poll_client, &config).await;
-                next_poll_time = next_poll;
+                // Read the request value without marking it as updated
+                // If a cancellation request is received and there is an apply pending
+                // then interrupt the previous apply
+                match (&*update_request_rx.borrow(), is_apply_pending, is_legacy_pending) {
+                    (UpdateRequest {cancel: true, ..}, true, _) => {
+                        // interrupt the existing target and wait for it to finish
+                        interrupt.trigger();
+
+                        // Wait for the interrupt to be processed
+                        seek_future.await?;
+
+                        // Reset the future
+                        seek_future = Box::pin(future::pending());
+                        is_apply_pending = false;
+                    }
+                    (UpdateRequest {cancel: true, ..}, _, true) => {
+                        // Drop the legacy future but don't reset the
+                        // flag so a new legacy update can be triggered from the new poll
+                        legacy_update_future = Box::pin(future::pending());
+                    }
+                    // If there is no apply in progress then proceed
+                    (_, false, false) => {}
+                    // If no cancellation was requested then wait for any apply to finish
+                    // before triggering a new poll
+                    _ => continue
+                }
+
+                // Trigger a new poll
+                drop(poll_future);
+                poll_future = Box::pin(poll_target(&mut poll_client, &config));
+                is_poll_pending = true;
                 update_req = update_request_rx.borrow_and_update().clone();
-
-                if let Some(fallback_tgt) = response {
-                    // Apply overrides
-                    let fallback_tgt = overrides.apply(fallback_tgt.clone()).await;
-                    let tgt_device = serde_json::from_value::<TargetDevice>(fallback_tgt.clone()).ok();
-                    (tgt_device, Some(fallback_tgt))
-                }
-                else {
-                    continue;
-                }
-            }
-        };
-
-        // try to apply changes if any, we skip this step if the last iteration got cancelled while
-        // waiting for the legacy supervisor to apply changes
-        if !skip_worker_apply {
-            if let Some(device) = target_device {
-                let interrupt = Interrupt::new();
-                let mut seek_future =
-                    Box::pin(worker.seek_with_interrupt(device, interrupt.clone()));
-
-                // Create dummy future that will never return
-                let mut patch: Pin<Box<dyn Future<Output = Option<Value>> + Send>> =
-                    Box::pin(future::pending::<Option<Value>>());
-                let mut has_pending_patch = false;
-
-                worker = loop {
-                    tokio::select! {
-                        // Wait for the seek operation to finish
-                        seek_res = &mut seek_future => {
-                            // break the main loop if a fatal error happens with the seek state
-                            // call. If that happens there is either a loop in a type or task here or
-                            // withih mahler.
-                            // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
-                            // TODO: depending on the resulting status we may want to retry
-                            break seek_res?
-                        }
-
-                        // Follow state changes
-                        stream_res = worker_stream.next() => {
-                            if let Some(current_state) = stream_res {
-                                // Drop the previous patch if a new state comes before the previous one is finished
-                                drop(patch);
-
-                                // Report state changes to the API
-                                patch = Box::pin(send_report(&mut report_client, current_state, last_report.clone()));
-                                has_pending_patch = true;
-                            }
-                        }
-
-                        // If the patch completes then update the last report
-                        report = &mut patch, if has_pending_patch => {
-                            last_report = report;
-
-                            // Create dummy future that will never return
-                            patch = Box::pin(future::pending::<Option<Value>>());
-                            has_pending_patch = false;
-                        }
-
-                        // a new update request may interrupt the seek_target call
-                        update_requested = update_request_rx.changed() => {
-                            if update_requested.is_err() {
-                                // channel is closed but we want to terminate the state apply
-                                continue;
-                            }
-
-                            // Interrupt the seek call if indicated in the request
-                            update_req = update_request_rx.borrow_and_update().clone();
-                            if let UpdateRequest {cancel: true, ..} = update_req {
-                                interrupt.trigger();
-                            }
-                        }
-                    }
-                };
-
-                // Wait for the patch_future to finish
-                if has_pending_patch {
-                    last_report = patch.await;
-                }
-            }
-        }
-
-        // Update the global state and trigger an update on the legacy supervisor
-        // NOTE: this fallback block should dissapear entirely once we can remove the
-        // legacy supervisor
-        if let Some(fallback) = fallback_target {
-            // Skip supervisor state apply if a cancellation happened
-            if matches!(worker.status(), SeekStatus::Interrupted) {
-                continue;
             }
 
-            // Trigger a /v1/update on the fallback and wait for the state to
-            // be applied
-            if let Some(fallback_uri) = config.fallback.address.clone() {
-                fallback_state.set_target_state(fallback).await;
+            // State changes should trigger a new patch
+            stream_res = worker_stream.next() => {
+                if let Some(current_state) = stream_res {
+                    // Drop the previous patch if a new state comes before the previous one is finished
+                    // rate limiting is handled by the client
+                    drop(report_future);
 
-                let mut legacy_update = Box::pin(update_legacy(
-                    fallback_uri.clone(),
-                    config.fallback.api_key.clone(),
-                    &update_req,
-                ));
-
-                // Wait for the legacy update to finish or an new update request
-                tokio::select! {
-                    _ = &mut legacy_update => {
-                        skip_worker_apply = false;
-                    },
-
-                    // A new call to /v1/update will need to trigger a new poll
-                    // and interrupt the legacy update
-                    update_requested = update_request_rx.changed() => {
-                        // If the channel closes we can terminate the main loop
-                        update_requested?;
-
-                        // Drop the legacy update future
-                        drop(legacy_update);
-
-                        // The next iteration of the loop should come straight
-                        // to the legacy update
-                        skip_worker_apply = false;
-
-                        // Go straight to the next loop iteration
-                        continue;
-                    }
+                    // Report state changes to the API
+                    report_future = Box::pin(send_report(&mut report_client, current_state, last_report.clone()));
                 }
+            }
 
-                // Since the state changed outside of the worker we need to re-load
-                // it and re-initialize the worker
+            // Update the last report on state patch
+            report = &mut report_future => {
+                last_report = report;
+                report_future = Box::pin(future::pending());
+            }
+
+            // Wake up when apply returns
+            seek_status = &mut seek_future => {
+                // Reset the state
+                is_apply_pending = false;
+                seek_future = Box::pin(future::pending());
+
+                // break the main loop if a fatal error happens with the seek state
+                // call. If that happens there is either a loop in a type or task here or
+                // within mahler.
+                // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
+                // TODO: depending on the resulting status we will want to retry, e.g. on Aborted
+                // status that indicates an error happened when executing a task
+                seek_status?;
+
+                // No matter the result of the seek_target call, we need to call the legacy
+                // supervisor to re-apply the target
+                if let Some(fallback_uri) = config.fallback.address.clone() {
+                    drop(legacy_update_future);
+                    legacy_update_future = Box::pin(update_legacy(
+                        fallback_uri.clone(),
+                        config.fallback.api_key.clone(),
+                        update_req.clone(),
+                    ));
+                    is_legacy_pending = true;
+                }
+            }
+
+            // Wake up when the supervisor apply is settled
+            _ = &mut legacy_update_future => {
+                // Reset the state
+                is_legacy_pending = false;
+                legacy_update_future = Box::pin(future::pending());
+
+                // Legacy future and seek future are exclusive so we can drop this safely
+                drop(seek_future);
+                seek_future = Box::pin(future::pending());
+
+                // We need to create a new worker with the updated state as it
+                // may have been changed by the legacy supervisor
                 let initial_state = load_initial_state(config.uuid.clone()).await?;
-
-                worker = create_worker(initial_state)?;
-                worker_stream = worker.follow();
+                worker = create_worker(initial_state)?
             }
+
+
         }
     }
+
+    info!("terminating");
+    Ok(())
 }
