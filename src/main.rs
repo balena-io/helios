@@ -14,7 +14,6 @@ mod cmd;
 mod config;
 mod fallback;
 mod models;
-mod overrides;
 mod report;
 mod request;
 
@@ -32,8 +31,7 @@ struct UpdateRequest {
     cancel: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
     tracing_subscriber::registry()
         .with(
@@ -41,9 +39,11 @@ async fn main() -> Result<()> {
             // RUST_LOG
             EnvFilter::try_from_default_env().unwrap_or(
                 EnvFilter::default()
-                    .add_directive("debug".parse()?)
-                    .add_directive("hyper=error".parse()?)
-                    .add_directive("bollard=error".parse()?),
+                    .add_directive("trace".parse().unwrap())
+                    .add_directive("mahler::planner=warn".parse().unwrap())
+                    .add_directive("mahler::worker=debug".parse().unwrap())
+                    .add_directive("hyper=error".parse().unwrap())
+                    .add_directive("bollard=error".parse().unwrap()),
             ),
         )
         .with(
@@ -53,6 +53,11 @@ async fn main() -> Result<()> {
                 .event_format(fmt::format().compact().with_target(false).without_time()),
         )
         .init();
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    initialize_tracing();
 
     let cli = Cli::parse();
 

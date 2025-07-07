@@ -12,12 +12,11 @@ use tokio::time::Instant;
 use tracing::{debug, error, field, info, instrument, trace, warn, Span};
 
 use crate::models::{Device, TargetDevice};
-use crate::overrides::Overrides;
 use crate::report::Report;
 use crate::request::{Get, Patch, RequestConfig};
 use crate::{api, Config};
 use crate::{
-    fallback::{update_legacy, FallbackState},
+    fallback::{legacy_update, FallbackState},
     UpdateRequest,
 };
 
@@ -208,8 +207,7 @@ async fn start_main(
         warn!("running in unmanaged mode");
     }
 
-    // NOTE: still uncertain if we need the overrides at this point
-    let overrides = Overrides::new(config.uuid.clone());
+    // Load the current state at start time
     let initial_state = load_initial_state(config.uuid.clone()).await?;
 
     // Create a mahler Worker instance
@@ -263,8 +261,7 @@ async fn start_main(
                 next_poll_time = next_poll;
 
                 if let Some(target_state) = response {
-                    // Apply overrides
-                    let fallback_tgt = overrides.apply(target_state.clone()).await;
+                    let fallback_tgt = target_state;
 
                     // Set the fallback target for legacy supervisor requests
                     fallback_state.set_target_state(fallback_tgt.clone()).await;
@@ -282,7 +279,7 @@ async fn start_main(
                     else if let Some(fallback_uri) = config.fallback.address.clone() {
                         // If we get here we are coming from a cancellation, so trigger
                         // the legacy supervisor immediately
-                        legacy_update_future = Box::pin(update_legacy(
+                        legacy_update_future = Box::pin(legacy_update(
                             fallback_uri.clone(),
                             config.fallback.api_key.clone(),
                             update_req.clone(),
@@ -370,7 +367,7 @@ async fn start_main(
                 // supervisor to re-apply the target
                 if let Some(fallback_uri) = config.fallback.address.clone() {
                     drop(legacy_update_future);
-                    legacy_update_future = Box::pin(update_legacy(
+                    legacy_update_future = Box::pin(legacy_update(
                         fallback_uri.clone(),
                         config.fallback.api_key.clone(),
                         update_req.clone(),
