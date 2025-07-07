@@ -16,7 +16,7 @@ use crate::report::Report;
 use crate::request::{Get, Patch, RequestConfig};
 use crate::{api, Config};
 use crate::{
-    fallback::{update_legacy, FallbackState},
+    fallback::{legacy_update, FallbackState},
     UpdateRequest,
 };
 
@@ -279,7 +279,7 @@ async fn start_main(
                     else if let Some(fallback_uri) = config.fallback.address.clone() {
                         // If we get here we are coming from a cancellation, so trigger
                         // the legacy supervisor immediately
-                        legacy_update_future = Box::pin(update_legacy(
+                        legacy_update_future = Box::pin(legacy_update(
                             fallback_uri.clone(),
                             config.fallback.api_key.clone(),
                             update_req.clone(),
@@ -367,7 +367,7 @@ async fn start_main(
                 // supervisor to re-apply the target
                 if let Some(fallback_uri) = config.fallback.address.clone() {
                     drop(legacy_update_future);
-                    legacy_update_future = Box::pin(update_legacy(
+                    legacy_update_future = Box::pin(legacy_update(
                         fallback_uri.clone(),
                         config.fallback.api_key.clone(),
                         update_req.clone(),

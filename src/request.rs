@@ -255,7 +255,7 @@ impl Get {
         }
     }
 
-    #[instrument(skip_all, fields(response=field::Empty) err)]
+    #[instrument(level = "trace", skip_all, fields(response=field::Empty) err)]
     async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
 
@@ -364,13 +364,13 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(skip_all, fields(tries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
     pub async fn get(&mut self) -> Result<GetResponse, GetError> {
         let mut tries = 1;
         loop {
             match self.try_get().await {
                 Ok(response) => {
-                    Span::current().record("tries", tries);
+                    Span::current().record("retries", tries - 1);
                     return Ok(response);
                 }
                 Err(TryGetError::WillRetry(_, _)) => {
@@ -450,7 +450,7 @@ impl Patch {
     /// let result = client.patch(json!({"status": "running"})).await?;
     /// println!("Patch succeeded");
     /// ```
-    #[instrument(skip_all, fields(tries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
     pub async fn patch(
         &mut self,
         new_state: serde_json::Value,
@@ -459,7 +459,7 @@ impl Patch {
         loop {
             match Self::try_patch(&mut self.state, new_state.clone()).await {
                 Ok(_status) => {
-                    Span::current().record("tries", tries);
+                    Span::current().record("retries", tries - 1);
                     return Ok(());
                 }
                 Err(TryPatchError::WillRetry(_, _)) => {
@@ -471,7 +471,7 @@ impl Patch {
         }
     }
 
-    #[instrument(skip_all, fields(response=field::Empty), err)]
+    #[instrument(level = "trace", skip_all, fields(response=field::Empty), err)]
     async fn try_patch(
         state: &mut RequestState,
         state_to_send: serde_json::Value,

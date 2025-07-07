@@ -14,7 +14,7 @@ use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{debug, field, info, instrument, warn};
+use tracing::{debug, field, instrument, trace, warn};
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
@@ -104,7 +104,7 @@ impl IntoResponse for FallbackError {
 
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, fields(force = request.force, cancel = request.cancel), err)]
-pub async fn update_legacy(
+pub async fn legacy_update(
     fallback_uri: Uri,
     fallback_key: Option<String>,
     request: UpdateRequest,
@@ -127,6 +127,7 @@ pub async fn update_legacy(
         "cancel": request.cancel
     });
 
+    debug!("calling fallback");
     let response = loop {
         match client.post(&update_url).json(&payload).send().await {
             Ok(res) if res.status().is_success() => break res,
@@ -134,16 +135,13 @@ pub async fn update_legacy(
                 response = field::display(res.status()),
                 "received error response"
             ),
-            Err(e) => warn!("legacy request failed: {e}"),
+            Err(e) => warn!("failed: {e}, retrying in 5s"),
         };
 
         // Back-off for a bit in case the supervisor is restarting
         tokio::time::sleep(Duration::from_secs(5)).await;
     };
-    info!(
-        response = field::display(response.status()),
-        "request successful"
-    );
+    debug!(response = field::display(response.status()), "success");
 
     // Build the status check URI
     let mut status_addr_parts = fallback_uri.into_parts();
@@ -158,7 +156,7 @@ pub async fn update_legacy(
 
     // Poll the status endpoint until appState is 'applied'
     loop {
-        debug!("waiting for the state to settle");
+        trace!("waiting for the state to settle");
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         let status_response = client.get(&status_url).send().await?;
@@ -170,7 +168,6 @@ pub async fn update_legacy(
             }
         }
     }
-    debug!("state settled");
 
     Ok(())
 }
@@ -178,7 +175,7 @@ pub async fn update_legacy(
 async fn handle_target_state_request(state: &FallbackState) -> Result<Response, FallbackError> {
     // Try to serve from local cache
     if let Some(target) = state.target_state().await {
-        debug!("returning cached target state");
+        trace!("returning cached target state");
         // XXX:
         let response_body =
             serde_json::to_string(&target).map_err(FallbackError::JsonSerialization)?;
@@ -190,6 +187,7 @@ async fn handle_target_state_request(state: &FallbackState) -> Result<Response, 
 
         Ok(response)
     } else {
+        trace!("no cached target state yet");
         // No target state available, return 503 with Retry-After header
         let mut headers = HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("15"));
@@ -244,9 +242,9 @@ pub async fn proxy_legacy(
     };
 
     // Record the target address for the request
-    debug!(
+    trace!(
         "target" = field::display(target_endpoint),
-        "proxying request to"
+        "proxying request"
     );
 
     // Build target URI
