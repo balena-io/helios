@@ -1,21 +1,34 @@
+use std::time::Duration;
+
 use crate::fallback::{proxy_legacy, FallbackState};
 use crate::UpdateRequest;
 
-use axum::{body::Bytes, http::StatusCode, routing::post, Router};
+use axum::{
+    body::{Body, Bytes},
+    http::{Request, Response, StatusCode},
+    routing::post,
+    Router,
+};
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{
+    debug_span,
+    field::{display, Empty},
+    info, instrument, Span,
+};
 
 /// Start the API
 ///
 /// Receives a TCP listener already bound to the right address and port,
 /// and a bunch of arguments to forward to request handlers.
+#[instrument(name = "api", skip_all, err)]
 pub async fn start(
     listener: TcpListener,
     update_request_tx: Sender<UpdateRequest>,
     fallback_state: FallbackState,
 ) -> anyhow::Result<()> {
+    let api_span = Span::current();
     let app = Router::new()
         .route(
             "/v1/update",
@@ -24,9 +37,22 @@ pub async fn start(
         // Default to proxying requests if there is no handler
         .fallback(move |request| proxy_legacy(fallback_state, request))
         // Enable tracing
-        .layer(TraceLayer::new_for_http());
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(move |request: &Request<Body>| {
+                    debug_span!(parent: &api_span, "request",
+                        method = %request.method(),
+                        uri = %request.uri().path(),
+                        version = ?request.version(),
+                        status = Empty,
+                    )
+                })
+                .on_response(|response: &Response<Body>, _: Duration, span: &Span| {
+                    span.record("status", display(response.status()));
+                }),
+        );
 
-    info!("API started");
+    info!("starting");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -47,6 +73,5 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    // XXX: should we return something else if unmanaged?
     StatusCode::ACCEPTED
 }

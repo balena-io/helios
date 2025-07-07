@@ -97,47 +97,6 @@ pub struct RequestConfig {
     /// Optional API token for authentication (will be sent as "Bearer {token}").
     pub api_token: Option<String>,
 }
-
-impl RequestConfig {
-    /// Creates a new RequestConfig from remote configuration settings.
-    ///
-    /// # Arguments
-    /// * `remote` - Remote API configuration containing timeout and request interval settings
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let config = RequestConfig::from_remote_config(&remote_config)
-    ///     .with_api_token("your-api-token");
-    /// ```
-    pub fn from_config(remote: &crate::config::RemoteConfig) -> Self {
-        Self {
-            timeout: remote.request_timeout,
-            min_interval: remote.min_interval,
-            max_backoff: remote.poll_interval,
-            api_token: None,
-        }
-    }
-
-    /// Sets the API token for authentication.
-    ///
-    /// # Arguments
-    /// * `token` - API token that will be sent as "Bearer {token}"
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let config = RequestConfig {
-    ///     timeout: Duration::from_secs(30),
-    ///     min_interval: Duration::from_secs(5),
-    ///     max_backoff: Duration::from_secs(300),
-    ///     api_token: None,
-    /// }.with_api_token("your-api-token");
-    /// ```
-    pub fn with_api_token(mut self, token: impl Into<String>) -> Self {
-        self.api_token = Some(token.into());
-        self
-    }
-}
-
 /// Metrics tracking the success and failure counts for HTTP requests.
 #[derive(Debug, Clone, Copy)]
 pub struct RequestMetrics {
@@ -176,24 +135,6 @@ impl RequestMetrics {
             (self.success_count as f64 / total as f64) * 100.0
         }
     }
-
-    /// Returns the error rate as a percentage (0.0 to 100.0).
-    ///
-    /// Returns 0.0 if no requests have been made yet.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let metrics = client.metrics().await;
-    /// println!("Error rate: {:.1}%", metrics.error_rate());
-    /// ```
-    pub fn error_rate(&self) -> f64 {
-        let total = self.total_requests();
-        if total == 0 {
-            0.0
-        } else {
-            (self.error_count as f64 / total as f64) * 100.0
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -221,6 +162,10 @@ impl RequestState {
             success_count: 0,
             error_count: 0,
         }
+    }
+
+    fn reset_interval(&mut self) {
+        self.current_backoff = self.config.min_interval;
     }
 
     fn record_success(&mut self) {
@@ -310,9 +255,13 @@ impl Get {
         }
     }
 
-    #[instrument(skip_all, fields(status=field::Empty) err)]
+    #[instrument(skip_all, fields(response=field::Empty) err)]
     async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
+
+        // Reset the interval in case the future gets dropped before a response
+        // is received
+        self.state.reset_interval();
 
         let mut request = self
             .state
@@ -341,7 +290,7 @@ impl Get {
         };
         let status = response.status();
 
-        Span::current().record("status", status.as_u16());
+        Span::current().record("response", field::display(status));
         match status {
             status if status.is_success() => {
                 let new_etag = response
@@ -522,12 +471,16 @@ impl Patch {
         }
     }
 
-    #[instrument(skip_all, fields(status=field::Empty), err)]
+    #[instrument(skip_all, fields(response=field::Empty), err)]
     async fn try_patch(
         state: &mut RequestState,
         state_to_send: serde_json::Value,
     ) -> Result<StatusCode, TryPatchError> {
         state.wait_for_rate_limit().await;
+
+        // Reset the interval in case the future gets dropped before a response
+        // is received
+        state.reset_interval();
 
         let mut request = state
             .client
@@ -554,7 +507,7 @@ impl Patch {
         };
         let status = response.status();
 
-        Span::current().record("status", status.as_u16());
+        Span::current().record("response", field::display(status));
 
         match status {
             status if status.is_success() => {
@@ -635,7 +588,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Get::new(endpoint, test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("test-token".to_string());
+        let mut client = Get::new(endpoint, client_config);
         let response = client.get().await.unwrap();
 
         assert_eq!(response.value, Some(json!({"status": "running"})));
@@ -659,7 +614,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Get::new(endpoint.clone(), test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("test-token".to_string());
+        let mut client = Get::new(endpoint.clone(), client_config);
         let response1 = client.get().await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
@@ -701,9 +658,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(100),
             max_backoff: Duration::from_secs(60),
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Get::new(endpoint, config);
 
@@ -732,7 +688,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("test-token".to_string());
+        let mut client = Patch::new(endpoint, client_config);
 
         client.patch(json!({"status": "updated"})).await.unwrap();
 
@@ -765,7 +723,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("test-token".to_string());
+        let mut client = Patch::new(endpoint, client_config);
 
         client.patch(json!({"status": "first"})).await.unwrap();
         client.patch(json!({"status": "second"})).await.unwrap();
@@ -787,7 +747,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("test-token".to_string());
+        let mut client = Patch::new(endpoint, client_config);
 
         let metrics_before = client.metrics();
         assert_eq!(metrics_before.success_count, 0);
@@ -813,7 +775,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Get::new(endpoint, test_config().with_api_token("invalid-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("invalid-token".to_string());
+        let mut client = Get::new(endpoint, client_config);
         let response = client.get().await;
 
         assert!(matches!(response, Err(GetError::Unauthorized)));
@@ -839,9 +803,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(50),
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Get::new(endpoint, config);
         let response = client.get().await;
@@ -870,9 +833,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10), // Very short for test
             max_backoff: Duration::from_millis(50),  // Very short for test
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Get::new(endpoint.clone(), config);
         let response1 = client.get().await.unwrap();
@@ -933,9 +895,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(100),
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Get::new(endpoint, config);
 
@@ -977,7 +938,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Patch::new(endpoint, test_config().with_api_token("test-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("invalid-token".to_string());
+        let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 400
         let result1 = client.patch(json!({"status": "will_fail"})).await;
@@ -1011,7 +974,9 @@ mod tests {
             .create_async()
             .await;
 
-        let mut client = Patch::new(endpoint, test_config().with_api_token("invalid-token"));
+        let mut client_config = test_config();
+        client_config.api_token = Some("invalid-token".to_string());
+        let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 401
         let result1 = client.patch(json!({"status": "will_fail_auth"})).await;
@@ -1050,9 +1015,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(100),
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Patch::new(endpoint, config);
 
@@ -1099,9 +1063,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(100), // Short for test
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Patch::new(endpoint, config);
 
@@ -1148,9 +1111,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(50), // Short for test
-            api_token: None,
-        }
-        .with_api_token("test-token");
+            api_token: Some("test-token".to_string()),
+        };
 
         let mut client = Patch::new(endpoint, config);
 
@@ -1178,7 +1140,6 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 0);
         assert_eq!(metrics.success_rate(), 0.0);
-        assert_eq!(metrics.error_rate(), 0.0);
 
         // Test with only successes
         let metrics = RequestMetrics {
@@ -1187,7 +1148,6 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 10);
         assert_eq!(metrics.success_rate(), 100.0);
-        assert_eq!(metrics.error_rate(), 0.0);
 
         // Test with only errors
         let metrics = RequestMetrics {
@@ -1196,7 +1156,6 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 5);
         assert_eq!(metrics.success_rate(), 0.0);
-        assert_eq!(metrics.error_rate(), 100.0);
 
         // Test with mixed results
         let metrics = RequestMetrics {
@@ -1205,6 +1164,5 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 10);
         assert_eq!(metrics.success_rate(), 70.0);
-        assert_eq!(metrics.error_rate(), 30.0);
     }
 }
