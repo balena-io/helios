@@ -12,7 +12,6 @@ use tokio::time::Instant;
 use tracing::{debug, error, field, info, instrument, trace, warn, Span};
 
 use crate::models::{Device, TargetDevice};
-use crate::overrides::Overrides;
 use crate::report::Report;
 use crate::request::{Get, Patch, RequestConfig};
 use crate::{api, Config};
@@ -208,8 +207,7 @@ async fn start_main(
         warn!("running in unmanaged mode");
     }
 
-    // NOTE: still uncertain if we need the overrides at this point
-    let overrides = Overrides::new(config.uuid.clone());
+    // Load the current state at start time
     let initial_state = load_initial_state(config.uuid.clone()).await?;
 
     // Create a mahler Worker instance
@@ -263,8 +261,7 @@ async fn start_main(
                 next_poll_time = next_poll;
 
                 if let Some(target_state) = response {
-                    // Apply overrides
-                    let fallback_tgt = overrides.apply(target_state.clone()).await;
+                    let fallback_tgt = target_state;
 
                     // Set the fallback target for legacy supervisor requests
                     fallback_state.set_target_state(fallback_tgt.clone()).await;

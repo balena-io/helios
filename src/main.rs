@@ -14,7 +14,6 @@ mod cmd;
 mod config;
 mod fallback;
 mod models;
-mod overrides;
 mod report;
 mod request;
 
