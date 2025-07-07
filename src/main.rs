@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
             let config = Config::load(&cli)?;
             trace!(config = ?config, "configuration loaded");
 
-            cmd::helios(config).await
+            cmd::start_supervisor(config).await
         }
     }
 }

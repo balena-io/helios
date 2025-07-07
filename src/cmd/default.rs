@@ -162,8 +162,8 @@ fn create_worker(initial: Device) -> Result<Worker<Device, Ready, TargetDevice>>
         .with_context(|| "failed to create initial worker")
 }
 
-#[instrument(skip_all, err)]
-pub async fn helios(config: Config) -> Result<()> {
+#[instrument(name = "helios", skip_all, err)]
+pub async fn start_supervisor(config: Config) -> Result<()> {
     let fallback_state = FallbackState::new(
         config.uuid.clone(),
         config.remote.api_endpoint.clone(),
@@ -184,7 +184,7 @@ pub async fn helios(config: Config) -> Result<()> {
     // Start the API and the main loop and terminate on any error
     tokio::select! {
         res = api::start(listener, update_request_tx, api_fallback_state) => res,
-        res = start(config, fallback_state, update_request_rx) => res
+        res = start_main(config, fallback_state, update_request_rx) => res
     }
 }
 
@@ -193,7 +193,7 @@ type LegacyFuture = Pin<Box<dyn Future<Output = Result<()>>>>;
 type SeekResult = Result<SeekStatus, SeekError>;
 
 #[instrument(name = "main", skip_all, err)]
-pub async fn start(
+async fn start_main(
     config: Config,
     fallback_state: FallbackState,
     mut update_request_rx: Receiver<UpdateRequest>,
