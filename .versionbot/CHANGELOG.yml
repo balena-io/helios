@@ -1,4 +1,50 @@
 - commits:
+    - subject: Cleanup main loop
+      hash: dce5362ff809cf2d19a9a74148e489463d7abc89
+      body: |
+        This avoids nested looping and makes sure there is only one loop that
+        can react to different events during the supervisor state
+        poll/apply/report loop.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Depends-on: balena-io-modules/mahler#36
+        depends-on: balena-io-modules/mahler#36
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor code
+      hash: 7be5de5e37256e2355997b73e7d67acdb6d4db0d
+      body: |
+        Moves commands implementation to `cmd/` directory and gets rid of some
+        unused code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Wait for legacy update to settle before continuing poll loop
+      hash: b98769110bda643e6fa1c78836d247491a5a98e7
+      body: |
+        The new supervisor and old supervisor cannot be applying target state
+        at the same time. Once the state is applied by helios, it need to wait
+        for the fallback update to finish before continuing.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Set-up mahler
+      hash: e6d7c7f44e1e5d87a55cdf8eff491956c3a8a40e
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.5
+  title: ""
+  date: 2025-07-07T15:46:44.317Z
+- commits:
     - subject: Remove unecessary module nesting
       hash: e4064d077a198e5004533e3000198a3e92fa5487
       body: |
