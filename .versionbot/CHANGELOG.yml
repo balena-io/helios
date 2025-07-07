@@ -1,4 +1,34 @@
 - commits:
+    - subject: Refactor tracing instrumentation
+      hash: 62c348ab774e8eae2304197375bf26d1cd7582f7
+      body: >
+        Move low level information to `debug` and `trace` level, and just keep
+        top level
+
+        calls in `info` level
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove Overrides module
+      hash: 296aadb90f931385072a47015d454a8a2987d62a
+      body: >
+        This module was created for implementing a sort of local
+        mode/livepush/target state
+
+        replacement, but is is not necessary yet until we know how we will
+
+        implement those features.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.6
+  title: ""
+  date: 2025-07-07T20:58:33.298Z
+- commits:
     - subject: Cleanup main loop
       hash: dce5362ff809cf2d19a9a74148e489463d7abc89
       body: |
