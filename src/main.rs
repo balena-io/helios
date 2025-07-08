@@ -1,5 +1,5 @@
-use anyhow::Result;
 use clap::Parser;
+use std::error::Error;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::sync::watch::{self};
@@ -48,7 +48,7 @@ fn initialize_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
     let cli = Cli::parse();
@@ -57,24 +57,25 @@ async fn main() -> Result<()> {
         Some(Commands::Register {
             remote,
             provisioning_key,
-        }) => register::register(remote, provisioning_key).await,
+        }) => register::register(remote, provisioning_key).await?,
         None => {
             // Default command
             let config = Config::load(&cli)?;
             trace!(config = ?config, "configuration loaded");
-            run_supervisor(config).await
+            run_supervisor(config).await?
         }
     }
+
+    Ok(())
 }
 
 #[instrument(name = "helios", skip_all, err)]
-pub async fn run_supervisor(config: Config) -> Result<()> {
+pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     let fallback_state = fallback::FallbackState::new(
         config.uuid.clone(),
         config.remote.api_endpoint.clone(),
         config.fallback.address.clone(),
     );
-    let api_fallback_state = fallback_state.clone();
 
     // Set-up a channel to receive update requests coming from the API
     let (update_request_tx, update_request_rx) = watch::channel(target::UpdateRequest::default());
@@ -88,7 +89,7 @@ pub async fn run_supervisor(config: Config) -> Result<()> {
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {
-        res = api::start(listener, update_request_tx, api_fallback_state) => res,
-        res = target::start(config, fallback_state, update_request_rx) => res
+        _ = api::start(listener, update_request_tx, fallback_state.clone()) => Ok(()),
+        res = target::start(config, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
     }
 }

@@ -1,10 +1,9 @@
-use anyhow::Result;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{fs, io};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -89,7 +88,7 @@ fn generate_uuid() -> String {
 }
 
 impl Config {
-    pub fn load(cli: &Cli) -> Result<Self> {
+    pub fn load(cli: &Cli) -> io::Result<Self> {
         let config_path = get_config_path();
 
         // Start with default config
