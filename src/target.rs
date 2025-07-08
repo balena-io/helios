@@ -2,14 +2,17 @@ use bollard::Docker;
 use futures_lite::{future, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin};
 use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
-use tracing::{error, field, info, instrument, trace, warn, Span};
+use tracing::{error, info, instrument, trace, warn};
 
 use crate::config::Config;
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
-use crate::request::{make_uri, Get, Patch, RequestConfig, UriError};
+use crate::remote::{
+    get_poll_client, get_report_client, poll_remote, send_report, DeviceReport, LastReport,
+    PollResult, Report,
+};
 
 use mahler::worker::{Ready, SeekError, SeekStatus, Worker};
 use mahler::workflow::Interrupt;
@@ -31,6 +34,27 @@ struct Device {
     pub images: HashMap<String, Image>,
 }
 
+impl From<Device> for DeviceReport {
+    fn from(_: Device) -> Self {
+        // TODO
+        DeviceReport {}
+    }
+}
+
+impl From<Device> for Report {
+    fn from(device: Device) -> Self {
+        Report::new(HashMap::from([(device.uuid.clone(), device.into())]))
+    }
+}
+
+async fn load_initial_state(uuid: String) -> Device {
+    // TODO: read initial state from the engine
+    Device {
+        uuid,
+        images: HashMap::new(),
+    }
+}
+
 /// Target state of a device
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 struct TargetDevice {}
@@ -47,143 +71,6 @@ pub struct UpdateRequest {
     pub cancel: bool,
 }
 
-#[derive(Serialize, Debug, Clone)]
-struct DeviceReport {}
-
-impl From<Device> for DeviceReport {
-    fn from(_: Device) -> Self {
-        // TODO
-        DeviceReport {}
-    }
-}
-
-// The state for report
-#[derive(Serialize, Debug, Clone)]
-struct Report(HashMap<String, DeviceReport>);
-
-impl From<Device> for Report {
-    fn from(device: Device) -> Self {
-        Report(HashMap::from([(device.uuid.clone(), device.into())]))
-    }
-}
-
-fn get_poll_client(config: &Config) -> Result<Option<Get>, UriError> {
-    if let Some(uri) = config.remote.api_endpoint.clone() {
-        let endpoint = make_uri(
-            uri,
-            format!("/device/v3/{}/state", config.uuid).as_str(),
-            None,
-        )?
-        .to_string();
-
-        let client_config = RequestConfig {
-            timeout: config.remote.request_timeout,
-            min_interval: config.remote.min_interval,
-            max_backoff: config.remote.poll_interval,
-            api_token: config.remote.api_key.clone(),
-        };
-
-        let client = Get::new(endpoint, client_config);
-
-        Ok(Some(client))
-    } else {
-        Ok(None)
-    }
-}
-
-fn get_report_client(config: &Config) -> Result<Option<Patch>, UriError> {
-    if let Some(uri) = config.remote.api_endpoint.clone() {
-        let endpoint = make_uri(uri, "/device/v3/state", None)?.to_string();
-
-        let client_config = RequestConfig {
-            timeout: config.remote.request_timeout,
-            min_interval: config.remote.min_interval,
-            max_backoff: config.remote.poll_interval,
-            api_token: config.remote.api_key.clone(),
-        };
-
-        let client = Patch::new(endpoint, client_config);
-
-        Ok(Some(client))
-    } else {
-        Ok(None)
-    }
-}
-
-// Return type from poll_remote
-type PollResult = (Option<serde_json::Value>, Instant);
-
-#[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn poll_remote(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
-    let max_jitter = &config.remote.max_poll_jitter;
-    let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
-    let jitter = Duration::from_millis(jitter_ms);
-    let mut next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
-
-    // poll if we have a client
-    if let Some(ref mut client) = poll_client {
-        let result = client.get().await;
-
-        // Reset the poll timer after we get the response
-        next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
-        let res = match result {
-            Ok(response) if response.modified => (response.value, next_poll_time),
-            Ok(_) => (None, next_poll_time),
-            Err(e) => {
-                warn!("poll failed: {e}");
-                (None, next_poll_time)
-            }
-        };
-
-        let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
-
-        res
-    } else {
-        (None, next_poll_time)
-    }
-}
-
-// Return type from send_report
-type LastReport = Option<Value>;
-
-#[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn send_report(
-    report_client: &mut Option<Patch>,
-    current_state: Device,
-    last_report: LastReport,
-) -> LastReport {
-    if let Some(client) = report_client {
-        let report: Report = current_state.clone().into();
-        let value = serde_json::to_value(report)
-            // This is probably a bug in the types, it shouldn't really happen
-            .expect("state report serialization failed");
-
-        // TODO: calculate differences with the last report and just send that
-        let res = match client.patch(value.clone()).await {
-            Ok(_) => Some(value),
-            Err(e) => {
-                warn!("patch failed: {e}");
-                last_report
-            }
-        };
-
-        let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
-
-        return res;
-    }
-    last_report
-}
-
-async fn load_initial_state(uuid: String) -> Device {
-    // TODO: read initial state from the engine
-    Device {
-        uuid,
-        images: HashMap::new(),
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CreateWorkerError {
     #[error("Failed to connect to Docker daemon: {0}")]
@@ -191,6 +78,13 @@ pub enum CreateWorkerError {
 
     #[error("Failed to serialize initial state: {0}")]
     StateSerialization(#[from] mahler::errors::SerializationError),
+}
+
+fn serialize_state(state: &Device) -> Value {
+    let report: Report = state.clone().into();
+    serde_json::to_value(report)
+        // This is probably a bug in the types, it shouldn't really happen
+        .expect("state report serialization failed")
 }
 
 fn create_worker(
@@ -209,12 +103,6 @@ fn create_worker(
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartSupervisorError {
-    #[error("Failed to create poll client: {0}")]
-    CreatePollClient(UriError),
-
-    #[error("Failed to create report client: {0}")]
-    CreateReportClient(UriError),
-
     #[error("Failed to create worker: {0}")]
     CreateWorker(#[from] CreateWorkerError),
 
@@ -238,10 +126,8 @@ pub async fn start(
     info!("starting");
     let mut next_poll_time = Instant::now();
 
-    let mut poll_client =
-        get_poll_client(&config).map_err(StartSupervisorError::CreatePollClient)?;
-    let mut report_client =
-        get_report_client(&config).map_err(StartSupervisorError::CreateReportClient)?;
+    let mut poll_client = get_poll_client(&config);
+    let mut report_client = get_report_client(&config);
 
     if poll_client.is_none() {
         warn!("running in unmanaged mode");
@@ -259,8 +145,11 @@ pub async fn start(
     let mut update_req = UpdateRequest::default();
 
     // Reporting variables
-    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> =
-        Box::pin(send_report(&mut report_client, initial_state, None));
+    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(send_report(
+        &mut report_client,
+        serialize_state(&initial_state),
+        None,
+    ));
     let mut last_report: Option<Value> = None;
 
     // Seek target state
@@ -377,7 +266,7 @@ pub async fn start(
                     drop(report_future);
 
                     // Report state changes to the API
-                    report_future = Box::pin(send_report(&mut report_client, current_state, last_report.clone()));
+                    report_future = Box::pin(send_report(&mut report_client, serialize_state(&current_state), last_report.clone()));
                 }
             }
 

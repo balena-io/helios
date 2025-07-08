@@ -17,6 +17,7 @@ mod cli;
 mod config;
 mod fallback;
 mod register;
+mod remote;
 mod request;
 mod target;
 
