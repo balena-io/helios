@@ -19,7 +19,7 @@ use tracing::{debug, field, instrument, trace, warn};
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 use crate::config::{deserialize_optional_uri, serialize_optional_uri};
-use crate::UpdateRequest;
+use crate::target::UpdateRequest;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 /// Fallback API configurations

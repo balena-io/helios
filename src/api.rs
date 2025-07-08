@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::fallback::{proxy_legacy, FallbackState};
-use crate::UpdateRequest;
+use crate::target::UpdateRequest;
 
 use axum::{
     body::{Body, Bytes},

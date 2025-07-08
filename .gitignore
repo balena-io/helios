@@ -135,6 +135,8 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
+# OS files
+.DS_Store
 
 # Added by cargo
 

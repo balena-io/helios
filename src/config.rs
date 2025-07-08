@@ -8,11 +8,11 @@ use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::cmd::cli::Cli;
+use crate::cli::Cli;
 use crate::fallback::FallbackConfig;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Local API configurations
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LocalConfig {
     pub port: u16,
     pub address: IpAddr,
@@ -27,8 +27,8 @@ impl Default for LocalConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Remote API configurations
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RemoteConfig {
     #[serde(
         deserialize_with = "deserialize_optional_uri",
@@ -160,8 +160,6 @@ fn get_config_path() -> PathBuf {
     }
 }
 
-// NOTE: this is only exported for use on fallback.rs
-// Consider moving into its own module if needed somewhere else
 pub fn deserialize_optional_uri<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Uri>, D::Error>
@@ -176,8 +174,6 @@ where
     }
 }
 
-// NOTE: this is only exported for use on fallback.rs
-// Consider moving into its own module if needed somewhere else
 pub fn serialize_optional_uri<S>(
     uri: &Option<Uri>,
     serializer: S,
