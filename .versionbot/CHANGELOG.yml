@@ -1,4 +1,19 @@
 - commits:
+    - subject: Simplify start script
+      hash: 141c288aff0c39983db8c502a1fb3194e1b15514
+      body: |
+        - Moves supervisor takeover code to scripts/supervisor-takeover.sh
+        - Removes the need for reading from `/mnt/boot` by relying on supervisor
+          variables
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.7
+  title: ""
+  date: 2025-07-08T19:40:37.621Z
+- commits:
     - subject: Refactor tracing instrumentation
       hash: 62c348ab774e8eae2304197375bf26d1cd7582f7
       body: >
