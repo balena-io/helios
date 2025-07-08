@@ -1,7 +1,7 @@
 version: '2.4'
 
 services:
-  supervisor-next:
+  helios:
     build: ./
     # This is needed so the service can bind to the same port as the
     # supervisor after stopping it. This should go away eventually so
@@ -17,33 +17,26 @@ services:
       io.balena.features.balena-socket: '1'
       # Needed to stop the supervisor service
       io.balena.features.dbus: '1'
+      # Needed to get access to the API credentials
+      io.balena.features.balena-api: '1'
     environment:
       - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
     volumes:
-      # Boot configurations
-      - boot:/mnt/boot
       # Base directory for app configuration and update locks
-      - temp:/tmp/balena-supervisor
-      # The legacy data volume is only needed while the proxy is needed. Eventually
+      - cache:/tmp/balena-supervisor
+      # The legacy volume is only needed while the proxy is needed. Eventually
       # supervisor data should use a volume rather than a directory on the host
-      - legacy_data:/mnt/legacy
+      - legacy:/mnt/legacy
 
 volumes:
-  boot:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind,ro
-      device: /mnt/boot
-
-  temp:
+  cache:
     driver: local
     driver_opts:
       type: none
       o: bind,X-mount.mkdir=0755
       device: /tmp/balena-supervisor
 
-  legacy_data:
+  legacy:
     driver: local
     driver_opts:
       type: none
