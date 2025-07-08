@@ -21,6 +21,8 @@ RUN cargo build --release --locked
 # Release target
 FROM alpine:3.21
 
+WORKDIR /opt/helios
+
 # Image metadata
 LABEL org.opencontainers.image.source="https://github.com/balena-io-experimental/helios"
 LABEL org.opencontainers.image.description="Balena's on device agent"
@@ -30,7 +32,7 @@ LABEL org.opencontainers.image.licenses=APACHE-2.0
 RUN apk add --update --no-cache \
 		libstdc++ sqlite jq dbus
 
-COPY start.sh /usr/bin
+COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/release/helios /usr/bin
 
-CMD ["/usr/bin/start.sh"]
+CMD ["/opt/helios/start.sh"]
