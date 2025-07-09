@@ -3,20 +3,14 @@ use std::{sync::Arc, time::Duration};
 use axum::{
     body::Body,
     extract::Request,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use hyper::Uri;
-use hyper_tls::HttpsConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
-
-pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 use crate::config::{deserialize_optional_uri, serialize_optional_uri};
 use crate::request::{make_uri, UriError};
@@ -47,21 +41,18 @@ pub struct FallbackState {
     pub uuid: String,
     pub remote_uri: Option<Uri>,
     pub fallback_uri: Option<Uri>,
-    pub https_client: HttpsClient,
+    pub https_client: reqwest::Client,
     pub target: Arc<RwLock<Option<FallbackTarget>>>,
 }
 
 impl FallbackState {
     pub fn new(uuid: String, remote_uri: Option<Uri>, fallback_uri: Option<Uri>) -> Self {
-        let https = HttpsConnector::new();
-        let https_client = Client::builder(TokioExecutor::new()).build(https);
-
         Self {
             uuid,
             remote_uri,
             fallback_uri,
             target: Arc::new(RwLock::new(None)),
-            https_client,
+            https_client: reqwest::Client::new(),
         }
     }
 
@@ -82,13 +73,13 @@ pub enum FallbackError {
     InvalidUri(#[from] UriError),
 
     #[error("Target connection failed: {0}")]
-    UpstreamConnection(#[from] hyper_util::client::legacy::Error),
+    UpstreamConnection(#[from] reqwest::Error),
+
+    #[error("Failed to stream target response: {0}")]
+    UpstreamProxy(#[from] axum::http::Error),
 
     #[error("JSON serialization failed: {0}")]
     JsonSerialization(#[from] serde_json::Error),
-
-    #[error("Request failed: {0}")]
-    RequestError(#[from] reqwest::Error),
 }
 
 impl FallbackError {
@@ -96,8 +87,8 @@ impl FallbackError {
         match self {
             Self::InvalidUri(_) => StatusCode::BAD_REQUEST,
             Self::UpstreamConnection(_) => StatusCode::BAD_GATEWAY,
+            Self::UpstreamProxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JsonSerialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::RequestError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -269,22 +260,26 @@ pub async fn proxy_legacy(
         request.uri().query(),
     )?;
 
-    // Use the request as is replacing the target uri and remove the host header
+    // Use the request as-is, replacing the target uri and removing the host header
     let (mut parts, body) = request.into_parts();
     parts.uri = target_uri;
     parts.headers.remove("host");
 
-    // Build the proxied request
-    let proxy_request = hyper::Request::from_parts(parts, body);
-
     // Send the request
-    let response = state.https_client.request(proxy_request).await?;
+    let res = state
+        .https_client
+        .request(parts.method, parts.uri.to_string())
+        .headers(parts.headers)
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+        .send()
+        .await?;
 
     // Convert the response directly without buffering the body
-    let (parts, body) = response.into_parts();
-    let response = Response::from_parts(parts, Body::new(body));
-
-    Ok(response)
+    let mut response = Response::builder().status(res.status());
+    *response.headers_mut().unwrap() = res.headers().clone();
+    response
+        .body(Body::from_stream(res.bytes_stream()))
+        .map_err(FallbackError::UpstreamProxy)
 }
 
 #[cfg(test)]
@@ -343,8 +338,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
@@ -365,8 +359,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         fallback_mock.assert_async().await;
     }
@@ -387,8 +380,7 @@ mod tests {
 
         let request = create_test_request("/test", None);
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         fallback_mock.assert_async().await;
     }
@@ -409,8 +401,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("MySupervisor/1.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         fallback_mock.assert_async().await;
     }
@@ -431,8 +422,7 @@ mod tests {
 
         let request = create_test_request("/api/v1/test?param=value", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         mock.assert_async().await;
     }
@@ -453,10 +443,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         mock.assert_async().await;
@@ -501,10 +488,7 @@ mod tests {
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get("content-type").unwrap(),
@@ -523,10 +507,7 @@ mod tests {
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "15");
     }
@@ -548,8 +529,7 @@ mod tests {
 
         let request = create_test_request("/device/v3/wrong-uuid/state", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
@@ -574,8 +554,7 @@ mod tests {
             Some("CustomClient/1.0"),
         );
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         fallback_mock.assert_async().await;
     }
@@ -598,8 +577,7 @@ mod tests {
         let request =
             create_test_request("/device/v3/test-device-uuid/logs", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
+        proxy_legacy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
@@ -611,10 +589,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "600");
     }
@@ -626,10 +601,7 @@ mod tests {
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -643,10 +615,7 @@ mod tests {
             Some("Supervisor/1.0.0"),
         );
 
-        let result = proxy_legacy(state, request).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
+        let response = proxy_legacy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "15");
     }
@@ -656,16 +625,14 @@ mod tests {
         let state = create_test_state_with_none_uris(None, None, None).await;
 
         let supervisor_request = create_test_request("/test", Some("Supervisor/1.0.0"));
-        let result = proxy_legacy(state.clone(), supervisor_request).await;
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = proxy_legacy(state.clone(), supervisor_request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "600");
 
         let non_supervisor_request = create_test_request("/test", Some("CustomClient/1.0"));
-        let result = proxy_legacy(state, non_supervisor_request).await;
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = proxy_legacy(state, non_supervisor_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

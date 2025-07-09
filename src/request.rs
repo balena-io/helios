@@ -1,6 +1,5 @@
 use axum::http::uri::PathAndQuery;
-use hyper::Uri;
-use reqwest::StatusCode;
+use axum::http::{StatusCode, Uri};
 use std::{
     str::FromStr,
     time::{Duration, Instant},

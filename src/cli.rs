@@ -1,11 +1,9 @@
-use axum::http::uri::InvalidUri;
+use axum::http::{uri::InvalidUri, Uri};
 use clap::{Args, Parser, Subcommand};
-use hyper::Uri;
 use std::net::IpAddr;
 
 fn parse_uri(s: &str) -> Result<Uri, InvalidUri> {
-    let uri = s.parse()?;
-    Ok(uri)
+    s.parse()
 }
 
 #[derive(Clone, Debug, Args)]
