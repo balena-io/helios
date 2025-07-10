@@ -1,4 +1,4 @@
-use hyper::Uri;
+use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;

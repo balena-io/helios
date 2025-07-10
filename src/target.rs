@@ -1,8 +1,12 @@
 use bollard::Docker;
-use futures_lite::{future, StreamExt};
+use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, future::Future, pin::Pin};
+use std::{
+    collections::HashMap,
+    future::{self, Future},
+    pin::Pin,
+};
 use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};

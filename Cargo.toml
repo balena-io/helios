@@ -14,13 +14,6 @@ axum = { version = "0.8.4", default-features = false, features = [
   "tokio",
   "http1",
 ] }
-hyper = "1.6.0"
-hyper-util = { version = "0.1.14", default-features = false, features = [
-  "http1",
-  "client-legacy",
-  "tokio",
-] }
-hyper-tls = "0.6.0"
 tokio = { version = "1.45.1", default-features = false, features = [
   "rt-multi-thread",
   "macros",
@@ -41,12 +34,12 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
   "brotli",
+  "stream"
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
 rand = "0.9.1"
-async-trait = "0.1"
 clap = { version = "4.0", features = ["derive", "env"] }
 dirs = "6.0.0"
 uuid = { version = "1.0", features = ["v4"] }
