@@ -1,4 +1,24 @@
 - commits:
+    - subject: Drop `hyper` and related dependencies
+      hash: 8da84ac6347c257b85da0f61f07f94af9e3940f4
+      body: >
+        Remove direct dependency on Hyper and switch to Reqwest for network
+        requests everywhere.
+
+
+        Also normalize a few imports to get them from `axum`.
+
+
+        Also drop `async-trait` as it was unused.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.2.9
+  title: ""
+  date: 2025-07-10T15:53:17.808Z
+- commits:
     - subject: Separate remote handling code from target state handling
       hash: a7cbab71a02665457e5b17b6eda93d2a7f50eb13
       body: ""
