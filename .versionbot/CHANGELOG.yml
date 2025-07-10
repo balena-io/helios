@@ -1,4 +1,41 @@
 - commits:
+    - subject: Separate remote handling code from target state handling
+      hash: a7cbab71a02665457e5b17b6eda93d2a7f50eb13
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Drop `anyhow` dep and perform actual error handling/propagation
+      hash: 349157836e4b66cf9b52c3f3775bfda35f45b5a0
+      body: >
+        `anyhow` allows basically to ignore errors and have everything bubble up
+        implicitly. That’s something a critical piece of software shouldn’t do,
+        but instead handle (or at least acknowledge) errors explicitly.
+
+
+        The library otherwise provides marginal utility (`with_context` looks
+        useful), so I’m dropping it completely to remove the temptation to use
+        it.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move a few things around
+      hash: 99d5907bdf87534d816d28942996435eae108ac5
+      body: |
+        Less files, less imports, less inter-dependencies, less sharing
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.2.8
+  title: ""
+  date: 2025-07-10T13:59:19.017Z
+- commits:
     - subject: Simplify start script
       hash: 141c288aff0c39983db8c502a1fb3194e1b15514
       body: |
