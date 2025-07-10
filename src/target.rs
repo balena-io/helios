@@ -1,214 +1,140 @@
-use anyhow::{Context, Result};
-use axum::http::uri::PathAndQuery;
 use bollard::Docker;
 use futures_lite::{future, StreamExt};
-use hyper::Uri;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::net::SocketAddr;
-use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
-use tokio::net::TcpListener;
-use tokio::sync::watch::{self, Receiver};
+use std::{collections::HashMap, future::Future, pin::Pin};
+use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
-use tracing::{debug, error, field, info, instrument, trace, warn, Span};
+use tracing::{error, info, instrument, trace, warn};
 
-use crate::models::{Device, TargetDevice};
-use crate::report::Report;
-use crate::request::{Get, Patch, RequestConfig};
-use crate::{api, Config};
-use crate::{
-    fallback::{legacy_update, FallbackState},
-    UpdateRequest,
+use crate::config::Config;
+use crate::fallback::{legacy_update, FallbackError, FallbackState};
+use crate::remote::{
+    get_poll_client, get_report_client, poll_remote, send_report, DeviceReport, LastReport,
+    PollResult, Report,
 };
 
 use mahler::worker::{Ready, SeekError, SeekStatus, Worker};
 use mahler::workflow::Interrupt;
 
-fn get_poll_client(config: &Config) -> Result<Option<Get>> {
-    if let Some(uri) = config.remote.api_endpoint.clone() {
-        let mut parts = uri.into_parts();
-        parts.path_and_query = Some(PathAndQuery::from_maybe_shared(format!(
-            "/device/v3/{}/state",
-            config.uuid
-        ))?);
-        let endpoint = Uri::from_parts(parts)?.to_string();
+type Uuid = String;
 
-        let client_config = RequestConfig {
-            timeout: config.remote.request_timeout,
-            min_interval: config.remote.min_interval,
-            max_backoff: config.remote.poll_interval,
-            api_token: config.remote.api_key.clone(),
-        };
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct Image {
+    docker_id: Option<String>,
+}
 
-        let client = Get::new(endpoint, client_config);
+/// Current state of a device
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct Device {
+    /// The device UUID
+    pub uuid: Uuid,
 
-        Ok(Some(client))
-    } else {
-        Ok(None)
+    /// List of docker images on the device
+    pub images: HashMap<String, Image>,
+}
+
+impl From<Device> for DeviceReport {
+    fn from(_: Device) -> Self {
+        // TODO
+        DeviceReport {}
     }
 }
 
-fn get_report_client(config: &Config) -> Result<Option<Patch>> {
-    if let Some(uri) = config.remote.api_endpoint.clone() {
-        let mut parts = uri.into_parts();
-        parts.path_and_query = Some(PathAndQuery::from_maybe_shared("/device/v3/state")?);
-        let endpoint = Uri::from_parts(parts)?.to_string();
-
-        let client_config = RequestConfig {
-            timeout: config.remote.request_timeout,
-            min_interval: config.remote.min_interval,
-            max_backoff: config.remote.poll_interval,
-            api_token: config.remote.api_key.clone(),
-        };
-
-        let client = Patch::new(endpoint, client_config);
-
-        Ok(Some(client))
-    } else {
-        Ok(None)
+impl From<Device> for Report {
+    fn from(device: Device) -> Self {
+        Report::new(HashMap::from([(device.uuid.clone(), device.into())]))
     }
 }
 
-fn calculate_jitter(max_jitter: &Duration) -> Duration {
-    let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
-    Duration::from_millis(jitter_ms)
-}
-
-// Return type from poll_target
-type PollResult = (Option<serde_json::Value>, Instant);
-
-#[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn poll_target(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
-    let jitter = calculate_jitter(&config.remote.max_poll_jitter);
-    let mut next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
-
-    // poll if we have a client
-    if let Some(ref mut client) = poll_client {
-        let result = client.get().await;
-
-        // Reset the poll timer after we get the response
-        next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
-        let res = match result {
-            Ok(response) if response.modified => (response.value, next_poll_time),
-            Ok(_) => (None, next_poll_time),
-            Err(e) => {
-                warn!("poll failed: {e}");
-                (None, next_poll_time)
-            }
-        };
-
-        let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
-
-        res
-    } else {
-        (None, next_poll_time)
-    }
-}
-
-// Return type from send_report
-type LastReport = Option<Value>;
-
-#[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn send_report(
-    report_client: &mut Option<Patch>,
-    current_state: Device,
-    last_report: LastReport,
-) -> LastReport {
-    if let Some(client) = report_client {
-        let report: Report = current_state.clone().into();
-        let value = match serde_json::to_value(report) {
-            Ok(v) => v,
-            Err(e) => {
-                // This is probably a bug in the types, it shouldn't really happen
-                error!("state report serialization failed {e}");
-                return last_report;
-            }
-        };
-
-        // TODO: calculate differences with the last report and just send that
-        let res = match client.patch(value.clone()).await {
-            Ok(_) => Some(value),
-            Err(e) => {
-                warn!("patch failed: {e}");
-                last_report
-            }
-        };
-
-        let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
-
-        return res;
-    }
-    last_report
-}
-
-async fn load_initial_state(uuid: String) -> Result<Device> {
+async fn load_initial_state(uuid: String) -> Device {
     // TODO: read initial state from the engine
-    Ok(Device {
+    Device {
         uuid,
         images: HashMap::new(),
-    })
+    }
 }
 
-fn create_worker(initial: Device) -> Result<Worker<Device, Ready, TargetDevice>> {
+/// Target state of a device
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct TargetDevice {}
+
+/// An update request coming from the API
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct UpdateRequest {
+    /// Trigger an update ignoring locks
+    #[serde(default)]
+    pub force: bool,
+
+    /// Cancel the current update if any
+    #[serde(default)]
+    pub cancel: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateWorkerError {
+    #[error("Failed to connect to Docker daemon: {0}")]
+    DockerConnection(#[from] bollard::errors::Error),
+
+    #[error("Failed to serialize initial state: {0}")]
+    StateSerialization(#[from] mahler::errors::SerializationError),
+}
+
+fn serialize_state(state: &Device) -> Value {
+    let report: Report = state.clone().into();
+    serde_json::to_value(report)
+        // This is probably a bug in the types, it shouldn't really happen
+        .expect("state report serialization failed")
+}
+
+fn create_worker(
+    /* jobs: ..., */
+    initial: Device,
+) -> Result<Worker<Device, Ready, TargetDevice>, CreateWorkerError> {
     // Initialize the connection
-    let docker = Docker::connect_with_defaults()?;
+    let docker = Docker::connect_with_defaults().map_err(CreateWorkerError::DockerConnection)?;
 
     Worker::new()
         // TODO: .jobs(...)
         .resource(docker)
         .initial_state(initial)
-        .with_context(|| "failed to create initial worker")
+        .map_err(CreateWorkerError::StateSerialization)
 }
 
-#[instrument(name = "helios", skip_all, err)]
-pub async fn start_supervisor(config: Config) -> Result<()> {
-    let fallback_state = FallbackState::new(
-        config.uuid.clone(),
-        config.remote.api_endpoint.clone(),
-        config.fallback.address.clone(),
-    );
-    let api_fallback_state = fallback_state.clone();
+#[derive(Debug, thiserror::Error)]
+pub enum StartSupervisorError {
+    #[error("Failed to create worker: {0}")]
+    CreateWorker(#[from] CreateWorkerError),
 
-    // Set-up a channel to receive update requests coming from the API
-    let (update_request_tx, update_request_rx) = watch::channel(UpdateRequest::default());
+    #[error("Failed to reach target state: {0}")]
+    SeekTargetState(#[from] SeekError),
 
-    // Try to bind to the API port first, this will avoid doing an extra poll
-    // if the local port is taken
-    let address = SocketAddr::new(config.local.address, config.local.port);
-    let addr_str = address.to_string();
-    let listener = TcpListener::bind(address).await?;
-    debug!("bound to local address {addr_str}");
-
-    // Start the API and the main loop and terminate on any error
-    tokio::select! {
-        res = api::start(listener, update_request_tx, api_fallback_state) => res,
-        res = start_main(config, fallback_state, update_request_rx) => res
-    }
+    #[error("Failed to update state on legacy Supervisor: {0}")]
+    LegacyUpdate(#[from] FallbackError),
 }
 
 // Helper types to make the code a bit more readable
-type LegacyFuture = Pin<Box<dyn Future<Output = Result<()>>>>;
+type LegacyFuture = Pin<Box<dyn Future<Output = Result<(), FallbackError>>>>;
 type SeekResult = Result<SeekStatus, SeekError>;
 
 #[instrument(name = "main", skip_all, err)]
-async fn start_main(
+pub async fn start(
     config: Config,
     fallback_state: FallbackState,
     mut update_request_rx: Receiver<UpdateRequest>,
-) -> Result<()> {
+) -> Result<(), StartSupervisorError> {
     info!("starting");
-
-    let mut poll_client = get_poll_client(&config)?;
-    let mut report_client = get_report_client(&config)?;
     let mut next_poll_time = Instant::now();
+
+    let mut poll_client = get_poll_client(&config);
+    let mut report_client = get_report_client(&config);
 
     if poll_client.is_none() {
         warn!("running in unmanaged mode");
     }
 
     // Load the current state at start time
-    let initial_state = load_initial_state(config.uuid.clone()).await?;
+    let initial_state = load_initial_state(config.uuid.clone()).await;
 
     // Create a mahler Worker instance
     // and start following changes
@@ -219,8 +145,11 @@ async fn start_main(
     let mut update_req = UpdateRequest::default();
 
     // Reporting variables
-    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> =
-        Box::pin(send_report(&mut report_client, initial_state, None));
+    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(send_report(
+        &mut report_client,
+        serialize_state(&initial_state),
+        None,
+    ));
     let mut last_report: Option<Value> = None;
 
     // Seek target state
@@ -234,7 +163,7 @@ async fn start_main(
 
     // Poll trigger variables
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
-        Box::pin(poll_target(&mut poll_client, &config));
+        Box::pin(poll_remote(&mut poll_client, &config));
     let mut is_poll_pending = true;
 
     // Main loop, polls state, applies changes and reports state
@@ -246,7 +175,7 @@ async fn start_main(
             _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending && !is_poll_pending => {
                 // Start the poll future
                 drop(poll_future);
-                poll_future = Box::pin(poll_target(&mut poll_client, &config));
+                poll_future = Box::pin(poll_remote(&mut poll_client, &config));
                 is_poll_pending = true;
 
                 // Reset the update request
@@ -261,13 +190,11 @@ async fn start_main(
                 next_poll_time = next_poll;
 
                 if let Some(target_state) = response {
-                    let fallback_tgt = target_state;
-
                     // Set the fallback target for legacy supervisor requests
-                    fallback_state.set_target_state(fallback_tgt.clone()).await;
+                    fallback_state.set_target_state(target_state.clone()).await;
 
-                    // TODO: we'll need to reject the target if it cannot be deserialized
-                    let tgt_device_opt = serde_json::from_value::<TargetDevice>(fallback_tgt).ok();
+                    // FIXME: we'll need to reject the target if it cannot be deserialized
+                    let tgt_device_opt = serde_json::from_value::<TargetDevice>(target_state).ok();
 
                     // Apply the state unless waiting for a legacy apply
                     if let (Some(target_device), false) = (tgt_device_opt, is_legacy_pending) {
@@ -326,7 +253,7 @@ async fn start_main(
 
                 // Trigger a new poll
                 drop(poll_future);
-                poll_future = Box::pin(poll_target(&mut poll_client, &config));
+                poll_future = Box::pin(poll_remote(&mut poll_client, &config));
                 is_poll_pending = true;
                 update_req = update_request_rx.borrow_and_update().clone();
             }
@@ -339,7 +266,7 @@ async fn start_main(
                     drop(report_future);
 
                     // Report state changes to the API
-                    report_future = Box::pin(send_report(&mut report_client, current_state, last_report.clone()));
+                    report_future = Box::pin(send_report(&mut report_client, serialize_state(&current_state), last_report.clone()));
                 }
             }
 
@@ -388,14 +315,32 @@ async fn start_main(
 
                 // We need to create a new worker with the updated state as it
                 // may have been changed by the legacy supervisor
-                let initial_state = load_initial_state(config.uuid.clone()).await?;
+                let initial_state = load_initial_state(config.uuid.clone()).await;
                 worker = create_worker(initial_state)?
             }
-
-
         }
     }
 
     info!("terminating");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn it_creates_a_device_report_from_a_device() {
+        let device = Device {
+            uuid: "test-uuid".to_string(),
+            images: HashMap::new(),
+        };
+
+        let report: Report = device.into();
+
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value, json!({"test-uuid": {}}))
+    }
 }

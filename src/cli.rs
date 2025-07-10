@@ -1,9 +1,9 @@
-use anyhow::Result;
+use axum::http::uri::InvalidUri;
 use clap::{Args, Parser, Subcommand};
 use hyper::Uri;
 use std::net::IpAddr;
 
-fn parse_uri(s: &str) -> Result<Uri> {
+fn parse_uri(s: &str) -> Result<Uri, InvalidUri> {
     let uri = s.parse()?;
     Ok(uri)
 }

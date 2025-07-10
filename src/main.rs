@@ -1,7 +1,10 @@
-use anyhow::Result;
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tokio::sync::watch::{self};
 use tracing::trace;
+use tracing::{debug, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -10,26 +13,16 @@ use tracing_subscriber::{
 };
 
 mod api;
-mod cmd;
+mod cli;
 mod config;
 mod fallback;
-mod models;
-mod report;
+mod register;
+mod remote;
 mod request;
+mod target;
 
-use cmd::cli::{Cli, Commands};
+use cli::{Cli, Commands};
 use config::Config;
-
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
-/// An update request coming from the API
-struct UpdateRequest {
-    #[serde(default)]
-    /// Trigger an update ignoring locks
-    force: bool,
-    #[serde(default)]
-    /// Cancel the current update if any
-    cancel: bool,
-}
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -56,7 +49,7 @@ fn initialize_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
     let cli = Cli::parse();
@@ -65,13 +58,39 @@ async fn main() -> Result<()> {
         Some(Commands::Register {
             remote,
             provisioning_key,
-        }) => cmd::register(remote, provisioning_key).await,
+        }) => register::register(remote, provisioning_key).await?,
         None => {
             // Default command
             let config = Config::load(&cli)?;
             trace!(config = ?config, "configuration loaded");
-
-            cmd::start_supervisor(config).await
+            run_supervisor(config).await?
         }
+    }
+
+    Ok(())
+}
+
+#[instrument(name = "helios", skip_all, err)]
+pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
+    let fallback_state = fallback::FallbackState::new(
+        config.uuid.clone(),
+        config.remote.api_endpoint.clone(),
+        config.fallback.address.clone(),
+    );
+
+    // Set-up a channel to receive update requests coming from the API
+    let (update_request_tx, update_request_rx) = watch::channel(target::UpdateRequest::default());
+
+    // Try to bind to the API port first, this will avoid doing an extra poll
+    // if the local port is taken
+    let address = SocketAddr::new(config.local.address, config.local.port);
+    let addr_str = address.to_string();
+    let listener = TcpListener::bind(address).await?;
+    debug!("bound to local address {addr_str}");
+
+    // Start the API and the main loop and terminate on any error
+    tokio::select! {
+        _ = api::start(listener, update_request_tx, fallback_state.clone()) => Ok(()),
+        res = target::start(config, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
     }
 }

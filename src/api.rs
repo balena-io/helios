@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::fallback::{proxy_legacy, FallbackState};
-use crate::UpdateRequest;
+use crate::target::UpdateRequest;
 
 use axum::{
     body::{Body, Bytes},
@@ -22,12 +22,12 @@ use tracing::{
 ///
 /// Receives a TCP listener already bound to the right address and port,
 /// and a bunch of arguments to forward to request handlers.
-#[instrument(name = "api", skip_all, err)]
+#[instrument(name = "api", skip_all)]
 pub async fn start(
     listener: TcpListener,
     update_request_tx: Sender<UpdateRequest>,
     fallback_state: FallbackState,
-) -> anyhow::Result<()> {
+) {
     let api_span = Span::current();
     let app = Router::new()
         .route(
@@ -53,8 +53,9 @@ pub async fn start(
         );
 
     info!("starting");
-    axum::serve(listener, app).await?;
-    Ok(())
+
+    // safe because `serve` will never return an error (or return at all).
+    axum::serve(listener, app).await.unwrap();
 }
 
 /// Handle `/v1/update` requests

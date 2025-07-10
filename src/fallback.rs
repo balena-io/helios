@@ -1,10 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::Result;
 use axum::{
     body::Body,
     extract::Request,
-    http::{uri::PathAndQuery, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use hyper::Uri;
@@ -13,13 +12,15 @@ use hyper_util::client::legacy::Client;
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
 
 pub(super) type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 use crate::config::{deserialize_optional_uri, serialize_optional_uri};
-use crate::UpdateRequest;
+use crate::request::{make_uri, UriError};
+use crate::target::UpdateRequest;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 /// Fallback API configurations
@@ -75,30 +76,47 @@ impl FallbackState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FallbackError {
-    InvalidUri(axum::http::uri::InvalidUriParts),
-    UpstreamConnection(hyper_util::client::legacy::Error),
-    JsonSerialization(serde_json::Error),
+    #[error("Invalid target URI: {0}")]
+    InvalidUri(#[from] UriError),
+
+    #[error("Target connection failed: {0}")]
+    UpstreamConnection(#[from] hyper_util::client::legacy::Error),
+
+    #[error("JSON serialization failed: {0}")]
+    JsonSerialization(#[from] serde_json::Error),
+
+    #[error("Request failed: {0}")]
+    RequestError(#[from] reqwest::Error),
+}
+
+impl FallbackError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::InvalidUri(_) => StatusCode::BAD_REQUEST,
+            Self::UpstreamConnection(_) => StatusCode::BAD_GATEWAY,
+            Self::JsonSerialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::RequestError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
 }
 
 impl IntoResponse for FallbackError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            FallbackError::InvalidUri(e) => {
-                (StatusCode::BAD_REQUEST, format!("Invalid target URI: {e}"))
-            }
-            FallbackError::UpstreamConnection(e) => (
-                StatusCode::BAD_GATEWAY,
-                format!("Target connection failed: {e}"),
-            ),
-            FallbackError::JsonSerialization(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("JSON serialization failed: {e}"),
-            ),
-        };
+        (self.status_code(), self.to_string()).into_response()
+    }
+}
 
-        (status, message).into_response()
+impl From<axum::http::uri::InvalidUri> for FallbackError {
+    fn from(err: axum::http::uri::InvalidUri) -> Self {
+        Self::InvalidUri(err.into())
+    }
+}
+
+impl From<axum::http::uri::InvalidUriParts> for FallbackError {
+    fn from(err: axum::http::uri::InvalidUriParts) -> Self {
+        Self::InvalidUri(err.into())
     }
 }
 
@@ -108,19 +126,20 @@ pub async fn legacy_update(
     fallback_uri: Uri,
     fallback_key: Option<String>,
     request: UpdateRequest,
-) -> Result<()> {
+) -> Result<(), FallbackError> {
     let client = reqwest::Client::new();
 
     // Build the URI from the address parts
-    let mut addr_parts = fallback_uri.clone().into_parts();
-    addr_parts.path_and_query = if let Some(apikey) = fallback_key.clone() {
-        Some(PathAndQuery::from_maybe_shared(format!(
-            "/v1/update?apikey={apikey}",
-        ))?)
+    let update_url = if let Some(apikey) = &fallback_key {
+        make_uri(
+            fallback_uri.clone(),
+            "/v1/update",
+            Some(format!("apikey={apikey}").as_str()),
+        )
     } else {
-        Some(PathAndQuery::from_maybe_shared("/v1/update")?)
+        make_uri(fallback_uri.clone(), "/v1/update", None)
     };
-    let update_url = Uri::from_parts(addr_parts)?.to_string();
+    let update_url = update_url?.to_string();
 
     let payload = json!({
         "force": request.force,
@@ -144,15 +163,16 @@ pub async fn legacy_update(
     debug!(response = field::display(response.status()), "success");
 
     // Build the status check URI
-    let mut status_addr_parts = fallback_uri.into_parts();
-    status_addr_parts.path_and_query = if let Some(apikey) = fallback_key {
-        Some(PathAndQuery::from_maybe_shared(format!(
-            "/v2/state/status?apikey={apikey}",
-        ))?)
+    let status_url = if let Some(apikey) = &fallback_key {
+        make_uri(
+            fallback_uri,
+            "/v2/state/status",
+            Some(&format!("apikey={apikey}")),
+        )
     } else {
-        Some(PathAndQuery::from_maybe_shared("/v2/state/status")?)
+        make_uri(fallback_uri, "/v2/state/status", None)
     };
-    let status_url = Uri::from_parts(status_addr_parts)?.to_string();
+    let status_url = status_url?.to_string();
 
     // Poll the status endpoint until appState is 'applied'
     loop {
@@ -172,37 +192,11 @@ pub async fn legacy_update(
     Ok(())
 }
 
-async fn handle_target_state_request(state: &FallbackState) -> Result<Response, FallbackError> {
-    // Try to serve from local cache
-    if let Some(target) = state.target_state().await {
-        trace!("returning cached target state");
-        // XXX:
-        let response_body =
-            serde_json::to_string(&target).map_err(FallbackError::JsonSerialization)?;
-
-        let mut response = Response::new(Body::from(response_body));
-        response
-            .headers_mut()
-            .insert("content-type", HeaderValue::from_static("application/json"));
-
-        Ok(response)
-    } else {
-        trace!("no cached target state yet");
-        // No target state available, return 503 with Retry-After header
-        let mut headers = HeaderMap::new();
-        headers.insert("retry-after", HeaderValue::from_static("15"));
-
-        let response = (StatusCode::SERVICE_UNAVAILABLE, headers).into_response();
-
-        Ok(response)
-    }
-}
-
 /// Proxy requests to/from fallback supervisor to the relevant target
 ///
 /// This is the fallback API behavior while the supervisor migration is ongoing
 pub async fn proxy_legacy(
-    fallback_state: FallbackState,
+    state: FallbackState,
     request: Request,
 ) -> Result<Response, FallbackError> {
     // Check if this is a target state request from the supervisor to the API
@@ -216,16 +210,37 @@ pub async fn proxy_legacy(
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", fallback_state.uuid);
+        let expected_path = format!("/device/v3/{}/state", state.uuid);
 
         if path == expected_path {
-            return handle_target_state_request(&fallback_state).await;
+            // Try to serve from local cache
+            let response = if let Some(target) = state.target_state().await {
+                trace!("returning cached target state");
+                // XXX:
+                let response_body = serde_json::to_string(&target)?;
+
+                let mut response = Response::new(Body::from(response_body));
+                response
+                    .headers_mut()
+                    .insert("content-type", HeaderValue::from_static("application/json"));
+
+                Ok(response)
+            } else {
+                trace!("no cached target state yet");
+                // No target state available, return 503 with Retry-After header
+                let mut headers = HeaderMap::new();
+                headers.insert("retry-after", HeaderValue::from_static("15"));
+
+                Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response())
+            };
+
+            return response;
         }
     }
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        if let Some(ref remote_uri) = fallback_state.remote_uri {
+        if let Some(ref remote_uri) = state.remote_uri {
             remote_uri
         } else {
             // No remote API available, return 503 with Retry-After header
@@ -234,7 +249,7 @@ pub async fn proxy_legacy(
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref fallback_uri) = fallback_state.fallback_uri {
+    } else if let Some(ref fallback_uri) = state.fallback_uri {
         fallback_uri
     } else {
         // No fallback configured, return 404
@@ -248,9 +263,11 @@ pub async fn proxy_legacy(
     );
 
     // Build target URI
-    let mut target_parts = target_endpoint.clone().into_parts();
-    target_parts.path_and_query = request.uri().path_and_query().cloned();
-    let target_uri = Uri::from_parts(target_parts).map_err(FallbackError::InvalidUri)?;
+    let target_uri = make_uri(
+        target_endpoint.clone(),
+        request.uri().path(),
+        request.uri().query(),
+    )?;
 
     // Use the request as is replacing the target uri and remove the host header
     let (mut parts, body) = request.into_parts();
@@ -261,11 +278,7 @@ pub async fn proxy_legacy(
     let proxy_request = hyper::Request::from_parts(parts, body);
 
     // Send the request
-    let response = fallback_state
-        .https_client
-        .request(proxy_request)
-        .await
-        .map_err(FallbackError::UpstreamConnection)?;
+    let response = state.https_client.request(proxy_request).await?;
 
     // Convert the response directly without buffering the body
     let (parts, body) = response.into_parts();
@@ -471,7 +484,7 @@ mod tests {
         parts.scheme = Some("invalid-scheme".parse().unwrap());
         parts.authority = Some("invalid-authority".parse().unwrap());
 
-        let uri_error = FallbackError::InvalidUri(Uri::from_parts(parts).unwrap_err());
+        let uri_error = FallbackError::InvalidUri(Uri::from_parts(parts).unwrap_err().into());
         let response = uri_error.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }

@@ -1,18 +1,17 @@
-use anyhow::Result;
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{fs, io};
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::cmd::cli::Cli;
+use crate::cli::Cli;
 use crate::fallback::FallbackConfig;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Local API configurations
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LocalConfig {
     pub port: u16,
     pub address: IpAddr,
@@ -27,8 +26,8 @@ impl Default for LocalConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Remote API configurations
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RemoteConfig {
     #[serde(
         deserialize_with = "deserialize_optional_uri",
@@ -89,7 +88,7 @@ fn generate_uuid() -> String {
 }
 
 impl Config {
-    pub fn load(cli: &Cli) -> Result<Self> {
+    pub fn load(cli: &Cli) -> io::Result<Self> {
         let config_path = get_config_path();
 
         // Start with default config
@@ -160,8 +159,6 @@ fn get_config_path() -> PathBuf {
     }
 }
 
-// NOTE: this is only exported for use on fallback.rs
-// Consider moving into its own module if needed somewhere else
 pub fn deserialize_optional_uri<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Uri>, D::Error>
@@ -176,8 +173,6 @@ where
     }
 }
 
-// NOTE: this is only exported for use on fallback.rs
-// Consider moving into its own module if needed somewhere else
 pub fn serialize_optional_uri<S>(
     uri: &Option<Uri>,
     serializer: S,
