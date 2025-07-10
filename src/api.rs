@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use crate::fallback::{proxy_legacy, FallbackState};
-use crate::target::UpdateRequest;
+use crate::target::{CurrentState, Device, UpdateRequest};
 
+use axum::routing::get;
+use axum::Json;
 use axum::{
     body::{Body, Bytes},
     http::{Request, Response, StatusCode},
@@ -26,10 +28,14 @@ use tracing::{
 pub async fn start(
     listener: TcpListener,
     update_request_tx: Sender<UpdateRequest>,
+    current_state: CurrentState,
     fallback_state: FallbackState,
 ) {
     let api_span = Span::current();
     let app = Router::new()
+        .route("/v3/ping", get(|| async { "OK" }))
+        .route("/v3/device", get(move || get_state(current_state)))
+        // Legacy routes
         .route(
             "/v1/update",
             post(move |body| trigger_update(update_request_tx, body)),
@@ -75,4 +81,12 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
     }
 
     StatusCode::ACCEPTED
+}
+
+/// Handle `/v3/device` request
+///
+/// Returns the device state
+async fn get_state(current_state: CurrentState) -> Json<Device> {
+    let device = current_state.read().await;
+    Json(device)
 }

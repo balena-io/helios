@@ -6,8 +6,9 @@ use std::{
     collections::HashMap,
     future::{self, Future},
     pin::Pin,
+    sync::Arc,
 };
-use tokio::sync::watch::Receiver;
+use tokio::sync::{watch::Receiver, RwLock};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
@@ -21,16 +22,41 @@ use crate::remote::{
 use mahler::worker::{Ready, SeekError, SeekStatus, Worker};
 use mahler::workflow::Interrupt;
 
+#[derive(Clone)]
+pub struct CurrentState(Arc<RwLock<Device>>);
+
+impl CurrentState {
+    // Read the host and apps state from the underlying system
+    pub async fn load_initial(uuid: Uuid) -> Self {
+        let device = load_initial_state(uuid).await;
+        Self::new(device)
+    }
+
+    fn new(device: Device) -> Self {
+        Self(Arc::new(RwLock::new(device)))
+    }
+
+    pub async fn read(&self) -> Device {
+        let state = self.0.read().await;
+        state.clone()
+    }
+
+    async fn write(&self, device: Device) {
+        let mut state = self.0.write().await;
+        *state = device;
+    }
+}
+
 type Uuid = String;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct Image {
+pub struct Image {
     docker_id: Option<String>,
 }
 
 /// Current state of a device
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct Device {
+pub struct Device {
     /// The device UUID
     pub uuid: Uuid,
 
@@ -51,7 +77,7 @@ impl From<Device> for Report {
     }
 }
 
-async fn load_initial_state(uuid: String) -> Device {
+async fn load_initial_state(uuid: Uuid) -> Device {
     // TODO: read initial state from the engine
     Device {
         uuid,
@@ -124,6 +150,7 @@ type SeekResult = Result<SeekStatus, SeekError>;
 #[instrument(name = "main", skip_all, err)]
 pub async fn start(
     config: Config,
+    device_state: CurrentState,
     fallback_state: FallbackState,
     mut update_request_rx: Receiver<UpdateRequest>,
 ) -> Result<(), StartSupervisorError> {
@@ -137,12 +164,12 @@ pub async fn start(
         warn!("running in unmanaged mode");
     }
 
-    // Load the current state at start time
-    let initial_state = load_initial_state(config.uuid.clone()).await;
+    // Read the current state
+    let current_state = device_state.read().await;
 
     // Create a mahler Worker instance
     // and start following changes
-    let mut worker = create_worker(initial_state.clone())?;
+    let mut worker = create_worker(current_state.clone())?;
     let mut worker_stream = worker.follow();
 
     // Store the last update request
@@ -151,7 +178,7 @@ pub async fn start(
     // Reporting variables
     let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(send_report(
         &mut report_client,
-        serialize_state(&initial_state),
+        serialize_state(&current_state),
         None,
     ));
     let mut last_report: Option<Value> = None;
@@ -269,6 +296,9 @@ pub async fn start(
                     // rate limiting is handled by the client
                     drop(report_future);
 
+                    // Record the updated global state
+                    device_state.write(current_state.clone()).await;
+
                     // Report state changes to the API
                     report_future = Box::pin(send_report(&mut report_client, serialize_state(&current_state), last_report.clone()));
                 }
@@ -320,6 +350,9 @@ pub async fn start(
                 // We need to create a new worker with the updated state as it
                 // may have been changed by the legacy supervisor
                 let initial_state = load_initial_state(config.uuid.clone()).await;
+
+                // Update the global state
+                device_state.write(current_state.clone()).await;
                 worker = create_worker(initial_state)?
             }
         }
