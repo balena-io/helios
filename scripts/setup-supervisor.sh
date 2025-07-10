@@ -3,8 +3,8 @@
 set -e
 
 # Supervisor fallback port
-fallback_port=${FALLBACK_PORT:-48480}
-unset FALLBACK_PORT
+fallback_port=${HELIOS_FALLBACK_PORT:-48480}
+unset HELIOS_FALLBACK_PORT
 
 stop_supervisor() {
   dbus-send \

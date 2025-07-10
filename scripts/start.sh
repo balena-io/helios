@@ -14,32 +14,49 @@ unset HELIOS_REMOTE_MAX_POLL_JITTER_MS
 # Do not allow min interval to be user configurable
 unset HELIOS_REMOTE_MIN_INTERVAL_MS
 
-# Check for supervisor set variables, the script needs the following features enabled
+[ -z "$DOCKER_HOST" ] && (
+  echo "DOCKER_HOST is required" >&2
+  exit 1
+)
+
+[ -z "$BALENA_DEVICE_UUID" ] && (
+  echo "BALENA_DEVICE_UUID is required" >&2
+  exit 1
+)
+
+# Check for supervisor set variables and configure the local service, the variables come from these features
 # - io.balena.features.supervisor-api: '1'
 # - io.balena.features.balena-socket: '1'
 # - io.balena.features.dbus: '1'
 # - io.balena.features.balena-api: '1'
-for var in DOCKER_HOST BALENA_SUPERVISOR_HOST BALENA_SUPERVISOR_PORT BALENA_SUPERVISOR_ADDRESS BALENA_SUPERVISOR_API_KEY BALENA_DEVICE_UUID BALENA_API_KEY BALENA_API_URL; do
-  eval val="\$$var"
-  if [ -z "$val" ]; then
-    echo "Error: variable '$var' is required" >&2
-    exit 1
-  fi
-done
 
-# Read credentials from BALENA_* variables
+# Read configuration from BALENA_* variables
 HELIOS_DEVICE_UUID="${BALENA_DEVICE_UUID}"
-HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"
-HELIOS_REMOTE_API_KEY="${BALENA_API_KEY}"
+HELIOS_LOCAL_PORT=${BALENA_SUPERVISOR_PORT:-48484}
 
-# Load the supervisor takeover script
-dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-. "$dir/supervisor-takeover.sh"
+# Run in unmanaged mode if the fallback supervisor is unmanaged
+if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
+  HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"
+  HELIOS_REMOTE_API_KEY="${BALENA_API_KEY}"
+  export HELIOS_REMOTE_API_ENDPOINT
+  export HELIOS_REMOTE_API_KEY
+fi
+
+if [ -n "${BALENA_SUPERVISOR_API_KEY}" ] && [ -n "${BALENA_SUPERVISOR_HOST}" ]; then
+  # Setup the supervisor
+  dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+  . "$dir/setup-supervisor.sh"
+
+  HELIOS_FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:$fallback_port"
+  HELIOS_FALLBACK_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
+  export HELIOS_FALLBACK_ADDRESS
+  export HELIOS_FALLBACK_API_KEY
+fi
 
 # Make variables available for the new process
-export HELIOS_REMOTE_API_ENDPOINT
-export HELIOS_REMOTE_API_KEY
 export HELIOS_REMOTE_POLL_INTERVAL
+export HELIOS_LOCAL_PORT
+export HELIOS_LOCAL_ADDRESS
 
 # Start the new supervisor
-exec helios --uuid "${HELIOS_DEVICE_UUID}" --fallback-address "http://${BALENA_SUPERVISOR_HOST}:$fallback_port" --fallback-api-key "${BALENA_SUPERVISOR_API_KEY}" --local-address 0.0.0.0
+exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-address 0.0.0.0
