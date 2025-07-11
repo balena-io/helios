@@ -42,16 +42,9 @@ if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   export HELIOS_REMOTE_API_KEY
 fi
 
-if [ -n "${BALENA_SUPERVISOR_API_KEY}" ] && [ -n "${BALENA_SUPERVISOR_HOST}" ]; then
-  # Setup the supervisor
-  dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-  . "$dir/setup-supervisor.sh"
-
-  HELIOS_FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:$fallback_port"
-  HELIOS_FALLBACK_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
-  export HELIOS_FALLBACK_ADDRESS
-  export HELIOS_FALLBACK_API_KEY
-fi
+# Setup the supervisor
+dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+. "$dir/setup-supervisor.sh"
 
 # Make variables available for the new process
 export HELIOS_REMOTE_POLL_INTERVAL

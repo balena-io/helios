@@ -24,9 +24,6 @@ services:
     volumes:
       # Base directory for app configuration and update locks
       - cache:/tmp/balena-supervisor
-      # The legacy volume is only needed while the proxy is needed. Eventually
-      # supervisor data should use a volume rather than a directory on the host
-      - legacy:/mnt/legacy
 
 volumes:
   cache:
@@ -35,10 +32,3 @@ volumes:
       type: none
       o: bind,X-mount.mkdir=0755
       device: /tmp/balena-supervisor
-
-  legacy:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/data/resin-data/balena-supervisor
