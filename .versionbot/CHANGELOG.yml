@@ -1,4 +1,33 @@
 - commits:
+    - subject: Remove the need for legacy db volume
+      hash: 3e54147babfe700b80c80bd84e70b245dea0187b
+      body: |
+        Using the old mechanism is not robust enough as the supervisor could be
+        running on a older OS still with the old `resin-supervisor` directory or
+        service name. The legacy volume also interferes with local testing on
+        some platforms.
+
+        The new mechanism uses the docker CLI and the existing supervisor image
+        to write to the database using JavaScript.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Configure startup based on variable availability
+      hash: 5df4fa8fb5b734b4c85e75282bc194e755f41a0f
+      body: |
+        This allows the docker service to be run in multiple contexts, including
+        unmanaged or without a fallback supervisor.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.2.10
+  title: ""
+  date: 2025-07-11T15:47:22.867Z
+- commits:
     - subject: Drop `hyper` and related dependencies
       hash: 8da84ac6347c257b85da0f61f07f94af9e3940f4
       body: >
