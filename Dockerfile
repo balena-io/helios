@@ -30,7 +30,7 @@ LABEL org.opencontainers.image.licenses=APACHE-2.0
 
 # Install release dependencies
 RUN apk add --update --no-cache \
-		libstdc++ sqlite jq dbus
+		libstdc++ docker-cli jq dbus
 
 COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/release/helios /usr/bin
