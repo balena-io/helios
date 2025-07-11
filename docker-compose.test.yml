@@ -1,0 +1,46 @@
+version: '2.4'
+
+services:
+  sut:
+    build: ./integration
+    depends_on:
+      helios:
+        condition: service_healthy
+      docker:
+        condition: service_healthy
+
+  # Override default configurations
+  helios:
+    # Use default networking rather than host networking
+    # for tests
+    network_mode: ''
+    networks:
+      - default
+    # Set-up required variables
+    environment:
+      BALENA_DEVICE_UUID: 'test-uuid'
+      BALENA_SUPERVISOR_PORT: 48484
+      DOCKER_HOST: 'tcp://docker:2375'
+    healthcheck:
+      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1:48484/v3/ping']
+      retries: 5
+      timeout: 5s
+
+  docker:
+    image: docker:dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ''
+    command: --tls=false
+    healthcheck:
+      test: ['CMD', 'docker', 'ps']
+      interval: 10s
+      retries: 5
+      timeout: 5s
+
+volumes:
+  cache:
+    driver_opts:
+      type: tmpfs
+      o: ''
+      device: tmpfs

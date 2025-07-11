@@ -12,10 +12,8 @@ WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-# Run unit tests
-RUN cargo test
-
 # Build release
+# Unit tests are run separately by CI
 RUN cargo build --release --locked
 
 # Release target

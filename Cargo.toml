@@ -50,7 +50,6 @@ futures-lite = { version = "2.6.0", default-features = false }
 
 [dev-dependencies]
 mockito = { version = "1.0", default-features = false }
-tempfile = "3.0"
 
 [profile.release]
 opt-level = "z"
