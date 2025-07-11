@@ -13,4 +13,4 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
 # Run integration tests
-CMD ["cargo", "test"]
+CMD ["cargo", "test", "--", "--test-threads", "1"]

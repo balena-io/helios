@@ -14,6 +14,7 @@ axum = { version = "0.8.4", default-features = false, features = [
   "tokio",
   "http1",
   "json",
+  "query",
 ] }
 tokio = { version = "1.45.1", default-features = false, features = [
   "rt-multi-thread",
