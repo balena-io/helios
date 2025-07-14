@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{field, instrument, warn, Span};
+use tracing::{field, info_span, warn};
 
 use crate::config::Config;
 use crate::request::{make_uri, Get, Patch, RequestConfig};
@@ -36,7 +36,6 @@ pub fn get_poll_client(config: &Config) -> Option<Get> {
 // Return type from poll_remote
 pub type PollResult = (Option<Value>, Instant);
 
-#[instrument(skip_all, fields(success_rate=field::Empty))]
 pub async fn poll_remote(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
     let max_jitter = &config.remote.max_poll_jitter;
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
@@ -45,6 +44,10 @@ pub async fn poll_remote(poll_client: &mut Option<Get>, config: &Config) -> Poll
 
     // poll if we have a client
     if let Some(ref mut client) = poll_client {
+        // Only enter the poll span if not unmanaged
+        let span = info_span!("poll_remote", success_rate = field::Empty);
+        let _ = span.enter();
+
         let result = client.get().await;
 
         // Reset the poll timer after we get the response
@@ -59,7 +62,7 @@ pub async fn poll_remote(poll_client: &mut Option<Get>, config: &Config) -> Poll
         };
 
         let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
+        span.record("success_rate", metrics.success_rate());
 
         (res, next_poll_time)
     } else {
@@ -104,13 +107,16 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
     }
 }
 
-#[instrument(skip_all, fields(success_rate=field::Empty))]
 pub async fn send_report(
     report_client: &mut Option<Patch>,
     current_state: Value,
     last_report: LastReport,
 ) -> LastReport {
     if let Some(client) = report_client {
+        // Only enter the report span if not unmanaged
+        let span = info_span!("send_report", success_rate = field::Empty);
+        let _ = span.enter();
+
         // TODO: calculate differences with the last report and just send that
         let res = match client.patch(current_state.clone()).await {
             Ok(_) => Some(current_state),
@@ -121,7 +127,7 @@ pub async fn send_report(
         };
 
         let metrics = client.metrics();
-        Span::current().record("success_rate", metrics.success_rate());
+        span.record("success_rate", metrics.success_rate());
 
         res
     } else {
