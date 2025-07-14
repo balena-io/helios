@@ -1,4 +1,18 @@
 - commits:
+    - subject: Fix intrumentation call hierarchy
+      hash: 2d8f8a899ff55647acc73ed55c11aeef461e241b
+      body: |
+        The changes in 5708472c3f0f9bcd11e7bc1954b8362ba788b7d3 messed with the
+        hierarchy of calls shown in the logs. This fixes that issue
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.3.2
+  title: ""
+  date: 2025-07-14T21:40:13.486Z
+- commits:
     - subject: Fix the reset_interval function on the request module
       hash: 5e82890eb29eaaf2e94b0c8b5c349ca61ea83b8b
       body: |
