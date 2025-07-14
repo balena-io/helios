@@ -1,16 +1,11 @@
-use axum::http::{uri::InvalidUri, Uri};
+use axum::http::Uri;
 use clap::{Parser, Subcommand};
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
 use tracing::debug;
 
-use crate::config::Config;
-
-fn parse_uri(s: &str) -> Result<Uri, InvalidUri> {
-    s.parse()
-}
+use crate::config::{Config, LocalAddress};
 
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)] // read from Cargo.toml
@@ -27,26 +22,17 @@ struct Cli {
     uuid: Option<String>,
 
     #[arg(
-        long = "local-port",
-        value_name = "port",
-        help = "Local API listen port",
-        env = "HELIOS_LOCAL_PORT"
-    )]
-    local_port: Option<u16>,
-
-    #[arg(
         long = "local-address",
         value_name = "address",
         help = "Local API listen address",
         env = "HELIOS_LOCAL_ADDRESS"
     )]
-    local_address: Option<IpAddr>,
+    local_address: Option<LocalAddress>,
 
     #[arg(
-        long = "remote-api-endpoint", 
-        value_name = "uri", 
-        help = "Remote API endpoint", 
-        value_parser = parse_uri,
+        long = "remote-api-endpoint",
+        value_name = "uri",
+        help = "Remote API endpoint",
         env = "HELIOS_REMOTE_API_ENDPOINT"
     )]
     remote_api_endpoint: Option<Uri>,
@@ -65,7 +51,7 @@ struct Cli {
         help = "Remote API poll interval in milliseconds",
         env = "HELIOS_REMOTE_POLL_INTERVAL_MS"
     )]
-    pub remote_poll_interval_ms: Option<u64>,
+    remote_poll_interval_ms: Option<u64>,
 
     #[arg(
         long = "remote-request-timeout-ms",
@@ -73,7 +59,7 @@ struct Cli {
         help = "Remote API request timeout in milliseconds",
         env = "HELIOS_REMOTE_REQUEST_TIMEOUT_MS"
     )]
-    pub remote_request_timeout_ms: Option<u64>,
+    remote_request_timeout_ms: Option<u64>,
 
     #[arg(
         long = "remote-min-interval-ms",
@@ -81,7 +67,7 @@ struct Cli {
         help = "API rate limiting interval in milliseconds",
         env = "HELIOS_REMOTE_MIN_INTERVAL_MS"
     )]
-    pub remote_min_interval_ms: Option<u64>,
+    remote_min_interval_ms: Option<u64>,
 
     #[arg(
         long = "remote-max-poll-jitter-ms",
@@ -89,13 +75,12 @@ struct Cli {
         help = "API target state poll max jitter in milliseconds",
         env = "HELIOS_REMOTE_MAX_POLL_JITTER_MS"
     )]
-    pub remote_max_poll_jitter_ms: Option<u64>,
+    remote_max_poll_jitter_ms: Option<u64>,
 
     #[arg(
-        long = "fallback-address", 
-        value_name = "uri", 
-        help = "Fallback URI to redirect unsupported API requests", 
-        value_parser = parse_uri,
+        long = "fallback-address",
+        value_name = "uri",
+        help = "Fallback URI to redirect unsupported API requests",
         env = "HELIOS_FALLBACK_ADDRESS"
     )]
     fallback_address: Option<Uri>,
@@ -142,11 +127,8 @@ pub fn load() -> io::Result<(Option<Command>, Config)> {
     if let Some(uuid) = cli.uuid {
         config.uuid = uuid.into();
     }
-    if let Some(port) = cli.local_port {
-        config.local.port = port;
-    }
     if let Some(address) = cli.local_address {
-        config.local.address = address;
+        config.local_address = address;
     }
     if let Some(endpoint) = &cli.remote_api_endpoint {
         config.remote.api_endpoint = Some(endpoint.clone());

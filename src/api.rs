@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
 use tracing::{
@@ -21,13 +21,18 @@ use crate::target::{
     App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateOpts, UpdateRequest,
 };
 
+pub enum Listener {
+    Tcp(TcpListener),
+    Unix(UnixListener),
+}
+
 /// Start the API
 ///
 /// Receives a TCP listener already bound to the right address and port,
 /// and a bunch of arguments to forward to request handlers.
 #[instrument(name = "api", skip_all)]
 pub async fn start(
-    listener: TcpListener,
+    listener: Listener,
     update_request_tx: Sender<UpdateRequest>,
     current_state: CurrentState,
     fallback_state: FallbackState,
@@ -77,7 +82,11 @@ pub async fn start(
     info!("starting");
 
     // safe because `serve` will never return an error (or return at all).
-    axum::serve(listener, app).await.unwrap();
+    match listener {
+        Listener::Tcp(listener) => axum::serve(listener, app).await,
+        Listener::Unix(listener) => axum::serve(listener, app).await,
+    }
+    .unwrap()
 }
 
 /// Handle `/v1/update` requests
