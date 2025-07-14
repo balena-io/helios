@@ -1,4 +1,54 @@
 - commits:
+    - subject: Add target apply endpoints
+      hash: 34f497081b14ae6e9afdbc59f49fd0f4c2303c5f
+      body: |
+        Adds `POST /v3/device` to set the device target state, `GET
+        /v3/device/apps/{uuid}` to get the current state of an individual app,
+        `POST /v3/device/apps/{uuid}` to set the target of an individual app
+        and `GET /v3/status` to get the target state apply status
+
+        This also adds some tasks to initialize the in memory state of apps and
+        config coming from the API.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Set-up integration tests
+      hash: b12d228555efb066ade97331c1aa6636bd8dd52d
+      body: |
+        This sets up docker-compose.test.yml to run tests for the API
+
+        We use an `integration/` folder rather than `tests/` to control the
+        dependendencies used by the tests and reduce compilation time.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Create GET /v3/device API endpoint
+      hash: b67b9c56fa118897fbf5add574ba513e41353952
+      body: |
+        This endpoint allows to read the device state from the API
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fix early exit in scripts/start-supervisor.sh
+      hash: 0301d7a1934158090fade12a96f904e22e61a5c6
+      body: |
+        The script was exiting if supervisor were not found causing start.sh to
+        exit as well.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.3.0
+  title: ""
+  date: 2025-07-14T16:42:11.924Z
+- commits:
     - subject: Remove the need for legacy db volume
       hash: 3e54147babfe700b80c80bd84e70b245dea0187b
       body: |
