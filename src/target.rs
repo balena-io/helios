@@ -15,8 +15,8 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::config::Config;
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
-    get_poll_client, get_report_client, poll_remote, send_report, DeviceReport, LastReport,
-    PollResult, Report,
+    get_poll_client, get_report_client, poll_remote_if_managed, send_report_if_managed,
+    DeviceReport, LastReport, PollResult, Report,
 };
 
 use mahler::{
@@ -291,11 +291,9 @@ pub async fn start(
     let mut update_req = UpdateRequest::default();
 
     // Reporting variables
-    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(send_report(
-        &mut report_client,
-        serialize_state(&initial_state),
-        None,
-    ));
+    let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(
+        send_report_if_managed(&mut report_client, serialize_state(&initial_state), None),
+    );
     let mut last_report: Option<Value> = None;
 
     // Seek target state
@@ -309,7 +307,7 @@ pub async fn start(
 
     // Poll trigger variables
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
-        Box::pin(poll_remote(&mut poll_client, &config));
+        Box::pin(poll_remote_if_managed(&mut poll_client, &config));
     let mut is_poll_pending = true;
 
     // Main loop, polls state, applies changes and reports state
@@ -321,7 +319,7 @@ pub async fn start(
             _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending && !is_poll_pending => {
                 // Start the poll future
                 drop(poll_future);
-                poll_future = Box::pin(poll_remote(&mut poll_client, &config));
+                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, &config));
                 is_poll_pending = true;
 
                 // Reset the update request
@@ -420,7 +418,7 @@ pub async fn start(
                 }
                 else {
                     // Otherwise trigger a new poll
-                    poll_future = Box::pin(poll_remote(&mut poll_client, &config));
+                    poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, &config));
                     is_poll_pending = true;
                 }
             }
@@ -436,7 +434,7 @@ pub async fn start(
                     current_state.write(cur_state.clone()).await;
 
                     // Report state changes to the API
-                    report_future = Box::pin(send_report(&mut report_client, serialize_state(&cur_state), last_report.clone()));
+                    report_future = Box::pin(send_report_if_managed(&mut report_client, serialize_state(&cur_state), last_report.clone()));
                 }
             }
 

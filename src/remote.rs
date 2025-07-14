@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{field, info_span, warn};
+use tracing::{field, info_span, instrument, warn, Span};
 
 use crate::config::Config;
 use crate::request::{make_uri, Get, Patch, RequestConfig};
@@ -36,35 +36,40 @@ pub fn get_poll_client(config: &Config) -> Option<Get> {
 // Return type from poll_remote
 pub type PollResult = (Option<Value>, Instant);
 
-pub async fn poll_remote(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
+#[instrument(skip_all, fields(success_rate = field::Empty))]
+pub async fn poll_remote(client: &mut Get, config: &Config, jitter: Duration) -> PollResult {
+    // Only enter the poll span if not unmanaged
+    let span = info_span!("poll_remote", success_rate = field::Empty);
+    let _ = span.enter();
+
+    let result = client.get().await;
+
+    // Reset the poll timer after we get the response
+    let next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
+    let res = match result {
+        Ok(response) if response.modified => response.value,
+        Ok(_) => None,
+        Err(e) => {
+            warn!("poll failed: {e}");
+            None
+        }
+    };
+
+    let metrics = client.metrics();
+    span.record("success_rate", metrics.success_rate());
+
+    (res, next_poll_time)
+}
+
+pub async fn poll_remote_if_managed(poll_client: &mut Option<Get>, config: &Config) -> PollResult {
     let max_jitter = &config.remote.max_poll_jitter;
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
     let jitter = Duration::from_millis(jitter_ms);
-    let mut next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
+    let next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
 
     // poll if we have a client
     if let Some(ref mut client) = poll_client {
-        // Only enter the poll span if not unmanaged
-        let span = info_span!("poll_remote", success_rate = field::Empty);
-        let _ = span.enter();
-
-        let result = client.get().await;
-
-        // Reset the poll timer after we get the response
-        next_poll_time = Instant::now() + config.remote.poll_interval + jitter;
-        let res = match result {
-            Ok(response) if response.modified => response.value,
-            Ok(_) => None,
-            Err(e) => {
-                warn!("poll failed: {e}");
-                None
-            }
-        };
-
-        let metrics = client.metrics();
-        span.record("success_rate", metrics.success_rate());
-
-        (res, next_poll_time)
+        poll_remote(client, config, jitter).await
     } else {
         (None, next_poll_time)
     }
@@ -107,29 +112,34 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
     }
 }
 
-pub async fn send_report(
+#[instrument(skip_all, fields(success_rate=field::Empty))]
+async fn send_report(
+    client: &mut Patch,
+    current_state: Value,
+    last_report: LastReport,
+) -> LastReport {
+    // TODO: calculate differences with the last report and just send that
+    let res = match client.patch(current_state.clone()).await {
+        Ok(_) => Some(current_state),
+        Err(e) => {
+            warn!("patch failed: {e}");
+            last_report
+        }
+    };
+
+    let metrics = client.metrics();
+    Span::current().record("success_rate", metrics.success_rate());
+
+    res
+}
+
+pub async fn send_report_if_managed(
     report_client: &mut Option<Patch>,
     current_state: Value,
     last_report: LastReport,
 ) -> LastReport {
     if let Some(client) = report_client {
-        // Only enter the report span if not unmanaged
-        let span = info_span!("send_report", success_rate = field::Empty);
-        let _ = span.enter();
-
-        // TODO: calculate differences with the last report and just send that
-        let res = match client.patch(current_state.clone()).await {
-            Ok(_) => Some(current_state),
-            Err(e) => {
-                warn!("patch failed: {e}");
-                last_report
-            }
-        };
-
-        let metrics = client.metrics();
-        span.record("success_rate", metrics.success_rate());
-
-        res
+        send_report(client, current_state, last_report).await
     } else {
         last_report
     }
