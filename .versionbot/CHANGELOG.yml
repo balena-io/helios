@@ -1,4 +1,32 @@
 - commits:
+    - subject: Fix the reset_interval function on the request module
+      hash: 5e82890eb29eaaf2e94b0c8b5c349ca61ea83b8b
+      body: |
+        The function is meant to ensure that the next request doesn't happen
+        before the min_interval even if the future is dropped, but it was
+        re-setting the backoff timer instead.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Improve instrumentation of poll_remote/send_report functions
+      hash: 5708472c3f0f9bcd11e7bc1954b8362ba788b7d3
+      body: |
+        We don't really want to log every time the function is called as that
+        doesn't provide useful information when running in unmanaged mode.
+
+        Instead we want to enter the relevant span when initializing the actual
+        API call.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.3.1
+  title: ""
+  date: 2025-07-14T19:39:19.161Z
+- commits:
     - subject: Add target apply endpoints
       hash: 34f497081b14ae6e9afdbc59f49fd0f4c2303c5f
       body: |
