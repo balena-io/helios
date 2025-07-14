@@ -1,14 +1,20 @@
 use std::time::Duration;
 
 use crate::fallback::{proxy_legacy, FallbackState};
-use crate::target::UpdateRequest;
+use crate::target::{
+    App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateRequest, Uuid,
+};
 
+use axum::extract::{Path, Query, State};
+use axum::routing::get;
+use axum::Json;
 use axum::{
     body::{Body, Bytes},
     http::{Request, Response, StatusCode},
     routing::post,
     Router,
 };
+use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
@@ -26,10 +32,28 @@ use tracing::{
 pub async fn start(
     listener: TcpListener,
     update_request_tx: Sender<UpdateRequest>,
+    current_state: CurrentState,
     fallback_state: FallbackState,
 ) {
     let api_span = Span::current();
+    let target_device_tx = update_request_tx.clone();
+    let target_app_tx = update_request_tx.clone();
     let app = Router::new()
+        .route("/v3/ping", get(|| async { "OK" }))
+        .route("/v3/status", get(target_status))
+        .route("/v3/device", get(get_device_cur_state))
+        .route(
+            "/v3/device",
+            post(move |query, apps| set_device_tgt_state(target_device_tx, query, apps)),
+        )
+        .route("/v3/device/apps/{uuid}", get(get_app_cur_state))
+        .route(
+            "/v3/device/apps/{uuid}",
+            post(move |state, path, query, apps| {
+                set_app_tgt_state(target_app_tx, state, path, query, apps)
+            }),
+        )
+        // Legacy routes
         .route(
             "/v1/update",
             post(move |body| trigger_update(update_request_tx, body)),
@@ -50,12 +74,26 @@ pub async fn start(
                 .on_response(|response: &Response<Body>, _: Duration, span: &Span| {
                     span.record("status", display(response.status()));
                 }),
-        );
+        )
+        .with_state(current_state);
 
     info!("starting");
 
     // safe because `serve` will never return an error (or return at all).
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Options for controlling processing of a new target
+/// by the main loop
+#[derive(Deserialize, Default)]
+struct UpdateOpts {
+    /// Trigger an update ignoring locks
+    #[serde(default)]
+    pub force: bool,
+
+    /// Cancel the current update if any
+    #[serde(default)]
+    pub cancel: bool,
 }
 
 /// Handle `/v1/update` requests
@@ -66,11 +104,106 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
         // Empty payload, use defaults
         UpdateRequest::default()
     } else {
-        // Try to parse JSON
-        serde_json::from_slice::<UpdateRequest>(&body).unwrap_or_default()
+        let UpdateOpts { force, cancel } =
+            serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
+
+        // Create an update request with an empty target to tell
+        // the main loop to initiate a new target poll from the API
+        UpdateRequest {
+            force,
+            cancel,
+            target: None,
+        }
     };
 
     if update_request_tx.send(request).is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    StatusCode::ACCEPTED
+}
+
+/// Handle `Get /v3/status` request
+///
+/// The request only returns the status of the local engine ignoring the status
+/// of the legacy supervisor
+async fn target_status(State(current_state): State<CurrentState>) -> Json<TargetStatus> {
+    let status = current_state.status().await;
+    Json(status)
+}
+
+/// Handle `GET /v3/device` request
+///
+/// Returns the device state
+async fn get_device_cur_state(State(current_state): State<CurrentState>) -> Json<Device> {
+    let device = current_state.read().await;
+    Json(device)
+}
+
+/// Handle `POST /v3/device` request
+async fn set_device_tgt_state(
+    update_request_tx: Sender<UpdateRequest>,
+    Query(opts): Query<UpdateOpts>,
+    Json(tgt_device): Json<TargetDevice>,
+) -> StatusCode {
+    let UpdateOpts { force, cancel } = opts;
+
+    if update_request_tx
+        .send(UpdateRequest {
+            target: Some(tgt_device),
+            force,
+            cancel,
+        })
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    StatusCode::ACCEPTED
+}
+
+/// Handle `GET /v3/device/apps/{uuid}`
+async fn get_app_cur_state(
+    State(current_state): State<CurrentState>,
+    Path(app_uuid): Path<Uuid>,
+) -> Result<Json<App>, StatusCode> {
+    let device = current_state.read().await;
+    if let Some(app) = device.apps.get(&app_uuid) {
+        return Ok(Json(app.clone()));
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Handle `POST /v3/device/apps/{uuid}` request
+///
+/// Sets the target state for the device apps
+async fn set_app_tgt_state(
+    update_request_tx: Sender<UpdateRequest>,
+    State(current_state): State<CurrentState>,
+    Path(app_uuid): Path<Uuid>,
+    Query(opts): Query<UpdateOpts>,
+    Json(app): Json<TargetApp>,
+) -> StatusCode {
+    let UpdateOpts { force, cancel } = opts;
+
+    // Every endpoint to interact with the device state will be written in the same way:
+    // - read the current state
+    // - convert it to a target
+    // - replace the relevant part of the target with the input
+    // - send the full target to the channel
+    let device = current_state.read().await;
+    let mut target_device: TargetDevice = device.into();
+    target_device.apps.insert(app_uuid, app);
+
+    if update_request_tx
+        .send(UpdateRequest {
+            target: Some(target_device),
+            force,
+            cancel,
+        })
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 

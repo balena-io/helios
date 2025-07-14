@@ -6,8 +6,9 @@ use std::{
     collections::HashMap,
     future::{self, Future},
     pin::Pin,
+    sync::Arc,
 };
-use tokio::sync::watch::Receiver;
+use tokio::sync::{watch::Receiver, RwLock};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
@@ -18,24 +19,109 @@ use crate::remote::{
     PollResult, Report,
 };
 
-use mahler::worker::{Ready, SeekError, SeekStatus, Worker};
-use mahler::workflow::Interrupt;
+use mahler::{
+    extract::{Args, Pointer, Target, View},
+    task::create,
+    worker::{Ready, SeekError, SeekStatus, Worker},
+};
+use mahler::{task::update, workflow::Interrupt};
 
-type Uuid = String;
+#[derive(Clone, Serialize, Default, Debug)]
+#[serde(tag = "status", content = "errors", rename_all = "snake_case")]
+pub enum TargetStatus {
+    #[default]
+    NoTargetYet,
+    Applying,
+    NotFound,
+    Interrupted,
+    Aborted(Vec<String>),
+    Applied,
+}
+
+impl From<SeekStatus> for TargetStatus {
+    fn from(status: SeekStatus) -> Self {
+        match status {
+            SeekStatus::Success => TargetStatus::Applied,
+            SeekStatus::NotFound => TargetStatus::NotFound,
+            SeekStatus::Interrupted => TargetStatus::Interrupted,
+            SeekStatus::Aborted(errors) => {
+                TargetStatus::Aborted(errors.iter().map(|e| e.to_string()).collect())
+            }
+        }
+    }
+}
+
+struct InnerState {
+    device: Device,
+    status: TargetStatus,
+}
+
+#[derive(Clone)]
+pub struct CurrentState(Arc<RwLock<InnerState>>);
+
+impl CurrentState {
+    // Read the host and apps state from the underlying system
+    pub async fn load_initial(uuid: Uuid) -> Self {
+        let device = load_initial_state(uuid).await;
+        Self::new(device)
+    }
+
+    fn new(device: Device) -> Self {
+        Self(Arc::new(RwLock::new(InnerState {
+            device,
+            status: TargetStatus::default(),
+        })))
+    }
+
+    pub async fn read(&self) -> Device {
+        let state = self.0.read().await;
+        state.device.clone()
+    }
+
+    async fn write(&self, device: Device) {
+        let mut state = self.0.write().await;
+        state.device = device;
+    }
+
+    pub async fn status(&self) -> TargetStatus {
+        let state = self.0.read().await;
+        state.status.clone()
+    }
+
+    async fn set_status(&self, status: TargetStatus) {
+        let mut state = self.0.write().await;
+        state.status = status;
+    }
+}
+
+pub type Uuid = String;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct Image {
-    docker_id: Option<String>,
+pub struct Image {
+    pub docker_id: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct App {
+    pub name: String,
+}
+
+type DeviceConfig = HashMap<String, String>;
 
 /// Current state of a device
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct Device {
+pub struct Device {
     /// The device UUID
     pub uuid: Uuid,
 
     /// List of docker images on the device
     pub images: HashMap<String, Image>,
+
+    /// Apps on the device
+    pub apps: HashMap<Uuid, App>,
+
+    /// Config vars
+    pub config: DeviceConfig,
 }
 
 impl From<Device> for DeviceReport {
@@ -51,21 +137,49 @@ impl From<Device> for Report {
     }
 }
 
-async fn load_initial_state(uuid: String) -> Device {
+async fn load_initial_state(uuid: Uuid) -> Device {
     // TODO: read initial state from the engine
     Device {
         uuid,
         images: HashMap::new(),
+        apps: HashMap::new(),
+        config: HashMap::new(),
     }
 }
 
+// Alias the App for now, the target app will have
+// its own structure eventually
+pub type TargetApp = App;
+
 /// Target state of a device
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct TargetDevice {}
+pub struct TargetDevice {
+    pub apps: HashMap<Uuid, TargetApp>,
+    pub config: DeviceConfig,
+}
+
+impl From<Device> for TargetDevice {
+    fn from(device: Device) -> Self {
+        let Device { apps, config, .. } = device;
+        Self { apps, config }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct TargetState(HashMap<String, TargetDevice>);
+
+impl TargetState {
+    fn new(uuid: Uuid, device: TargetDevice) -> Self {
+        Self(HashMap::from([(uuid, device)]))
+    }
+}
 
 /// An update request coming from the API
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct UpdateRequest {
+    /// Optional target state
+    pub target: Option<TargetDevice>,
+
     /// Trigger an update ignoring locks
     #[serde(default)]
     pub force: bool,
@@ -91,6 +205,24 @@ fn serialize_state(state: &Device) -> Value {
         .expect("state report serialization failed")
 }
 
+/// Store configuration in memory
+fn store_config(
+    mut config: View<DeviceConfig>,
+    Target(tgt_config): Target<DeviceConfig>,
+) -> View<DeviceConfig> {
+    // If a new config received, just update the in-memory state, the config will be handled
+    // by the legacy supervisor
+    *config = tgt_config;
+    config
+}
+
+/// Initialize the app in memory
+fn new_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
+    let TargetApp { name, .. } = tgt_app;
+    app.assign(App { name });
+    app
+}
+
 fn create_worker(
     /* jobs: ..., */
     initial: Device,
@@ -99,8 +231,17 @@ fn create_worker(
     let docker = Docker::connect_with_defaults().map_err(CreateWorkerError::DockerConnection)?;
 
     Worker::new()
-        // TODO: .jobs(...)
         .resource(docker)
+        .job(
+            "/apps/{app_uuid}",
+            create(new_app).with_description(|Args(uuid): Args<Uuid>| {
+                format!("initialize app with uuid '{uuid}'")
+            }),
+        )
+        .job(
+            "/config",
+            update(store_config).with_description(|| "store device configuration"),
+        )
         .initial_state(initial)
         .map_err(CreateWorkerError::StateSerialization)
 }
@@ -124,6 +265,7 @@ type SeekResult = Result<SeekStatus, SeekError>;
 #[instrument(name = "main", skip_all, err)]
 pub async fn start(
     config: Config,
+    current_state: CurrentState,
     fallback_state: FallbackState,
     mut update_request_rx: Receiver<UpdateRequest>,
 ) -> Result<(), StartSupervisorError> {
@@ -137,8 +279,8 @@ pub async fn start(
         warn!("running in unmanaged mode");
     }
 
-    // Load the current state at start time
-    let initial_state = load_initial_state(config.uuid.clone()).await;
+    // Read the initial state
+    let initial_state = current_state.read().await;
 
     // Create a mahler Worker instance
     // and start following changes
@@ -197,8 +339,14 @@ pub async fn start(
                     // Set the fallback target for legacy supervisor requests
                     fallback_state.set_target_state(target_state.clone()).await;
 
-                    // FIXME: we'll need to reject the target if it cannot be deserialized
-                    let tgt_device_opt = serde_json::from_value::<TargetDevice>(target_state).ok();
+                    let tgt_device_opt = match serde_json::from_value::<TargetState>(target_state) {
+                        Ok(TargetState(mut map)) => map.remove(&config.uuid),
+                        Err(e)  => {
+                            // FIXME: we'll need to reject the target if it cannot be deserialized
+                            warn!("failed to deserialize target state: {e}");
+                            None
+                        }
+                    };
 
                     // Apply the state unless waiting for a legacy apply
                     if let (Some(target_device), false) = (tgt_device_opt, is_legacy_pending) {
@@ -206,6 +354,7 @@ pub async fn start(
                         interrupt = Interrupt::new();
                         seek_future = Box::pin(worker.seek_with_interrupt(target_device, interrupt.clone()));
                         is_apply_pending = true;
+                        current_state.set_status(TargetStatus::Applying).await;
                     }
                     else if let Some(fallback_uri) = config.fallback.address.clone() {
                         // If we get here we are coming from a cancellation, so trigger
@@ -219,6 +368,7 @@ pub async fn start(
                     }
                 }
             }
+
 
             // Wake on update request
             update_requested = update_request_rx.changed() => {
@@ -238,6 +388,7 @@ pub async fn start(
 
                         // Wait for the interrupt to be processed
                         seek_future.await?;
+                        current_state.set_status(TargetStatus::Interrupted).await;
 
                         // Reset the future
                         seek_future = Box::pin(future::pending());
@@ -255,22 +406,37 @@ pub async fn start(
                     _ => continue
                 }
 
-                // Trigger a new poll
-                drop(poll_future);
-                poll_future = Box::pin(poll_remote(&mut poll_client, &config));
-                is_poll_pending = true;
+
                 update_req = update_request_rx.borrow_and_update().clone();
+                drop(poll_future);
+                if let Some(target_device) = update_req.target.clone() {
+                    let target_state = TargetState::new(config.uuid.clone(), target_device);
+                    // If the target is not empty, set it as the result of the new future
+                    poll_future = Box::pin(async move {
+                        // Serializing should not fail here since this input was already validated
+                        // at the API
+                        (Some(serde_json::to_value(target_state).unwrap()), next_poll_time)
+                    });
+                }
+                else {
+                    // Otherwise trigger a new poll
+                    poll_future = Box::pin(poll_remote(&mut poll_client, &config));
+                    is_poll_pending = true;
+                }
             }
 
             // State changes should trigger a new patch
             stream_res = worker_stream.next() => {
-                if let Some(current_state) = stream_res {
+                if let Some(cur_state) = stream_res {
                     // Drop the previous patch if a new state comes before the previous one is finished
                     // rate limiting is handled by the client
                     drop(report_future);
 
+                    // Record the updated global state
+                    current_state.write(cur_state.clone()).await;
+
                     // Report state changes to the API
-                    report_future = Box::pin(send_report(&mut report_client, serialize_state(&current_state), last_report.clone()));
+                    report_future = Box::pin(send_report(&mut report_client, serialize_state(&cur_state), last_report.clone()));
                 }
             }
 
@@ -292,7 +458,7 @@ pub async fn start(
                 // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
                 // TODO: depending on the resulting status we will want to retry, e.g. on Aborted
                 // status that indicates an error happened when executing a task
-                seek_status?;
+                current_state.set_status(seek_status?.into()).await;
 
                 // No matter the result of the seek_target call, we need to call the legacy
                 // supervisor to re-apply the target
@@ -320,6 +486,9 @@ pub async fn start(
                 // We need to create a new worker with the updated state as it
                 // may have been changed by the legacy supervisor
                 let initial_state = load_initial_state(config.uuid.clone()).await;
+
+                // Update the global state
+                current_state.write(initial_state.clone()).await;
                 worker = create_worker(initial_state)?
             }
         }
@@ -340,6 +509,8 @@ mod tests {
         let device = Device {
             uuid: "test-uuid".to_string(),
             images: HashMap::new(),
+            apps: HashMap::new(),
+            config: HashMap::new(),
         };
 
         let report: Report = device.into();

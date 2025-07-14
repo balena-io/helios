@@ -13,6 +13,8 @@ publish = false
 axum = { version = "0.8.4", default-features = false, features = [
   "tokio",
   "http1",
+  "json",
+  "query",
 ] }
 tokio = { version = "1.45.1", default-features = false, features = [
   "rt-multi-thread",
@@ -34,7 +36,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
   "brotli",
-  "stream"
+  "stream",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -49,7 +51,6 @@ futures-lite = { version = "2.6.0", default-features = false }
 
 [dev-dependencies]
 mockito = { version = "1.0", default-features = false }
-tempfile = "3.0"
 
 [profile.release]
 opt-level = "z"

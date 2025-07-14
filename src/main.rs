@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::error::Error;
 use std::net::SocketAddr;
+use target::CurrentState;
 use tokio::net::TcpListener;
 use tokio::sync::watch::{self};
 use tracing::trace;
@@ -88,9 +89,12 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(address).await?;
     debug!("bound to local address {addr_str}");
 
+    // Load the initial state
+    let current_state = CurrentState::load_initial(config.uuid.clone()).await;
+
     // Start the API and the main loop and terminate on any error
     tokio::select! {
-        _ = api::start(listener, update_request_tx, fallback_state.clone()) => Ok(()),
-        res = target::start(config, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
+        _ = api::start(listener, update_request_tx, current_state.clone(), fallback_state.clone()) => Ok(()),
+        res = target::start(config, current_state, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
     }
 }

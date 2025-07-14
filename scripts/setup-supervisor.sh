@@ -7,7 +7,7 @@ fallback_port=${HELIOS_FALLBACK_PORT:-48480}
 unset HELIOS_FALLBACK_PORT
 
 # Terminate early if supervisor variables are not set
-[ -n "${BALENA_SUPERVISOR_API_KEY}" ] && [ -n "${BALENA_SUPERVISOR_HOST}" ] && [ -n "${BALENA_SUPERVISOR_PORT}" ] || exit 0
+[ -n "${BALENA_SUPERVISOR_API_KEY}" ] && [ -n "${BALENA_SUPERVISOR_HOST}" ] && [ -n "${BALENA_SUPERVISOR_PORT}" ] || return 0
 
 stop_service() {
   svc=$1
