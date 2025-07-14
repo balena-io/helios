@@ -189,7 +189,7 @@ impl RequestState {
     }
 
     fn reset_interval(&mut self) {
-        self.current_backoff = self.config.min_interval;
+        self.next_retry = Some(Instant::now() + self.config.min_interval);
     }
 
     fn record_success(&mut self) {
