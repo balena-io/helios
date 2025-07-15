@@ -1,4 +1,31 @@
 - commits:
+    - subject: Streamline update options
+      hash: 3aefcec8e822ffc43d88c83a8f814922be3eee27
+      body: >
+        Moves the update options struct to where it belongs: the target state
+        main loop.
+
+
+        This has the following effects:
+
+
+        - Fallback now doesn’t have crate dependencies at all (besides
+        `request`) which isolates it even more and makes it trivial to delete in
+        the future.
+
+        - More importantly, when update options are added or deleted, there’s
+        only one place to define them (previously, UpdateRequest had its own set
+        of options that were separate, and we transformed back and forth between
+        those and UpdateOpts)
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.3.3
+  title: ""
+  date: 2025-07-15T13:53:45.086Z
+- commits:
     - subject: Fix intrumentation call hierarchy
       hash: 2d8f8a899ff55647acc73ed55c11aeef461e241b
       body: |
