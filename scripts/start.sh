@@ -32,7 +32,6 @@ unset HELIOS_REMOTE_MIN_INTERVAL_MS
 
 # Read configuration from BALENA_* variables
 HELIOS_DEVICE_UUID="${BALENA_DEVICE_UUID}"
-listen_port=${BALENA_SUPERVISOR_PORT:-48484}
 
 # Run in unmanaged mode if the fallback supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
@@ -49,5 +48,8 @@ dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # Make variables available for the new process
 export HELIOS_REMOTE_POLL_INTERVAL
 
+# Remove the socket if it exists (we will need some proper handover at some point)
+rm /tmp/run/helios.sock || true
+
 # Start the new supervisor
-exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-address "0.0.0.0:$listen_port"
+exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-address /tmp/run/helios.sock
