@@ -1,4 +1,3 @@
-use clap::Parser;
 use std::error::Error;
 use std::net::SocketAddr;
 use target::CurrentState;
@@ -22,8 +21,9 @@ mod remote;
 mod request;
 mod target;
 
-use cli::{Cli, Commands};
-use config::Config;
+use crate::cli::Command;
+use crate::config::Config;
+use crate::register::register;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -53,17 +53,15 @@ fn initialize_tracing() {
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
-    let cli = Cli::parse();
+    let (command, config) = cli::load()?;
+    trace!(config = ?config, "configuration loaded");
 
-    match cli.command {
-        Some(Commands::Register {
-            remote,
-            provisioning_key,
-        }) => register::register(remote, provisioning_key).await?,
+    match command {
+        Some(Command::Register { provisioning_key }) => {
+            register(config.remote, provisioning_key).await
+        }
         None => {
             // Default command
-            let config = Config::load(&cli)?;
-            trace!(config = ?config, "configuration loaded");
             run_supervisor(config).await?
         }
     }
