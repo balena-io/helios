@@ -174,12 +174,10 @@ impl TargetState {
     }
 }
 
-/// An update request coming from the API
+/// Options for controlling processing of a new target
+/// by the main loop
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct UpdateRequest {
-    /// Optional target state
-    pub target: Option<TargetDevice>,
-
+pub struct UpdateOpts {
     /// Trigger an update ignoring locks
     #[serde(default)]
     pub force: bool,
@@ -187,6 +185,15 @@ pub struct UpdateRequest {
     /// Cancel the current update if any
     #[serde(default)]
     pub cancel: bool,
+}
+
+/// An update request coming from the API
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct UpdateRequest {
+    /// Optional target state
+    pub target: Option<TargetDevice>,
+
+    pub opts: UpdateOpts,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -360,7 +367,8 @@ pub async fn start(
                         legacy_update_future = Box::pin(legacy_update(
                             fallback_uri.clone(),
                             config.fallback.api_key.clone(),
-                            update_req.clone(),
+                            update_req.opts.force,
+                            update_req.opts.cancel,
                         ));
                         is_legacy_pending = true;
                     }
@@ -380,7 +388,7 @@ pub async fn start(
                 // If a cancellation request is received and there is an apply pending
                 // then interrupt the previous apply
                 match (&*update_request_rx.borrow(), is_apply_pending, is_legacy_pending) {
-                    (UpdateRequest {cancel: true, ..}, true, _) => {
+                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, true, _) => {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
 
@@ -392,7 +400,7 @@ pub async fn start(
                         seek_future = Box::pin(future::pending());
                         is_apply_pending = false;
                     }
-                    (UpdateRequest {cancel: true, ..}, _, true) => {
+                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, _, true) => {
                         // Drop the legacy future but don't reset the
                         // flag so a new legacy update can be triggered from the new poll
                         legacy_update_future = Box::pin(future::pending());
@@ -465,7 +473,8 @@ pub async fn start(
                     legacy_update_future = Box::pin(legacy_update(
                         fallback_uri.clone(),
                         config.fallback.api_key.clone(),
-                        update_req.clone(),
+                        update_req.opts.force,
+                        update_req.opts.cancel,
                     ));
                     is_legacy_pending = true;
                 }

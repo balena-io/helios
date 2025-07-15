@@ -1,20 +1,11 @@
-use std::time::Duration;
-
-use crate::fallback::{proxy_legacy, FallbackState};
-use crate::target::{
-    App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateRequest, Uuid,
-};
-
-use axum::extract::{Path, Query, State};
-use axum::routing::get;
-use axum::Json;
 use axum::{
     body::{Body, Bytes},
+    extract::{Path, Query, State},
     http::{Request, Response, StatusCode},
-    routing::post,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
-use serde::Deserialize;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::watch::Sender;
 use tower_http::trace::TraceLayer;
@@ -22,6 +13,12 @@ use tracing::{
     debug_span,
     field::{display, Empty},
     info, instrument, Span,
+};
+
+use crate::fallback::{proxy_legacy, FallbackState};
+use crate::target::{
+    App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateOpts, UpdateRequest,
+    Uuid,
 };
 
 /// Start the API
@@ -83,19 +80,6 @@ pub async fn start(
     axum::serve(listener, app).await.unwrap();
 }
 
-/// Options for controlling processing of a new target
-/// by the main loop
-#[derive(Deserialize, Default)]
-struct UpdateOpts {
-    /// Trigger an update ignoring locks
-    #[serde(default)]
-    pub force: bool,
-
-    /// Cancel the current update if any
-    #[serde(default)]
-    pub cancel: bool,
-}
-
 /// Handle `/v1/update` requests
 ///
 /// This will trigger a fetch and an update to the API
@@ -104,16 +88,11 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
         // Empty payload, use defaults
         UpdateRequest::default()
     } else {
-        let UpdateOpts { force, cancel } =
-            serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
+        let opts = serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
 
         // Create an update request with an empty target to tell
         // the main loop to initiate a new target poll from the API
-        UpdateRequest {
-            force,
-            cancel,
-            target: None,
-        }
+        UpdateRequest { target: None, opts }
     };
 
     if update_request_tx.send(request).is_err() {
@@ -146,13 +125,10 @@ async fn set_device_tgt_state(
     Query(opts): Query<UpdateOpts>,
     Json(tgt_device): Json<TargetDevice>,
 ) -> StatusCode {
-    let UpdateOpts { force, cancel } = opts;
-
     if update_request_tx
         .send(UpdateRequest {
             target: Some(tgt_device),
-            force,
-            cancel,
+            opts,
         })
         .is_err()
     {
@@ -185,8 +161,6 @@ async fn set_app_tgt_state(
     Query(opts): Query<UpdateOpts>,
     Json(app): Json<TargetApp>,
 ) -> StatusCode {
-    let UpdateOpts { force, cancel } = opts;
-
     // Every endpoint to interact with the device state will be written in the same way:
     // - read the current state
     // - convert it to a target
@@ -199,8 +173,7 @@ async fn set_app_tgt_state(
     if update_request_tx
         .send(UpdateRequest {
             target: Some(target_device),
-            force,
-            cancel,
+            opts,
         })
         .is_err()
     {
