@@ -1,5 +1,3 @@
-use std::{sync::Arc, time::Duration};
-
 use axum::{
     body::Body,
     extract::Request,
@@ -8,13 +6,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
 
 use crate::config::{deserialize_optional_uri, serialize_optional_uri};
 use crate::request::{make_uri, UriError};
-use crate::target::UpdateRequest;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 /// Fallback API configurations
@@ -112,11 +110,12 @@ impl From<axum::http::uri::InvalidUriParts> for FallbackError {
 }
 
 /// Trigger an update on the legacy supervisor
-#[instrument(skip_all, fields(force = request.force, cancel = request.cancel), err)]
+#[instrument(skip_all, err)]
 pub async fn legacy_update(
     fallback_uri: Uri,
     fallback_key: Option<String>,
-    request: UpdateRequest,
+    force: bool,
+    cancel: bool,
 ) -> Result<(), FallbackError> {
     let client = reqwest::Client::new();
 
@@ -133,8 +132,8 @@ pub async fn legacy_update(
     let update_url = update_url?.to_string();
 
     let payload = json!({
-        "force": request.force,
-        "cancel": request.cancel
+        "force": force,
+        "cancel": cancel
     });
 
     debug!("calling fallback");
