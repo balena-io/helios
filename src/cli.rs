@@ -1,5 +1,5 @@
 use axum::http::{uri::InvalidUri, Uri};
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,41 +10,6 @@ use crate::config::Config;
 
 fn parse_uri(s: &str) -> Result<Uri, InvalidUri> {
     s.parse()
-}
-
-#[derive(Clone, Debug, Args)]
-struct RemoteArgs {
-    #[arg(
-        long = "remote-poll-interval-ms",
-        value_name = "poll_interval_ms",
-        help = "Remote API poll interval in milliseconds",
-        env = "HELIOS_REMOTE_POLL_INTERVAL_MS"
-    )]
-    pub remote_poll_interval_ms: Option<u64>,
-
-    #[arg(
-        long = "remote-request-timeout-ms",
-        value_name = "request_timeout_ms",
-        help = "Remote API request timeout in milliseconds",
-        env = "HELIOS_REMOTE_REQUEST_TIMEOUT_MS"
-    )]
-    pub remote_request_timeout_ms: Option<u64>,
-
-    #[arg(
-        long = "remote-min-interval-ms",
-        value_name = "min_interval_ms",
-        help = "API rate limiting interval in milliseconds",
-        env = "HELIOS_REMOTE_MIN_INTERVAL_MS"
-    )]
-    pub remote_min_interval_ms: Option<u64>,
-
-    #[arg(
-        long = "remote-max-poll-jitter-ms",
-        value_name = "max_poll_jitter_ms",
-        help = "API target state poll max jitter in milliseconds",
-        env = "HELIOS_REMOTE_MAX_POLL_JITTER_MS"
-    )]
-    pub remote_max_poll_jitter_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -94,8 +59,37 @@ struct Cli {
     )]
     remote_api_key: Option<String>,
 
-    #[command(flatten)]
-    remote: RemoteArgs,
+    #[arg(
+        long = "remote-poll-interval-ms",
+        value_name = "poll_interval_ms",
+        help = "Remote API poll interval in milliseconds",
+        env = "HELIOS_REMOTE_POLL_INTERVAL_MS"
+    )]
+    pub remote_poll_interval_ms: Option<u64>,
+
+    #[arg(
+        long = "remote-request-timeout-ms",
+        value_name = "request_timeout_ms",
+        help = "Remote API request timeout in milliseconds",
+        env = "HELIOS_REMOTE_REQUEST_TIMEOUT_MS"
+    )]
+    pub remote_request_timeout_ms: Option<u64>,
+
+    #[arg(
+        long = "remote-min-interval-ms",
+        value_name = "min_interval_ms",
+        help = "API rate limiting interval in milliseconds",
+        env = "HELIOS_REMOTE_MIN_INTERVAL_MS"
+    )]
+    pub remote_min_interval_ms: Option<u64>,
+
+    #[arg(
+        long = "remote-max-poll-jitter-ms",
+        value_name = "max_poll_jitter_ms",
+        help = "API target state poll max jitter in milliseconds",
+        env = "HELIOS_REMOTE_MAX_POLL_JITTER_MS"
+    )]
+    pub remote_max_poll_jitter_ms: Option<u64>,
 
     #[arg(
         long = "fallback-address", 
@@ -160,16 +154,16 @@ pub fn load() -> io::Result<(Option<Command>, Config)> {
     if let Some(key) = &cli.remote_api_key {
         config.remote.api_key = Some(key.clone());
     }
-    if let Some(interval) = cli.remote.remote_poll_interval_ms {
+    if let Some(interval) = cli.remote_poll_interval_ms {
         config.remote.poll_interval = Duration::from_millis(interval);
     }
-    if let Some(timeout) = cli.remote.remote_request_timeout_ms {
+    if let Some(timeout) = cli.remote_request_timeout_ms {
         config.remote.request_timeout = Duration::from_millis(timeout);
     }
-    if let Some(min_interval) = cli.remote.remote_min_interval_ms {
+    if let Some(min_interval) = cli.remote_min_interval_ms {
         config.remote.min_interval = Duration::from_millis(min_interval);
     }
-    if let Some(jitter) = cli.remote.remote_max_poll_jitter_ms {
+    if let Some(jitter) = cli.remote_max_poll_jitter_ms {
         config.remote.max_poll_jitter = Duration::from_millis(jitter);
     }
     if let Some(address) = &cli.fallback_address {
