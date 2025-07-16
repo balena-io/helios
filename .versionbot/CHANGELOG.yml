@@ -1,4 +1,33 @@
 - commits:
+    - subject: Use socket rather than host networking
+      hash: 215e1d0d6285ac5636de7ef7dd8e8d945dfa5a40
+      body: |
+        This allows to remove the need for host networking by listening on
+        /tmp/balena-supervisor/helios.sock by default (avoiding the clash with a
+        supervisor running on port 48484) and allowing to optionally
+        expose the socket to the network via socat (or other mechanism).
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add configuration option to listen from Unix socket
+      hash: 974a8d6eafc19b946f2bed287cd49f5d8aec0532
+      body: |
+        This updates the `--local-address` CLI option to accept either a
+        `<IP>:<PORT>` pair or a path to a unix socket.
+
+        The Unix socket option will be used by the containerized version of the
+        service to avoid the need for host networking.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.0
+  title: ""
+  date: 2025-07-16T18:41:14.316Z
+- commits:
     - subject: Make state endpoint request helpers private to remote module
       hash: 78f4f73eaf82661053545066bbf6082f760ee287
       body: >
