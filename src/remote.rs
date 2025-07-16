@@ -88,6 +88,14 @@ impl Report {
     }
 }
 
+impl From<Report> for Value {
+    fn from(value: Report) -> Self {
+        serde_json::to_value(value)
+            // This is probably a bug in the types, it shouldn't really happen
+            .expect("state report serialization failed")
+    }
+}
+
 // Return type from send_report
 pub type LastReport = Option<Value>;
 
@@ -113,14 +121,10 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
 }
 
 #[instrument(skip_all, fields(success_rate=field::Empty))]
-async fn send_report(
-    client: &mut Patch,
-    current_state: Value,
-    last_report: LastReport,
-) -> LastReport {
+async fn send_report(client: &mut Patch, report: Report, last_report: LastReport) -> LastReport {
     // TODO: calculate differences with the last report and just send that
-    let res = match client.patch(current_state.clone()).await {
-        Ok(_) => Some(current_state),
+    let res = match client.patch(report.clone().into()).await {
+        Ok(_) => Some(report.into()),
         Err(e) => {
             warn!("patch failed: {e}");
             last_report
@@ -135,11 +139,11 @@ async fn send_report(
 
 pub async fn send_report_if_managed(
     report_client: &mut Option<Patch>,
-    current_state: Value,
+    report: Report,
     last_report: LastReport,
 ) -> LastReport {
     if let Some(client) = report_client {
-        send_report(client, current_state, last_report).await
+        send_report(client, report, last_report).await
     } else {
         last_report
     }

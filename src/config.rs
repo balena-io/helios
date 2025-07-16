@@ -1,8 +1,9 @@
 use axum::http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr};
+use std::ops::Deref;
 use std::time::Duration;
-use uuid::Uuid;
 
 /// Local API configurations
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -17,6 +18,41 @@ impl Default for LocalConfig {
             port: 48484,
             address: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Uuid(String);
+
+impl Deref for Uuid {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Default for Uuid {
+    fn default() -> Self {
+        Self(uuid::Uuid::new_v4().simple().to_string())
+    }
+}
+
+impl Display for Uuid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<String> for Uuid {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Uuid> for String {
+    fn from(value: Uuid) -> Self {
+        value.0
     }
 }
 
@@ -65,8 +101,8 @@ impl Default for RemoteConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 /// Fallback API configurations
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct FallbackConfig {
     #[serde(
         deserialize_with = "deserialize_optional_uri",
@@ -79,18 +115,14 @@ pub struct FallbackConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Config {
-    #[serde(default = "generate_uuid")]
-    pub uuid: String,
+    #[serde(default)]
+    pub uuid: Uuid,
     #[serde(default)]
     pub local: LocalConfig,
     #[serde(default)]
     pub remote: RemoteConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
-}
-
-fn generate_uuid() -> String {
-    Uuid::new_v4().simple().to_string()
 }
 
 fn deserialize_optional_uri<'de, D>(deserializer: D) -> std::result::Result<Option<Uri>, D::Error>

@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::net::SocketAddr;
-use target::CurrentState;
 use tokio::net::TcpListener;
 use tokio::sync::watch::{self};
 use tracing::trace;
@@ -24,6 +23,7 @@ mod target;
 use crate::cli::Command;
 use crate::config::Config;
 use crate::register::register;
+use crate::target::Device;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[instrument(name = "helios", skip_all, err)]
 pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     let fallback_state = fallback::FallbackState::new(
-        config.uuid.clone(),
+        config.uuid.clone().into(),
         config.remote.api_endpoint.clone(),
         config.fallback.address.clone(),
     );
@@ -88,7 +88,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     debug!("bound to local address {addr_str}");
 
     // Load the initial state
-    let current_state = CurrentState::load_initial(config.uuid.clone()).await;
+    let current_state = Device::initial_for(config.uuid.clone()).into_current_state();
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {

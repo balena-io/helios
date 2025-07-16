@@ -139,8 +139,8 @@ pub fn load() -> io::Result<(Option<Command>, Config)> {
     let cli = Cli::parse();
 
     // Apply CLI overrides in order of precedence
-    if let Some(uuid) = &cli.uuid {
-        config.uuid = uuid.clone();
+    if let Some(uuid) = cli.uuid {
+        config.uuid = uuid.into();
     }
     if let Some(port) = cli.local_port {
         config.local.port = port;
