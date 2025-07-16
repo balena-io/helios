@@ -1,4 +1,23 @@
 - commits:
+    - subject: Make state endpoint request helpers private to remote module
+      hash: 78f4f73eaf82661053545066bbf6082f760ee287
+      body: >
+        It was previously tempting to either try to use Get/Patch directly as
+        general request helpers, or add unrelated functionality (like we did by
+        adding `make_uri` et al) to the request module.
+
+
+        This moves request as a private submodule of remote, being its sole
+        client/user.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.3.5
+  title: ""
+  date: 2025-07-16T16:35:11.413Z
+- commits:
     - subject: Streamline CLI and config loading
       hash: 29c0442b7e29e0ee44e1b5a4cebac63525fa81b7
       body: >
