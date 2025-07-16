@@ -4,27 +4,14 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
 
-use crate::config::{deserialize_optional_uri, serialize_optional_uri};
 use crate::request::{make_uri, UriError};
-
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
-/// Fallback API configurations
-pub struct FallbackConfig {
-    #[serde(
-        deserialize_with = "deserialize_optional_uri",
-        serialize_with = "serialize_optional_uri",
-        default
-    )]
-    pub address: Option<Uri>,
-    pub api_key: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct StateStatusResponse {

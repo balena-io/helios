@@ -1,7 +1,5 @@
-use clap::Parser;
 use std::error::Error;
 use std::net::SocketAddr;
-use target::CurrentState;
 use tokio::net::TcpListener;
 use tokio::sync::watch::{self};
 use tracing::trace;
@@ -22,8 +20,10 @@ mod remote;
 mod request;
 mod target;
 
-use cli::{Cli, Commands};
-use config::Config;
+use crate::cli::Command;
+use crate::config::Config;
+use crate::register::register;
+use crate::target::Device;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -53,17 +53,15 @@ fn initialize_tracing() {
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
-    let cli = Cli::parse();
+    let (command, config) = cli::load()?;
+    trace!(config = ?config, "configuration loaded");
 
-    match cli.command {
-        Some(Commands::Register {
-            remote,
-            provisioning_key,
-        }) => register::register(remote, provisioning_key).await?,
+    match command {
+        Some(Command::Register { provisioning_key }) => {
+            register(config.remote, provisioning_key).await
+        }
         None => {
             // Default command
-            let config = Config::load(&cli)?;
-            trace!(config = ?config, "configuration loaded");
             run_supervisor(config).await?
         }
     }
@@ -74,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[instrument(name = "helios", skip_all, err)]
 pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     let fallback_state = fallback::FallbackState::new(
-        config.uuid.clone(),
+        config.uuid.clone().into(),
         config.remote.api_endpoint.clone(),
         config.fallback.address.clone(),
     );
@@ -90,7 +88,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     debug!("bound to local address {addr_str}");
 
     // Load the initial state
-    let current_state = CurrentState::load_initial(config.uuid.clone()).await;
+    let current_state = Device::initial_for(config.uuid.clone()).into_current_state();
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {

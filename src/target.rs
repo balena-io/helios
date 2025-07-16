@@ -12,7 +12,7 @@ use tokio::sync::{watch::Receiver, RwLock};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::config::Config;
+use crate::config::{Config, Uuid};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
     get_poll_client, get_report_client, poll_remote_if_managed, send_report_if_managed,
@@ -60,12 +60,6 @@ struct InnerState {
 pub struct CurrentState(Arc<RwLock<InnerState>>);
 
 impl CurrentState {
-    // Read the host and apps state from the underlying system
-    pub async fn load_initial(uuid: Uuid) -> Self {
-        let device = load_initial_state(uuid).await;
-        Self::new(device)
-    }
-
     fn new(device: Device) -> Self {
         Self(Arc::new(RwLock::new(InnerState {
             device,
@@ -93,8 +87,6 @@ impl CurrentState {
         state.status = status;
     }
 }
-
-pub type Uuid = String;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Image {
@@ -124,6 +116,30 @@ pub struct Device {
     pub config: DeviceConfig,
 }
 
+impl Device {
+    /// Read the host and apps state from the underlying system
+    pub fn initial_for(uuid: Uuid) -> Self {
+        // TODO: read initial state from the engine
+        Self {
+            uuid,
+            images: HashMap::new(),
+            apps: HashMap::new(),
+            config: HashMap::new(),
+        }
+    }
+
+    /// Convenience for `self.into::<CurrentState>()`
+    pub fn into_current_state(self) -> CurrentState {
+        self.into()
+    }
+}
+
+impl From<Device> for CurrentState {
+    fn from(value: Device) -> Self {
+        CurrentState::new(value)
+    }
+}
+
 impl From<Device> for DeviceReport {
     fn from(_: Device) -> Self {
         // TODO
@@ -133,17 +149,7 @@ impl From<Device> for DeviceReport {
 
 impl From<Device> for Report {
     fn from(device: Device) -> Self {
-        Report::new(HashMap::from([(device.uuid.clone(), device.into())]))
-    }
-}
-
-async fn load_initial_state(uuid: Uuid) -> Device {
-    // TODO: read initial state from the engine
-    Device {
-        uuid,
-        images: HashMap::new(),
-        apps: HashMap::new(),
-        config: HashMap::new(),
+        Report::new(HashMap::from([(device.uuid.clone().into(), device.into())]))
     }
 }
 
@@ -166,7 +172,7 @@ impl From<Device> for TargetDevice {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct TargetState(HashMap<String, TargetDevice>);
+struct TargetState(HashMap<Uuid, TargetDevice>);
 
 impl TargetState {
     fn new(uuid: Uuid, device: TargetDevice) -> Self {
@@ -203,13 +209,6 @@ pub enum CreateWorkerError {
 
     #[error("Failed to serialize initial state: {0}")]
     StateSerialization(#[from] mahler::errors::SerializationError),
-}
-
-fn serialize_state(state: &Device) -> Value {
-    let report: Report = state.clone().into();
-    serde_json::to_value(report)
-        // This is probably a bug in the types, it shouldn't really happen
-        .expect("state report serialization failed")
 }
 
 /// Store configuration in memory
@@ -299,7 +298,7 @@ pub async fn start(
 
     // Reporting variables
     let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(
-        send_report_if_managed(&mut report_client, serialize_state(&initial_state), None),
+        send_report_if_managed(&mut report_client, initial_state.into(), None),
     );
     let mut last_report: Option<Value> = None;
 
@@ -442,7 +441,7 @@ pub async fn start(
                     current_state.write(cur_state.clone()).await;
 
                     // Report state changes to the API
-                    report_future = Box::pin(send_report_if_managed(&mut report_client, serialize_state(&cur_state), last_report.clone()));
+                    report_future = Box::pin(send_report_if_managed(&mut report_client, cur_state.into(), last_report.clone()));
                 }
             }
 
@@ -492,7 +491,7 @@ pub async fn start(
 
                 // We need to create a new worker with the updated state as it
                 // may have been changed by the legacy supervisor
-                let initial_state = load_initial_state(config.uuid.clone()).await;
+                let initial_state = Device::initial_for(config.uuid.clone());
 
                 // Update the global state
                 current_state.write(initial_state.clone()).await;
@@ -514,7 +513,7 @@ mod tests {
     #[test]
     fn it_creates_a_device_report_from_a_device() {
         let device = Device {
-            uuid: "test-uuid".to_string(),
+            uuid: "test-uuid".to_string().into(),
             images: HashMap::new(),
             apps: HashMap::new(),
             config: HashMap::new(),
@@ -522,7 +521,7 @@ mod tests {
 
         let report: Report = device.into();
 
-        let value = serde_json::to_value(report).unwrap();
+        let value: Value = report.into();
         assert_eq!(value, json!({"test-uuid": {}}))
     }
 }

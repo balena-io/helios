@@ -1,10 +1,5 @@
-use std::convert::Infallible;
+use crate::config::RemoteConfig;
 
-use crate::cli::RemoteArgs;
-
-pub async fn register(
-    _remote_args: RemoteArgs,
-    _provisioning_key: String,
-) -> Result<(), Infallible> {
+pub async fn register(_remote: RemoteConfig, _provisioning_key: String) {
     todo!("implement device provisioning")
 }

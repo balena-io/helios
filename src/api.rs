@@ -15,10 +15,10 @@ use tracing::{
     info, instrument, Span,
 };
 
+use crate::config::Uuid;
 use crate::fallback::{proxy_legacy, FallbackState};
 use crate::target::{
     App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateOpts, UpdateRequest,
-    Uuid,
 };
 
 /// Start the API
