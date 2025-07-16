@@ -1,4 +1,27 @@
 - commits:
+    - subject: Streamline CLI and config loading
+      hash: 29c0442b7e29e0ee44e1b5a4cebac63525fa81b7
+      body: >
+        This basically makes Config completely inert and moves responsibility
+        for congiuration to the primary (and currently *only*) entry point — the
+        CLI.
+
+
+        It also streamlines command handling — the CLI only defines the
+        necessary arguments and main() dispatches the command using this input.
+
+
+        It also does a bit of clean up by making some things that shouldn’t be
+        exported private and reduces imports.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.3.4
+  title: ""
+  date: 2025-07-16T15:28:23.605Z
+- commits:
     - subject: Streamline update options
       hash: 3aefcec8e822ffc43d88c83a8f814922be3eee27
       body: >
