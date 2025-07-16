@@ -5,8 +5,11 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{field, info_span, instrument, warn, Span};
 
+mod request;
+
 use crate::config::Config;
-use crate::request::{make_uri, Get, Patch, RequestConfig};
+use crate::util::uri::make_uri;
+use request::{Get, Patch, RequestConfig};
 
 pub fn get_poll_client(config: &Config) -> Option<Get> {
     if let Some(uri) = config.remote.api_endpoint.clone() {

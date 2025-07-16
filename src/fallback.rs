@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
 
-use crate::request::{make_uri, UriError};
+use crate::util::uri::{make_uri, UriError};
 
 #[derive(Debug, Deserialize)]
 struct StateStatusResponse {
