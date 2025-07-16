@@ -15,7 +15,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::config::{Config, Uuid};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
-    get_poll_client, get_report_client, poll_remote_if_managed, send_report_if_managed,
+    get_poll_client, get_report_client, next_poll, poll_remote_if_managed, send_report_if_managed,
     DeviceReport, LastReport, PollResult, Report,
 };
 
@@ -276,7 +276,6 @@ pub async fn start(
     mut update_request_rx: Receiver<UpdateRequest>,
 ) -> Result<(), StartSupervisorError> {
     info!("starting");
-    let mut next_poll_time = Instant::now();
 
     let mut poll_client = get_poll_client(&config);
     let mut report_client = get_report_client(&config);
@@ -312,9 +311,9 @@ pub async fn start(
     let mut is_legacy_pending = false;
 
     // Poll trigger variables
+    let mut next_poll_time = Instant::now() + next_poll(&config);
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
-        Box::pin(poll_remote_if_managed(&mut poll_client, &config));
-    let mut is_poll_pending = true;
+        Box::pin(poll_remote_if_managed(&mut poll_client));
 
     // Main loop, polls state, applies changes and reports state
     // operations may be interrupted by an update request or a new target state
@@ -322,22 +321,22 @@ pub async fn start(
     loop {
         tokio::select! {
             // Wake up on poll if not applying changes
-            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending && !is_poll_pending => {
+            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending => {
                 // Start the poll future
                 drop(poll_future);
-                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, &config));
-                is_poll_pending = true;
+                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client));
+                // Reset the poll interval to avoid busy waiting
+                next_poll_time = Instant::now() + next_poll(&config);
 
                 // Reset the update request
                 update_req = UpdateRequest::default();
             }
 
             // Handle poll completion
-            (response, next_poll) = &mut poll_future => {
+            response = &mut poll_future => {
                 // Reset the polling state
-                is_poll_pending = false;
                 poll_future = Box::pin(future::pending());
-                next_poll_time = next_poll;
+                next_poll_time = Instant::now() + next_poll(&config);
 
                 if let Some(target_state) = response {
                     // Set the fallback target for legacy supervisor requests
@@ -420,13 +419,13 @@ pub async fn start(
                     poll_future = Box::pin(async move {
                         // Serializing should not fail here since this input was already validated
                         // at the API
-                        (Some(serde_json::to_value(target_state).unwrap()), next_poll_time)
+                        Some(serde_json::to_value(target_state).unwrap())
                     });
                 }
                 else {
                     // Otherwise trigger a new poll
-                    poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, &config));
-                    is_poll_pending = true;
+                    poll_future = Box::pin(poll_remote_if_managed(&mut poll_client));
+                    next_poll_time = Instant::now() + next_poll(&config);
                 }
             }
 
