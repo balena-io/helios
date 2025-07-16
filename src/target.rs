@@ -431,17 +431,19 @@ pub async fn start(
 
             // State changes should trigger a new patch
             stream_res = worker_stream.next() => {
-                if let Some(cur_state) = stream_res {
-                    // Drop the previous patch if a new state comes before the previous one is finished
-                    // rate limiting is handled by the client
-                    drop(report_future);
+                // The stream should not return None unless the worker is dropped
+                // so this should not panic unless there is a bug
+                let cur_state = stream_res.expect("worker stream should remain open");
 
-                    // Record the updated global state
-                    current_state.write(cur_state.clone()).await;
+                // Drop the previous patch if a new state comes before the previous one is finished
+                // rate limiting is handled by the client
+                drop(report_future);
 
-                    // Report state changes to the API
-                    report_future = Box::pin(send_report_if_managed(&mut report_client, cur_state.into(), last_report.clone()));
-                }
+                // Record the updated global state
+                current_state.write(cur_state.clone()).await;
+
+                // Report state changes to the API
+                report_future = Box::pin(send_report_if_managed(&mut report_client, cur_state.into(), last_report.clone()));
             }
 
             // Update the last report on state patch
@@ -494,7 +496,8 @@ pub async fn start(
 
                 // Update the global state
                 current_state.write(initial_state.clone()).await;
-                worker = create_worker(initial_state)?
+                worker = create_worker(initial_state)?;
+                worker_stream = worker.follow();
             }
         }
     }
