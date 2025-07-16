@@ -17,8 +17,8 @@ mod config;
 mod fallback;
 mod register;
 mod remote;
-mod request;
 mod target;
+mod util;
 
 use crate::cli::Command;
 use crate::config::Config;
