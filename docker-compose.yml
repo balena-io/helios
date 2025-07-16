@@ -1,13 +1,25 @@
 version: '2.4'
 
 services:
+  # Uncomment the service below to expose the socket on the network.
+  # On balenaOS devices, this will probably be done by the OS and the
+  # access controlled via the firewall
+  # helios-api:
+  #   build: ./
+  #   image: helios
+  #   command: socat TCP-LISTEN:80,reuseaddr,fork UNIX-CONNECT:/tmp/run/helios.sock
+  #   ports:
+  #     - 48484:80
+  #   depends_on:
+  #     - helios
+  #   volumes:
+  #     - runtime:/tmp/run
+  #   healthcheck:
+  #     test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/v3/ping']
+
   helios:
     build: ./
-    # This is needed so the service can bind to the same port as the
-    # supervisor after stopping it. This should go away eventually so
-    # no other features that require host networking should be introduced
-    # on this service
-    network_mode: host
+    image: helios
     restart: on-failure
     labels:
       # Needed to get access to supervisor api variables
@@ -23,12 +35,15 @@ services:
       - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
     volumes:
       # Base directory for app configuration and update locks
-      - cache:/tmp/balena-supervisor
+      - runtime:/tmp/run
 
 volumes:
-  cache:
+  runtime:
     driver: local
     driver_opts:
       type: none
       o: bind,X-mount.mkdir=0755
+      # XXX: this directory needs to exist on the host
+      # before mounting. X-mount.mkdir doesn't work everywhere
+      # unfortunately (it doesn't on balenaOS)
       device: /tmp/balena-supervisor

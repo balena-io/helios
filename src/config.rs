@@ -1,23 +1,44 @@
 use axum::http::Uri;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::net::{IpAddr, Ipv4Addr};
+use std::fmt::{self, Display};
+use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
-/// Local API configurations
+/// Local API listen address
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct LocalConfig {
-    pub port: u16,
-    pub address: IpAddr,
+pub enum LocalAddress {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
 }
 
-impl Default for LocalConfig {
-    fn default() -> Self {
-        Self {
-            port: 48484,
-            address: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+impl Display for LocalAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocalAddress::Tcp(socket_addr) => socket_addr.fmt(f),
+            LocalAddress::Unix(path) => path.as_path().display().fmt(f),
         }
+    }
+}
+
+impl FromStr for LocalAddress {
+    type Err = AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<SocketAddr>()
+            .map(LocalAddress::Tcp)
+            .or_else(|_| Ok(LocalAddress::Unix(Path::new(s).to_path_buf())))
+    }
+}
+
+impl Default for LocalAddress {
+    fn default() -> Self {
+        LocalAddress::Tcp(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            48484,
+        ))
     }
 }
 
@@ -118,7 +139,7 @@ pub struct Config {
     #[serde(default)]
     pub uuid: Uuid,
     #[serde(default)]
-    pub local: LocalConfig,
+    pub local_address: LocalAddress,
     #[serde(default)]
     pub remote: RemoteConfig,
     #[serde(default)]

@@ -4,27 +4,31 @@ services:
   sut:
     build: ./integration
     depends_on:
+      helios-api:
+        condition: service_started
+
+  helios-api:
+    build: ./
+    image: helios
+    command: socat TCP-LISTEN:80,reuseaddr,fork UNIX-CONNECT:/tmp/run/helios.sock
+    depends_on:
       helios:
         condition: service_healthy
-      docker:
-        condition: service_healthy
+    volumes:
+      - runtime:/tmp/run
+    healthcheck:
+      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/v3/ping']
 
   # Override default configurations
   helios:
-    # Use default networking rather than host networking
-    # for tests
-    network_mode: ''
-    networks:
-      - default
     # Set-up required variables
     environment:
       BALENA_DEVICE_UUID: 'test-uuid'
       BALENA_SUPERVISOR_PORT: 48484
       DOCKER_HOST: 'tcp://docker:2375'
-    healthcheck:
-      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1:48484/v3/ping']
-      retries: 5
-      timeout: 5s
+    depends_on:
+      docker:
+        condition: service_healthy
 
   docker:
     image: docker:dind
@@ -39,7 +43,7 @@ services:
       timeout: 5s
 
 volumes:
-  cache:
+  runtime:
     driver_opts:
       type: tmpfs
       o: ''

@@ -92,7 +92,7 @@ if (rows.length > 0) {
 }
 
 await query(
-  "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '$BALENA_SUPERVISOR_ADDRESS') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', 'http://127.0.0.1:$BALENA_SUPERVISOR_PORT') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 );
 await query(
   "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${fallback_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value",

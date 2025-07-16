@@ -1,6 +1,5 @@
 use std::error::Error;
-use std::net::SocketAddr;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::trace;
 use tracing::{debug, instrument};
@@ -20,10 +19,11 @@ mod remote;
 mod target;
 mod util;
 
-use crate::cli::Command;
-use crate::config::Config;
-use crate::register::register;
-use crate::target::Device;
+use api::Listener;
+use cli::Command;
+use config::{Config, LocalAddress};
+use register::register;
+use target::Device;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -82,10 +82,11 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
 
     // Try to bind to the API port first, this will avoid doing an extra poll
     // if the local port is taken
-    let address = SocketAddr::new(config.local.address, config.local.port);
-    let addr_str = address.to_string();
-    let listener = TcpListener::bind(address).await?;
-    debug!("bound to local address {addr_str}");
+    let listener = match config.local_address {
+        LocalAddress::Tcp(socket_addr) => Listener::Tcp(TcpListener::bind(socket_addr).await?),
+        LocalAddress::Unix(ref path) => Listener::Unix(UnixListener::bind(path)?),
+    };
+    debug!("bound to local address {}", config.local_address);
 
     // Load the initial state
     let current_state = Device::initial_for(config.uuid.clone()).into_current_state();
