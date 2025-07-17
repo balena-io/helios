@@ -12,7 +12,7 @@ use tokio::sync::{watch::Receiver, RwLock};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::config::{Config, Uuid};
+use crate::config::{Config, FallbackConfig, Uuid};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
     get_poll_client, get_report_client, next_poll, poll_remote_if_managed, send_report_if_managed,
@@ -252,6 +252,82 @@ fn create_worker(
         .map_err(CreateWorkerError::StateSerialization)
 }
 
+#[derive(Clone)]
+enum SeekState {
+    Reset,
+    Local,
+    Fallback,
+}
+
+struct SeekConfig {
+    uuid: Uuid,
+    tgt_device: TargetDevice,
+    update_opts: UpdateOpts,
+    fallback: FallbackConfig,
+}
+
+type SeekResult = Result<SeekState, SeekError>;
+async fn seek_target(
+    worker: &mut Worker<Device, Ready, TargetDevice>,
+    config: SeekConfig,
+    interrupt: Interrupt,
+    cur_state: &CurrentState,
+    fallback_state: &FallbackState,
+    prev_state: SeekState,
+) -> SeekResult {
+    if matches!(prev_state, SeekState::Local | SeekState::Reset) {
+        // Reset the target state so a supervisor poll cannot
+        // lead to a double apply
+        fallback_state.clear_target_state().await;
+
+        //
+        cur_state.set_status(TargetStatus::Applying).await;
+
+        // Apply the target
+        let status = worker
+            .seek_with_interrupt(config.tgt_device.clone(), interrupt.clone())
+            .await?;
+
+        let interrupted = matches!(status, SeekStatus::Interrupted);
+        // Update the status
+        cur_state.set_status(status.into()).await;
+
+        if interrupted {
+            return Ok(SeekState::Local);
+        }
+    }
+
+    // No matter the result of the seek_target call, we need to call the legacy
+    // supervisor to re-apply the target
+    if let Some(uri) = config.fallback.address.clone() {
+        // Set the target state
+        let target_state = TargetState::new(config.uuid, config.tgt_device);
+        fallback_state
+            .set_target_state(
+                serde_json::to_value(target_state).expect("target state should be serializable"),
+            )
+            .await;
+        let interrupted = tokio::select! {
+            _ = legacy_update(
+                            uri,
+                            config.fallback.api_key.clone(),
+                            config.update_opts.force,
+                            config.update_opts.cancel,
+                        ) => false,
+            _ = interrupt.wait() => true
+        };
+
+        if interrupted {
+            return Ok(SeekState::Fallback);
+        }
+
+        // Tell the caller that they need to reset the worker
+        return Ok(SeekState::Reset);
+    }
+
+    Ok(SeekState::Local)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StartSupervisorError {
     #[error("Failed to create worker: {0}")]
@@ -263,10 +339,6 @@ pub enum StartSupervisorError {
     #[error("Failed to update state on legacy Supervisor: {0}")]
     LegacyUpdate(#[from] FallbackError),
 }
-
-// Helper types to make the code a bit more readable
-type LegacyFuture = Pin<Box<dyn Future<Output = Result<(), FallbackError>>>>;
-type SeekResult = Result<SeekStatus, SeekError>;
 
 #[instrument(name = "main", skip_all, err)]
 pub async fn start(
@@ -302,13 +374,10 @@ pub async fn start(
     let mut last_report: Option<Value> = None;
 
     // Seek target state
+    let mut prev_seek_state = SeekState::Local;
     let mut seek_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut is_apply_pending = false;
     let mut interrupt = Interrupt::new();
-
-    // Legacy update variables
-    let mut legacy_update_future: LegacyFuture = Box::pin(future::pending());
-    let mut is_legacy_pending = false;
 
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(&config);
@@ -321,7 +390,7 @@ pub async fn start(
     loop {
         tokio::select! {
             // Wake up on poll if not applying changes
-            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending && !is_legacy_pending => {
+            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending  => {
                 // Start the poll future
                 drop(poll_future);
                 poll_future = Box::pin(poll_remote_if_managed(&mut poll_client));
@@ -339,9 +408,6 @@ pub async fn start(
                 next_poll_time = Instant::now() + next_poll(&config);
 
                 if let Some(target_state) = response {
-                    // Set the fallback target for legacy supervisor requests
-                    fallback_state.set_target_state(target_state.clone()).await;
-
                     let tgt_device_opt = match serde_json::from_value::<TargetState>(target_state) {
                         Ok(TargetState(mut map)) => map.remove(&config.uuid),
                         Err(e)  => {
@@ -351,24 +417,18 @@ pub async fn start(
                         }
                     };
 
-                    // Apply the state unless waiting for a legacy apply
-                    if let (Some(target_device), false) = (tgt_device_opt, is_legacy_pending) {
+                    if let Some(tgt_device) = tgt_device_opt {
                         drop(seek_future);
                         interrupt = Interrupt::new();
-                        seek_future = Box::pin(worker.seek_with_interrupt(target_device, interrupt.clone()));
+                        let seek_config = SeekConfig {
+                            uuid: config.uuid.clone(),
+                            tgt_device,
+                            fallback: config.fallback.clone(),
+                            update_opts: update_req.opts.clone()
+                        };
+                        seek_future = Box::pin(seek_target(&mut worker, seek_config, interrupt.clone(), &current_state, &fallback_state, prev_seek_state.clone()));
                         is_apply_pending = true;
-                        current_state.set_status(TargetStatus::Applying).await;
-                    }
-                    else if let Some(fallback_uri) = config.fallback.address.clone() {
-                        // If we get here we are coming from a cancellation, so trigger
-                        // the legacy supervisor immediately
-                        legacy_update_future = Box::pin(legacy_update(
-                            fallback_uri.clone(),
-                            config.fallback.api_key.clone(),
-                            update_req.opts.force,
-                            update_req.opts.cancel,
-                        ));
-                        is_legacy_pending = true;
+
                     }
                 }
             }
@@ -385,26 +445,21 @@ pub async fn start(
                 // Read the request value without marking it as updated
                 // If a cancellation request is received and there is an apply pending
                 // then interrupt the previous apply
-                match (&*update_request_rx.borrow(), is_apply_pending, is_legacy_pending) {
-                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, true, _) => {
+                match (&*update_request_rx.borrow(), is_apply_pending) {
+                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, true) => {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
 
                         // Wait for the interrupt to be processed
-                        seek_future.await?;
+                        prev_seek_state = seek_future.await?;
                         current_state.set_status(TargetStatus::Interrupted).await;
 
                         // Reset the future
                         seek_future = Box::pin(future::pending());
                         is_apply_pending = false;
                     }
-                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, _, true) => {
-                        // Drop the legacy future but don't reset the
-                        // flag so a new legacy update can be triggered from the new poll
-                        legacy_update_future = Box::pin(future::pending());
-                    }
                     // If there is no apply in progress then proceed
-                    (_, false, false) => {}
+                    (_, false) => {}
                     // If no cancellation was requested then wait for any apply to finish
                     // before triggering a new poll
                     _ => continue
@@ -453,7 +508,7 @@ pub async fn start(
             }
 
             // Wake up when apply returns
-            seek_status = &mut seek_future => {
+            seek_res = &mut seek_future => {
                 // Reset the state
                 is_apply_pending = false;
                 seek_future = Box::pin(future::pending());
@@ -462,42 +517,19 @@ pub async fn start(
                 // call. If that happens there is either a loop in a type or task here or
                 // within mahler.
                 // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
-                // TODO: depending on the resulting status we will want to retry, e.g. on Aborted
-                // status that indicates an error happened when executing a task
-                current_state.set_status(seek_status?.into()).await;
+                prev_seek_state = seek_res?;
 
-                // No matter the result of the seek_target call, we need to call the legacy
-                // supervisor to re-apply the target
-                if let Some(fallback_uri) = config.fallback.address.clone() {
-                    drop(legacy_update_future);
-                    legacy_update_future = Box::pin(legacy_update(
-                        fallback_uri.clone(),
-                        config.fallback.api_key.clone(),
-                        update_req.opts.force,
-                        update_req.opts.cancel,
-                    ));
-                    is_legacy_pending = true;
+                // if the legacy apply went through
+                if matches!(prev_seek_state, SeekState::Reset) {
+                    // We need to create a new worker with the updated state as it
+                    // may have been changed by the legacy supervisor
+                    let initial_state = Device::initial_for(config.uuid.clone());
+
+                    // Update the global state
+                    current_state.write(initial_state.clone()).await;
+                    worker = create_worker(initial_state)?;
+                    worker_stream = worker.follow();
                 }
-            }
-
-            // Wake up when the supervisor apply is settled
-            _ = &mut legacy_update_future => {
-                // Reset the state
-                is_legacy_pending = false;
-                legacy_update_future = Box::pin(future::pending());
-
-                // Legacy future and seek future are exclusive so we can drop this safely
-                drop(seek_future);
-                seek_future = Box::pin(future::pending());
-
-                // We need to create a new worker with the updated state as it
-                // may have been changed by the legacy supervisor
-                let initial_state = Device::initial_for(config.uuid.clone());
-
-                // Update the global state
-                current_state.write(initial_state.clone()).await;
-                worker = create_worker(initial_state)?;
-                worker_stream = worker.follow();
             }
         }
     }

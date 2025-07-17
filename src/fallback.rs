@@ -50,6 +50,11 @@ impl FallbackState {
         let mut target = self.target.write().await;
         target.replace(target_state);
     }
+
+    pub async fn clear_target_state(&self) {
+        let mut target = self.target.write().await;
+        target.take();
+    }
 }
 
 #[derive(Debug, Error)]
