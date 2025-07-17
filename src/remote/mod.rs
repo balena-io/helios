@@ -35,11 +35,11 @@ pub fn get_poll_client(config: &Config) -> Option<Get> {
     }
 }
 
-// Return type from poll_remote
-pub type PollResult = Option<Value>;
+// Return type from poll_remote with metadata
+pub type PollResult<M> = (Option<Value>, M);
 
 #[instrument(skip_all, fields(success_rate = field::Empty))]
-pub async fn poll_remote(client: &mut Get) -> PollResult {
+pub async fn poll_remote(client: &mut Get, reemit: bool) -> Option<Value> {
     // Only enter the poll span if not unmanaged
     let span = info_span!("poll_remote", success_rate = field::Empty);
     let _ = span.enter();
@@ -48,7 +48,7 @@ pub async fn poll_remote(client: &mut Get) -> PollResult {
 
     // Reset the poll timer after we get the response
     let res = match result {
-        Ok(response) if response.modified => response.value,
+        Ok(response) if reemit || response.modified => response.value,
         Ok(_) => None,
         Err(e) => {
             warn!("poll failed: {e}");
@@ -69,12 +69,18 @@ pub fn next_poll(config: &Config) -> Duration {
     config.remote.poll_interval + jitter
 }
 
-pub async fn poll_remote_if_managed(poll_client: &mut Option<Get>) -> PollResult {
+/// Poll the remote target returning the metadata back
+/// to the caller
+pub async fn poll_remote_if_managed<M>(
+    poll_client: &mut Option<Get>,
+    reemit: bool,
+    meta: M,
+) -> PollResult<M> {
     // poll if we have a client
     if let Some(ref mut client) = poll_client {
-        poll_remote(client).await
+        (poll_remote(client, reemit).await, meta)
     } else {
-        None
+        (None, meta)
     }
 }
 

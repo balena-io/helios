@@ -8,7 +8,10 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use tokio::sync::{watch::Receiver, RwLock};
+use tokio::sync::{
+    watch::{Receiver, Sender},
+    RwLock,
+};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
@@ -174,12 +177,6 @@ impl From<Device> for TargetDevice {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TargetState(HashMap<Uuid, TargetDevice>);
 
-impl TargetState {
-    fn new(uuid: Uuid, device: TargetDevice) -> Self {
-        Self(HashMap::from([(uuid, device)]))
-    }
-}
-
 /// Options for controlling processing of a new target
 /// by the main loop
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -194,12 +191,26 @@ pub struct UpdateOpts {
 }
 
 /// An update request coming from the API
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct UpdateRequest {
-    /// Optional target state
-    pub target: Option<TargetDevice>,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum UpdateRequest {
+    Poll {
+        opts: UpdateOpts,
+        reemit: bool,
+    },
+    Seek {
+        target: TargetDevice,
+        raw_target: Option<Value>,
+        opts: UpdateOpts,
+    },
+}
 
-    pub opts: UpdateOpts,
+impl Default for UpdateRequest {
+    fn default() -> Self {
+        Self::Poll {
+            opts: UpdateOpts::default(),
+            reemit: true,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -260,10 +271,10 @@ enum SeekState {
 }
 
 struct SeekConfig {
-    uuid: Uuid,
     tgt_device: TargetDevice,
     update_opts: UpdateOpts,
     fallback: FallbackConfig,
+    raw_target: Option<Value>,
 }
 
 type SeekResult = Result<SeekState, SeekError>;
@@ -280,13 +291,15 @@ async fn seek_target(
         // lead to a double apply
         fallback_state.clear_target_state().await;
 
-        //
+        // Set the loop status
         cur_state.set_status(TargetStatus::Applying).await;
 
         // Apply the target
-        let status = worker
-            .seek_with_interrupt(config.tgt_device.clone(), interrupt.clone())
-            .await?;
+        let status = tokio::select! {
+            status = worker
+            .seek_target(config.tgt_device.clone()) => status?,
+            _ = interrupt.wait() => SeekStatus::Interrupted
+        };
 
         let interrupted = matches!(status, SeekStatus::Interrupted);
         // Update the status
@@ -299,14 +312,10 @@ async fn seek_target(
 
     // No matter the result of the seek_target call, we need to call the legacy
     // supervisor to re-apply the target
-    if let Some(uri) = config.fallback.address.clone() {
-        // Set the target state
-        let target_state = TargetState::new(config.uuid, config.tgt_device);
-        fallback_state
-            .set_target_state(
-                serde_json::to_value(target_state).expect("target state should be serializable"),
-            )
-            .await;
+    if let (Some(uri), Some(target_state)) = (config.fallback.address.clone(), config.raw_target) {
+        // Set as the target state the raw target accepted by
+        // the fallback
+        fallback_state.set_target_state(target_state).await;
         let interrupted = tokio::select! {
             _ = legacy_update(
                             uri,
@@ -346,6 +355,7 @@ pub async fn start(
     current_state: CurrentState,
     fallback_state: FallbackState,
     mut update_request_rx: Receiver<UpdateRequest>,
+    update_request_tx: Sender<UpdateRequest>,
 ) -> Result<(), StartSupervisorError> {
     info!("starting");
 
@@ -364,9 +374,6 @@ pub async fn start(
     let mut worker = create_worker(initial_state.clone())?;
     let mut worker_stream = worker.follow();
 
-    // Store the last update request
-    let mut update_req = UpdateRequest::default();
-
     // Reporting variables
     let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(
         send_report_if_managed(&mut report_client, initial_state.into(), None),
@@ -379,10 +386,15 @@ pub async fn start(
     let mut is_apply_pending = false;
     let mut interrupt = Interrupt::new();
 
+    // The next queued target state
+    let mut next_target: (Option<TargetDevice>, UpdateOpts, Option<Value>) =
+        (None, UpdateOpts::default(), None);
+
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(&config);
-    let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
-        Box::pin(poll_remote_if_managed(&mut poll_client));
+    let mut poll_future: Pin<Box<dyn Future<Output = PollResult<UpdateOpts>>>> = Box::pin(
+        poll_remote_if_managed(&mut poll_client, false, UpdateOpts::default()),
+    );
 
     // Main loop, polls state, applies changes and reports state
     // operations may be interrupted by an update request or a new target state
@@ -390,15 +402,12 @@ pub async fn start(
     loop {
         tokio::select! {
             // Wake up on poll if not applying changes
-            _ = tokio::time::sleep_until(next_poll_time), if !is_apply_pending  => {
+            _ = tokio::time::sleep_until(next_poll_time) => {
                 // Start the poll future
                 drop(poll_future);
-                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client));
+                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, false, UpdateOpts::default()));
                 // Reset the poll interval to avoid busy waiting
                 next_poll_time = Instant::now() + next_poll(&config);
-
-                // Reset the update request
-                update_req = UpdateRequest::default();
             }
 
             // Handle poll completion
@@ -407,29 +416,23 @@ pub async fn start(
                 poll_future = Box::pin(future::pending());
                 next_poll_time = Instant::now() + next_poll(&config);
 
-                if let Some(target_state) = response {
-                    let tgt_device_opt = match serde_json::from_value::<TargetState>(target_state) {
-                        Ok(TargetState(mut map)) => map.remove(&config.uuid),
+                // If there is a new target
+                if let (Some(target_state), opts) = response {
+                    // put the poll back on the channel
+                    match serde_json::from_value::<TargetState>(target_state.clone()) {
+                        Ok(TargetState(mut map)) => {
+                            if let Some(target) = map.remove(&config.uuid) {
+                                let _ = update_request_tx.send(UpdateRequest::Seek {target, opts, raw_target: Some(target_state)});
+                            }
+                            else {
+                                error!("no target for uuid {} found on target state", config.uuid);
+                            }
+                        },
                         Err(e)  => {
                             // FIXME: we'll need to reject the target if it cannot be deserialized
                             warn!("failed to deserialize target state: {e}");
-                            None
                         }
                     };
-
-                    if let Some(tgt_device) = tgt_device_opt {
-                        drop(seek_future);
-                        interrupt = Interrupt::new();
-                        let seek_config = SeekConfig {
-                            uuid: config.uuid.clone(),
-                            tgt_device,
-                            fallback: config.fallback.clone(),
-                            update_opts: update_req.opts.clone()
-                        };
-                        seek_future = Box::pin(seek_target(&mut worker, seek_config, interrupt.clone(), &current_state, &fallback_state, prev_seek_state.clone()));
-                        is_apply_pending = true;
-
-                    }
                 }
             }
 
@@ -442,11 +445,18 @@ pub async fn start(
                     break;
                 }
 
-                // Read the request value without marking it as updated
-                // If a cancellation request is received and there is an apply pending
-                // then interrupt the previous apply
-                match (&*update_request_rx.borrow(), is_apply_pending) {
-                    (UpdateRequest { opts: UpdateOpts { cancel: true, .. }, ..}, true) => {
+                let update_req = update_request_rx.borrow_and_update().clone();
+                match (&update_req, is_apply_pending) {
+                    // If a poll request is received, just trigger a new poll
+                    (UpdateRequest::Poll { opts, reemit }, _) => {
+                        // Trigger a new poll
+                        drop(poll_future);
+                        poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, *reemit, opts.clone()));
+                        next_poll_time = Instant::now() + next_poll(&config);
+                        continue;
+                    }
+                    // If a cancellation request is received, then interrupt the target
+                    (UpdateRequest::Seek { opts: UpdateOpts {cancel: true, ..}, ..}, true) => {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
 
@@ -458,29 +468,32 @@ pub async fn start(
                         seek_future = Box::pin(future::pending());
                         is_apply_pending = false;
                     }
-                    // If there is no apply in progress then proceed
-                    (_, false) => {}
-                    // If no cancellation was requested then wait for any apply to finish
-                    // before triggering a new poll
-                    _ => continue
+                    // If a new target comes while applying just store it for the next iteration
+                    (UpdateRequest::Seek {opts, target, raw_target}, true) => {
+                        next_target = (Some(target.clone()), opts.clone(), raw_target.clone());
+                        continue;
+                    }
+                    // If a target is received and there is no apply pending, proceed
+                    _ => {}
                 }
 
-
-                update_req = update_request_rx.borrow_and_update().clone();
-                drop(poll_future);
-                if let Some(target_device) = update_req.target.clone() {
-                    let target_state = TargetState::new(config.uuid.clone(), target_device);
-                    // If the target is not empty, set it as the result of the new future
-                    poll_future = Box::pin(async move {
-                        // Serializing should not fail here since this input was already validated
-                        // at the API
-                        Some(serde_json::to_value(target_state).unwrap())
-                    });
-                }
-                else {
-                    // Otherwise trigger a new poll
-                    poll_future = Box::pin(poll_remote_if_managed(&mut poll_client));
-                    next_poll_time = Instant::now() + next_poll(&config);
+                // Trigger a new target state apply if we got here
+                if let UpdateRequest::Seek {opts, target, raw_target} = update_req {
+                    drop(seek_future);
+                    interrupt = Interrupt::new();
+                    let seek_config = SeekConfig {
+                        tgt_device: target,
+                        fallback: config.fallback.clone(),
+                        update_opts: opts,
+                        raw_target,
+                    };
+                    seek_future = Box::pin(
+                        seek_target(&mut worker, seek_config,
+                                    interrupt.clone(), &current_state,
+                                    &fallback_state, prev_seek_state.clone()
+                        )
+                    );
+                    is_apply_pending = true;
                 }
             }
 
@@ -529,6 +542,28 @@ pub async fn start(
                     current_state.write(initial_state.clone()).await;
                     worker = create_worker(initial_state)?;
                     worker_stream = worker.follow();
+                }
+
+                // If there is a pending target
+                if let (Some(target), opts, raw_target) = next_target {
+                    // reset the next target
+                    next_target = (None, UpdateOpts::default(), None);
+                    interrupt = Interrupt::new();
+                    let seek_config = SeekConfig {
+                        tgt_device: target,
+                        fallback: config.fallback.clone(),
+                        update_opts: opts,
+                        raw_target
+                    };
+
+                    // Trigger a new apply
+                    seek_future = Box::pin(
+                        seek_target(&mut worker, seek_config,
+                                    interrupt.clone(), &current_state,
+                                    &fallback_state, prev_seek_state.clone()
+                        )
+                    );
+                    is_apply_pending = true;
                 }
             }
         }
