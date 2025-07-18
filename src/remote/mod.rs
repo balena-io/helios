@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{field, info_span, instrument, warn, Span};
+use tracing::{instrument, warn};
 
 mod request;
 
@@ -50,10 +50,6 @@ pub type PollResult<M> = (Option<Value>, M);
 pub async fn poll_remote<M>(poll_client: &mut Option<Get>, reemit: bool, meta: M) -> PollResult<M> {
     // poll if we have a client
     if let Some(ref mut client) = poll_client {
-        // Only enter the poll span if not unmanaged
-        let span = info_span!("poll_remote", success_rate = field::Empty);
-        let _ = span.enter();
-
         let value = match client.get().await {
             Ok(res) if reemit || res.modified => res.value,
             Ok(_) => None,
@@ -62,9 +58,6 @@ pub async fn poll_remote<M>(poll_client: &mut Option<Get>, reemit: bool, meta: M
                 None
             }
         };
-
-        let metrics = client.metrics();
-        span.record("success_rate", metrics.success_rate());
 
         (value, meta)
     } else {
@@ -117,7 +110,7 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
     }
 }
 
-#[instrument(skip_all, fields(success_rate=field::Empty))]
+#[instrument(skip_all)]
 async fn send_report(client: &mut Patch, report: Report, last_report: LastReport) -> LastReport {
     // TODO: calculate differences with the last report and just send that
     let res = match client.patch(report.clone().into()).await {
@@ -127,9 +120,6 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
             last_report
         }
     };
-
-    let metrics = client.metrics();
-    Span::current().record("success_rate", metrics.success_rate());
 
     res
 }

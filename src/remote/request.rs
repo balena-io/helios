@@ -368,7 +368,7 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
     pub async fn get(&mut self) -> Result<GetResponse, GetError> {
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
@@ -377,6 +377,7 @@ impl Get {
             match self.try_get().await {
                 Ok(response) => {
                     Span::current().record("retries", tries - 1);
+                    Span::current().record("success_rate", self.metrics().success_rate());
                     return Ok(response);
                 }
                 Err(TryGetError::WillRetry(_, _)) => {
@@ -396,7 +397,7 @@ impl Get {
     /// println!("Success rate: {:.1}%", metrics.success_rate());
     /// println!("Total requests: {}", metrics.total_requests());
     /// ```
-    pub fn metrics(&self) -> RequestMetrics {
+    fn metrics(&self) -> RequestMetrics {
         RequestMetrics {
             success_count: self.state.success_count,
             error_count: self.state.error_count,
@@ -456,7 +457,7 @@ impl Patch {
     /// let result = client.patch(json!({"status": "running"})).await?;
     /// println!("Patch succeeded");
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
     pub async fn patch(
         &mut self,
         new_state: serde_json::Value,
@@ -468,6 +469,7 @@ impl Patch {
             match Self::try_patch(&mut self.state, new_state.clone()).await {
                 Ok(_status) => {
                     Span::current().record("retries", tries - 1);
+                    Span::current().record("success_rate", self.metrics().success_rate());
                     return Ok(());
                 }
                 Err(TryPatchError::WillRetry(_, _)) => {
