@@ -1,4 +1,27 @@
 - commits:
+    - subject: Split the main loop into poll and seek/report
+      hash: 6e3fc368bb5aaefaeb6e7a7103a9830678015a0b
+      body: |
+        The poll loop is just disabled if running in unmanaged mode.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Re-set back-off timer on new get/patch requests
+      hash: 5983c81bb24c7905a1b0e7cfff20406af34dad8d
+      body: |
+        This ensures the back off timer is re-set after on a new request, to
+        avoid unnecessary waiting after a request is dropped.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.2
+  title: ""
+  date: 2025-07-18T17:49:28.174Z
+- commits:
     - subject: Refactor update request management
       hash: 0cc6bbbb0c291bb0af40bdb248910e85293eb7c6
       body: |
