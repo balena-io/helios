@@ -164,6 +164,10 @@ impl RequestState {
         }
     }
 
+    fn reset_backoff(&mut self) {
+        self.current_backoff = self.config.min_interval;
+    }
+
     fn reset_interval(&mut self) {
         self.next_retry = Some(Instant::now() + self.config.min_interval);
     }
@@ -364,13 +368,16 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
     pub async fn get(&mut self) -> Result<GetResponse, GetError> {
+        // re-set the back off in case the last request was dropped
+        self.state.reset_backoff();
         let mut tries = 1;
         loop {
             match self.try_get().await {
                 Ok(response) => {
                     Span::current().record("retries", tries - 1);
+                    Span::current().record("success_rate", self.metrics().success_rate());
                     return Ok(response);
                 }
                 Err(TryGetError::WillRetry(_, _)) => {
@@ -390,7 +397,7 @@ impl Get {
     /// println!("Success rate: {:.1}%", metrics.success_rate());
     /// println!("Total requests: {}", metrics.total_requests());
     /// ```
-    pub fn metrics(&self) -> RequestMetrics {
+    fn metrics(&self) -> RequestMetrics {
         RequestMetrics {
             success_count: self.state.success_count,
             error_count: self.state.error_count,
@@ -450,16 +457,19 @@ impl Patch {
     /// let result = client.patch(json!({"status": "running"})).await?;
     /// println!("Patch succeeded");
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
     pub async fn patch(
         &mut self,
         new_state: serde_json::Value,
     ) -> Result<PatchResponse, PatchError> {
+        // re-set the back off in case the last request was dropped
+        self.state.reset_backoff();
         let mut tries = 1;
         loop {
             match Self::try_patch(&mut self.state, new_state.clone()).await {
                 Ok(_status) => {
                     Span::current().record("retries", tries - 1);
+                    Span::current().record("success_rate", self.metrics().success_rate());
                     return Ok(());
                 }
                 Err(TryPatchError::WillRetry(_, _)) => {
@@ -1129,6 +1139,131 @@ mod tests {
         mock_409.assert_async().await;
         mock_502_fail.assert_async().await;
         mock_502_success.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_request_backoff_reset_on_drop() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // First request fails with 500 to trigger backoff
+        let mock1 = server
+            .mock("GET", "/")
+            .with_status(500)
+            .create_async()
+            .await;
+
+        // Second request fails with 500 to trigger more backoff
+        let mock2 = server
+            .mock("GET", "/")
+            .with_status(500)
+            .create_async()
+            .await;
+
+        // Third request succeeds after backoff reset
+        let mock3 = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status": "success"}"#)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(50),
+            max_backoff: Duration::from_secs(10), // Long backoff to test reset
+            api_token: None,
+        };
+
+        let mut client = Get::new(endpoint, config);
+
+        // Start first request that will fail and increase backoff
+        let first_request = client.get();
+
+        // Drop the future before the second request
+        tokio::select! {
+            _ = first_request => {}
+            _ = tokio::time::sleep(Duration::from_millis(90)) => {}
+        }
+
+        // This request should use start the backoff from min_interval
+        let start_time = std::time::Instant::now();
+        let _result = client.get().await.unwrap();
+        let elapsed = start_time.elapsed();
+
+        // Should complete within 2 * min_interval + network time, meaning the backoff was re-set
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "Request should have reset backoff timer, but took {elapsed:#?}"
+        );
+
+        mock1.assert_async().await;
+        mock2.assert_async().await;
+        mock3.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_patch_request_backoff_reset_on_drop() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // First request fails with 500 to trigger backoff
+        let mock1 = server
+            .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "test"})))
+            .with_status(500)
+            .create_async()
+            .await;
+
+        // Second request fails with 500 to trigger more backoff
+        let mock2 = server
+            .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "test"})))
+            .with_status(500)
+            .create_async()
+            .await;
+
+        // Third request succeeds after backoff reset
+        let mock3 = server
+            .mock("PATCH", "/")
+            .match_body(Matcher::Json(json!({"status": "test"})))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(50),
+            max_backoff: Duration::from_secs(10), // Long backoff to test reset
+            api_token: None,
+        };
+
+        let mut client = Patch::new(endpoint, config);
+
+        // Start first request that will fail and increase backoff
+        let first_request = client.patch(json!({"status": "test"}));
+
+        // Drop the future before the second request
+        tokio::select! {
+            _ = first_request => {}
+            _ = tokio::time::sleep(Duration::from_millis(90)) => {}
+        }
+
+        // This request should use start the backoff from min_interval
+        let start_time = std::time::Instant::now();
+        client.patch(json!({"status": "test"})).await.unwrap();
+        let elapsed = start_time.elapsed();
+
+        // Should complete within 2 * min_interval + network time, meaning the backoff was re-set
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "Request should have reset backoff timer, but took {elapsed:#?}"
+        );
+
+        mock1.assert_async().await;
+        mock2.assert_async().await;
+        mock3.assert_async().await;
     }
 
     #[test]

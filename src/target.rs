@@ -18,7 +18,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::config::{Config, FallbackConfig, Uuid};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
-    get_poll_client, get_report_client, next_poll, poll_remote_if_managed, send_report_if_managed,
+    get_poll_client, get_report_client, next_poll, poll_remote, send_report_if_managed,
     DeviceReport, LastReport, PollResult, Report,
 };
 
@@ -349,22 +349,94 @@ pub enum StartSupervisorError {
     LegacyUpdate(#[from] FallbackError),
 }
 
-#[instrument(name = "main", skip_all, err)]
-pub async fn start(
-    config: Config,
-    current_state: CurrentState,
-    fallback_state: FallbackState,
-    mut update_request_rx: Receiver<UpdateRequest>,
-    update_request_tx: Sender<UpdateRequest>,
-) -> Result<(), StartSupervisorError> {
-    info!("starting");
-
-    let mut poll_client = get_poll_client(&config);
-    let mut report_client = get_report_client(&config);
-
+#[instrument(name = "poll", skip_all)]
+pub async fn start_poll(
+    config: &Config,
+    mut poll_rx: Receiver<UpdateRequest>,
+    seek_tx: Sender<UpdateRequest>,
+) {
+    let mut poll_client = get_poll_client(config);
     if poll_client.is_none() {
         warn!("running in unmanaged mode");
+        // just disable this branch
+        future::pending::<()>().await;
     }
+    info!("ready");
+
+    // Poll trigger variables
+    let mut next_poll_time = Instant::now() + next_poll(config);
+    let mut poll_future: Pin<Box<dyn Future<Output = PollResult<UpdateOpts>>>> =
+        Box::pin(poll_remote(&mut poll_client, false, UpdateOpts::default()));
+    loop {
+        tokio::select! {
+            // Wake up on poll if not applying changes
+            _ = tokio::time::sleep_until(next_poll_time) => {
+                // Start the poll future
+                drop(poll_future);
+                poll_future = Box::pin(poll_remote(&mut poll_client, false, UpdateOpts::default()));
+                // Reset the poll interval to avoid busy waiting
+                next_poll_time = Instant::now() + next_poll(config);
+            }
+
+            // Handle poll completion
+            response = &mut poll_future => {
+                // Reset the polling state
+                poll_future = Box::pin(future::pending());
+                next_poll_time = Instant::now() + next_poll(config);
+
+                // If there is a new target
+                if let (Some(target_state), opts) = response {
+                    // put the poll back on the channel
+                    match serde_json::from_value::<TargetState>(target_state.clone()) {
+                        Ok(TargetState(mut map)) => {
+                            if let Some(target) = map.remove(&config.uuid) {
+                                let _ = seek_tx.send(UpdateRequest::Seek {target, opts, raw_target: Some(target_state)});
+                            }
+                            else {
+                                error!("no target for uuid {} found on target state", config.uuid);
+                            }
+                        },
+                        Err(e)  => {
+                            // FIXME: we'll need to reject the target if it cannot be deserialized
+                            warn!("failed to deserialize target state: {e}");
+                        }
+                    };
+                }
+            }
+
+            // Handle a poll request
+            update_requested = poll_rx.changed() => {
+                if update_requested.is_err() {
+                    // Not really an error, it just means the API closed
+                    trace!("request channel closed");
+                    break;
+                }
+
+                let update_req = poll_rx.borrow_and_update().clone();
+
+                // If a poll request is received, just trigger a new poll
+                if let UpdateRequest::Poll { opts, reemit } = update_req {
+                        // Trigger a new poll
+                        drop(poll_future);
+                        poll_future = Box::pin(poll_remote(&mut poll_client, reemit, opts));
+                        next_poll_time = Instant::now() + next_poll(config);
+                }
+            }
+
+        }
+    }
+}
+
+#[instrument(name = "core", skip_all, err)]
+pub async fn start_core(
+    config: &Config,
+    current_state: CurrentState,
+    fallback_state: FallbackState,
+    mut seek_rx: Receiver<UpdateRequest>,
+) -> Result<(), StartSupervisorError> {
+    info!("waiting for target");
+
+    let mut report_client = get_report_client(config);
 
     // Read the initial state
     let initial_state = current_state.read().await;
@@ -390,71 +462,23 @@ pub async fn start(
     let mut next_target: (Option<TargetDevice>, UpdateOpts, Option<Value>) =
         (None, UpdateOpts::default(), None);
 
-    // Poll trigger variables
-    let mut next_poll_time = Instant::now() + next_poll(&config);
-    let mut poll_future: Pin<Box<dyn Future<Output = PollResult<UpdateOpts>>>> = Box::pin(
-        poll_remote_if_managed(&mut poll_client, false, UpdateOpts::default()),
-    );
-
     // Main loop, polls state, applies changes and reports state
     // operations may be interrupted by an update request or a new target state
     // coming from the API
     loop {
         tokio::select! {
-            // Wake up on poll if not applying changes
-            _ = tokio::time::sleep_until(next_poll_time) => {
-                // Start the poll future
-                drop(poll_future);
-                poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, false, UpdateOpts::default()));
-                // Reset the poll interval to avoid busy waiting
-                next_poll_time = Instant::now() + next_poll(&config);
-            }
-
-            // Handle poll completion
-            response = &mut poll_future => {
-                // Reset the polling state
-                poll_future = Box::pin(future::pending());
-                next_poll_time = Instant::now() + next_poll(&config);
-
-                // If there is a new target
-                if let (Some(target_state), opts) = response {
-                    // put the poll back on the channel
-                    match serde_json::from_value::<TargetState>(target_state.clone()) {
-                        Ok(TargetState(mut map)) => {
-                            if let Some(target) = map.remove(&config.uuid) {
-                                let _ = update_request_tx.send(UpdateRequest::Seek {target, opts, raw_target: Some(target_state)});
-                            }
-                            else {
-                                error!("no target for uuid {} found on target state", config.uuid);
-                            }
-                        },
-                        Err(e)  => {
-                            // FIXME: we'll need to reject the target if it cannot be deserialized
-                            warn!("failed to deserialize target state: {e}");
-                        }
-                    };
-                }
-            }
-
-
             // Wake on update request
-            update_requested = update_request_rx.changed() => {
+            update_requested = seek_rx.changed() => {
                 if update_requested.is_err() {
                     // Not really an error, it just means the API closed
                     trace!("request channel closed");
                     break;
                 }
 
-                let update_req = update_request_rx.borrow_and_update().clone();
+                let update_req = seek_rx.borrow_and_update().clone();
                 match (&update_req, is_apply_pending) {
-                    // If a poll request is received, just trigger a new poll
-                    (UpdateRequest::Poll { opts, reemit }, _) => {
-                        // Trigger a new poll
-                        drop(poll_future);
-                        poll_future = Box::pin(poll_remote_if_managed(&mut poll_client, *reemit, opts.clone()));
-                        next_poll_time = Instant::now() + next_poll(&config);
-                        continue;
-                    }
+                    // Ignore poll requests since they are handled elsewhere
+                    (UpdateRequest::Poll { .. }, _) => continue,
                     // If a cancellation request is received, then interrupt the target
                     (UpdateRequest::Seek { opts: UpdateOpts {cancel: true, ..}, ..}, true) => {
                         // interrupt the existing target and wait for it to finish

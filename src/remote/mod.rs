@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{field, info_span, instrument, warn, Span};
+use tracing::{instrument, warn};
 
 mod request;
 
@@ -35,33 +35,6 @@ pub fn get_poll_client(config: &Config) -> Option<Get> {
     }
 }
 
-// Return type from poll_remote with metadata
-pub type PollResult<M> = (Option<Value>, M);
-
-#[instrument(skip_all, fields(success_rate = field::Empty))]
-pub async fn poll_remote(client: &mut Get, reemit: bool) -> Option<Value> {
-    // Only enter the poll span if not unmanaged
-    let span = info_span!("poll_remote", success_rate = field::Empty);
-    let _ = span.enter();
-
-    let result = client.get().await;
-
-    // Reset the poll timer after we get the response
-    let res = match result {
-        Ok(response) if reemit || response.modified => response.value,
-        Ok(_) => None,
-        Err(e) => {
-            warn!("poll failed: {e}");
-            None
-        }
-    };
-
-    let metrics = client.metrics();
-    span.record("success_rate", metrics.success_rate());
-
-    res
-}
-
 pub fn next_poll(config: &Config) -> Duration {
     let max_jitter = &config.remote.max_poll_jitter;
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
@@ -69,16 +42,24 @@ pub fn next_poll(config: &Config) -> Duration {
     config.remote.poll_interval + jitter
 }
 
+// Return type from poll_remote with metadata
+pub type PollResult<M> = (Option<Value>, M);
+
 /// Poll the remote target returning the metadata back
-/// to the caller
-pub async fn poll_remote_if_managed<M>(
-    poll_client: &mut Option<Get>,
-    reemit: bool,
-    meta: M,
-) -> PollResult<M> {
+/// to the caller after the request succeeds
+pub async fn poll_remote<M>(poll_client: &mut Option<Get>, reemit: bool, meta: M) -> PollResult<M> {
     // poll if we have a client
     if let Some(ref mut client) = poll_client {
-        (poll_remote(client, reemit).await, meta)
+        let value = match client.get().await {
+            Ok(res) if reemit || res.modified => res.value,
+            Ok(_) => None,
+            Err(e) => {
+                warn!("poll failed: {e}");
+                None
+            }
+        };
+
+        (value, meta)
     } else {
         (None, meta)
     }
@@ -129,7 +110,7 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
     }
 }
 
-#[instrument(skip_all, fields(success_rate=field::Empty))]
+#[instrument(skip_all)]
 async fn send_report(client: &mut Patch, report: Report, last_report: LastReport) -> LastReport {
     // TODO: calculate differences with the last report and just send that
     let res = match client.patch(report.clone().into()).await {
@@ -139,9 +120,6 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
             last_report
         }
     };
-
-    let metrics = client.metrics();
-    Span::current().record("success_rate", metrics.success_rate());
 
     res
 }
