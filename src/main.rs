@@ -23,7 +23,7 @@ use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
 use register::register;
-use state::Device;
+use state::models::Device;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -78,7 +78,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     );
 
     // Set-up a channel to receive update requests coming from the API
-    let (update_request_tx, update_request_rx) = watch::channel(target::UpdateRequest::default());
+    let (update_request_tx, update_request_rx) = watch::channel(state::UpdateRequest::default());
 
     // Try to bind to the API port first, this will avoid doing an extra poll
     // if the local port is taken
@@ -94,7 +94,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     // Start the API and the main loop and terminate on any error
     tokio::select! {
         _ = api::start(listener, update_request_tx.clone(), current_state.clone(), fallback_state.clone()) => Ok(()),
-        _ = target::start_poll(&config, update_request_rx.clone(), update_request_tx) => Ok(()),
-        res = target::start_core(&config, current_state, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
+        _ = state::start_poll(&config, update_request_rx.clone(), update_request_tx) => Ok(()),
+        res = state::start_core(&config, current_state, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
     }
 }

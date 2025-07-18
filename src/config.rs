@@ -2,10 +2,11 @@ use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
+
+use crate::state::models::Uuid;
 
 /// Local API listen address
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,41 +40,6 @@ impl Default for LocalAddress {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             48484,
         ))
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Uuid(String);
-
-impl Deref for Uuid {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Default for Uuid {
-    fn default() -> Self {
-        Self(uuid::Uuid::new_v4().simple().to_string())
-    }
-}
-
-impl Display for Uuid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<String> for Uuid {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Uuid> for String {
-    fn from(value: Uuid) -> Self {
-        value.0
     }
 }
 
