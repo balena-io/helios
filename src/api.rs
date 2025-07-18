@@ -99,9 +99,9 @@ async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -
     } else {
         let opts = serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
 
-        // Create an update request with an empty target to tell
-        // the main loop to initiate a new target poll from the API
-        UpdateRequest { target: None, opts }
+        // Create a poll request with reemit: true to tell the main loop
+        // to re-apply the target even if it was modified
+        UpdateRequest::Poll { opts, reemit: true }
     };
 
     if update_request_tx.send(request).is_err() {
@@ -132,12 +132,13 @@ async fn get_device_cur_state(State(current_state): State<CurrentState>) -> Json
 async fn set_device_tgt_state(
     update_request_tx: Sender<UpdateRequest>,
     Query(opts): Query<UpdateOpts>,
-    Json(tgt_device): Json<TargetDevice>,
+    Json(target): Json<TargetDevice>,
 ) -> StatusCode {
     if update_request_tx
-        .send(UpdateRequest {
-            target: Some(tgt_device),
+        .send(UpdateRequest::Seek {
+            target,
             opts,
+            raw_target: None,
         })
         .is_err()
     {
@@ -176,13 +177,14 @@ async fn set_app_tgt_state(
     // - replace the relevant part of the target with the input
     // - send the full target to the channel
     let device = current_state.read().await;
-    let mut target_device: TargetDevice = device.into();
-    target_device.apps.insert(app_uuid, app);
+    let mut target: TargetDevice = device.into();
+    target.apps.insert(app_uuid, app);
 
     if update_request_tx
-        .send(UpdateRequest {
-            target: Some(target_device),
+        .send(UpdateRequest::Seek {
+            target,
             opts,
+            raw_target: None,
         })
         .is_err()
     {

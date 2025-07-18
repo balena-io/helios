@@ -93,7 +93,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {
-        _ = api::start(listener, update_request_tx, current_state.clone(), fallback_state.clone()) => Ok(()),
-        res = target::start(config, current_state, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
+        _ = api::start(listener, update_request_tx.clone(), current_state.clone(), fallback_state.clone()) => Ok(()),
+        res = target::start(config, current_state, fallback_state, update_request_rx, update_request_tx) => res.map_err(|err| err.into()),
     }
 }
