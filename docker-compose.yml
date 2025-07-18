@@ -36,8 +36,11 @@ services:
     volumes:
       # Base directory for app configuration and update locks
       - runtime:/tmp/run
+      # Service cache
+      - cache:/cache/helios
 
 volumes:
+  cache:
   runtime:
     driver: local
     driver_opts:

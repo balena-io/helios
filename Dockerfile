@@ -34,6 +34,7 @@ COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/release/helios /usr/bin
 
 VOLUME /tmp/run
+VOLUME /cache/helios
 HEALTHCHECK --interval=5m --start-period=10s --timeout=30s --retries=3 \
 	CMD echo -e "GET /v3/ping HTTP/1.1\r\nHost: localhost\r\n\r\n" | socat - UNIX-CONNECT:/tmp/run/helios.sock | grep -q "200 OK"
 CMD ["/opt/helios/start.sh"]

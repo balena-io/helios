@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{instrument, warn};
 
 mod request;
@@ -10,7 +11,7 @@ use crate::config::Config;
 use crate::util::uri::make_uri;
 use request::{Get, Patch, RequestConfig};
 
-pub fn get_poll_client(config: &Config) -> Option<Get> {
+pub async fn get_poll_client(config: &Config) -> (Option<Get>, Option<Value>) {
     if let Some(uri) = config.remote.api_endpoint.clone() {
         let endpoint = make_uri(
             uri,
@@ -27,11 +28,12 @@ pub fn get_poll_client(config: &Config) -> Option<Get> {
             api_token: config.remote.api_key.clone(),
         };
 
-        let client = Get::new(endpoint, client_config);
+        let mut client = Get::new(endpoint, client_config);
+        let cached = client.restore_cache().await.cloned();
 
-        Some(client)
+        (Some(client), cached)
     } else {
-        None
+        (None, None)
     }
 }
 
@@ -43,26 +45,27 @@ pub fn next_poll(config: &Config) -> Duration {
 }
 
 // Return type from poll_remote with metadata
-pub type PollResult<M> = (Option<Value>, M);
+pub type PollResult<M> = (Option<Value>, M, Instant);
 
 /// Poll the remote target returning the metadata back
 /// to the caller after the request succeeds
-pub async fn poll_remote<M>(poll_client: &mut Option<Get>, reemit: bool, meta: M) -> PollResult<M> {
+pub async fn poll_remote<M>(
+    config: &Config,
+    poll_client: &mut Get,
+    reemit: bool,
+    meta: M,
+) -> PollResult<M> {
     // poll if we have a client
-    if let Some(ref mut client) = poll_client {
-        let value = match client.get().await {
-            Ok(res) if reemit || res.modified => res.value,
-            Ok(_) => None,
-            Err(e) => {
-                warn!("poll failed: {e}");
-                None
-            }
-        };
+    let value = match poll_client.get().await {
+        Ok(res) if reemit || res.modified => res.value,
+        Ok(_) => None,
+        Err(e) => {
+            warn!("poll failed: {e}");
+            None
+        }
+    };
 
-        (value, meta)
-    } else {
-        (None, meta)
-    }
+    (value, meta, Instant::now() + next_poll(config))
 }
 
 #[derive(Serialize, Debug, Clone)]

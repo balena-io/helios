@@ -248,25 +248,37 @@ pub async fn start_poll(
     mut poll_rx: Receiver<UpdateRequest>,
     seek_tx: Sender<UpdateRequest>,
 ) {
-    let mut poll_client = get_poll_client(config);
-    if poll_client.is_none() {
-        warn!("running in unmanaged mode");
-        // just disable this branch
-        future::pending::<()>().await;
-    }
+    let (mut poll_client, initial_target) = match get_poll_client(config).await {
+        (Some(client), cached) => (client, cached),
+        (None, _) => {
+            warn!("running in unmanaged mode");
+            // just disable this branch
+            return future::pending::<()>().await;
+        }
+    };
     info!("ready");
 
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(config);
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult<UpdateOpts>>>> =
-        Box::pin(poll_remote(&mut poll_client, false, UpdateOpts::default()));
+        // Use the client cached target if any as the result of the first poll
+        if let Some(target_state) = initial_target {
+            Box::pin(async move { (Some(target_state), UpdateOpts::default(), Instant::now() + config.remote.min_interval) })
+        } else {
+            Box::pin(poll_remote(
+                config,
+                &mut poll_client,
+                false,
+                UpdateOpts::default(),
+            ))
+        };
     loop {
         tokio::select! {
             // Wake up on poll if not applying changes
             _ = tokio::time::sleep_until(next_poll_time) => {
-                // Start the poll future
                 drop(poll_future);
-                poll_future = Box::pin(poll_remote(&mut poll_client, false, UpdateOpts::default()));
+                // Trigger a new poll
+                poll_future = Box::pin(poll_remote(config, &mut poll_client, false, UpdateOpts::default()));
                 // Reset the poll interval to avoid busy waiting
                 next_poll_time = Instant::now() + next_poll(config);
             }
@@ -275,10 +287,11 @@ pub async fn start_poll(
             response = &mut poll_future => {
                 // Reset the polling state
                 poll_future = Box::pin(future::pending());
-                next_poll_time = Instant::now() + next_poll(config);
+                let (value, opts, next_poll) = response;
+                next_poll_time = next_poll;
 
                 // If there is a new target
-                if let (Some(target_state), opts) = response {
+                if let (Some(target_state), opts) = (value, opts) {
                     // put the poll back on the channel
                     match serde_json::from_value::<TargetState>(target_state.clone()) {
                         Ok(TargetState(mut map)) => {
@@ -311,7 +324,7 @@ pub async fn start_poll(
                 if let UpdateRequest::Poll { opts, reemit } = update_req {
                         // Trigger a new poll
                         drop(poll_future);
-                        poll_future = Box::pin(poll_remote(&mut poll_client, reemit, opts));
+                        poll_future = Box::pin(poll_remote(config, &mut poll_client, reemit, opts));
                         next_poll_time = Instant::now() + next_poll(config);
                 }
             }
