@@ -79,7 +79,7 @@ pub async fn start(
         )
         .with_state(current_state);
 
-    info!("starting");
+    info!("ready");
 
     // safe because `serve` will never return an error (or return at all).
     match listener {
