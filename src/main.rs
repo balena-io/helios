@@ -16,14 +16,14 @@ mod config;
 mod fallback;
 mod register;
 mod remote;
-mod target;
+mod state;
 mod util;
 
 use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
 use register::register;
-use target::Device;
+use state::Device;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
