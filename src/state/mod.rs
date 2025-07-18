@@ -172,7 +172,7 @@ struct SeekConfig {
     raw_target: Option<Value>,
 }
 
-type SeekResult = Result<SeekState, SeekError>;
+type SeekResult = Result<SeekState, CoreError>;
 async fn seek_target(
     worker: &mut LocalWorker,
     config: SeekConfig,
@@ -212,12 +212,10 @@ async fn seek_target(
         // the fallback
         fallback_state.set_target_state(target_state).await;
         let interrupted = tokio::select! {
-            _ = legacy_update(
-                            uri,
-                            config.fallback.api_key.clone(),
-                            config.update_opts.force,
-                            config.update_opts.cancel,
-                        ) => false,
+            res = legacy_update(uri, config.fallback.api_key.clone(), config.update_opts.force, config.update_opts.cancel) => {
+                res?;
+                false
+            },
             _ = interrupt.wait() => true
         };
 
@@ -233,7 +231,7 @@ async fn seek_target(
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum StartSupervisorError {
+pub enum CoreError {
     #[error("Failed to create worker: {0}")]
     CreateWorker(#[from] worker::CreateError),
 
@@ -328,7 +326,7 @@ pub async fn start_core(
     current_state: CurrentState,
     fallback_state: FallbackState,
     mut seek_rx: Receiver<UpdateRequest>,
-) -> Result<(), StartSupervisorError> {
+) -> Result<(), CoreError> {
     info!("waiting for target");
 
     let mut report_client = get_report_client(config);
