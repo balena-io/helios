@@ -1,4 +1,54 @@
 - commits:
+    - subject: Refactor update request management
+      hash: 0cc6bbbb0c291bb0af40bdb248910e85293eb7c6
+      body: |
+        Replace UpdateRequest struct with enum variants (Poll/Seek) to properly
+        separate polling from target seeking operations. Add request queuing to
+        handle concurrent target updates and avoid busy waiting on the main
+        target apply loop.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Group target apply calls into a function
+      hash: 6554476e1a71d3f6feed7208a21986d4465cb6a9
+      body: |
+        This simplifies the loop by removing the need for tracking the mahler
+        and legacy apply steps separately
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fix busy waiting on worker stream
+      hash: 03bbf2ad40ce7253af569028a9e8dd10e74cdf22
+      body: |
+        The stream was not reinitialized after dropping the worker so the loop
+        was busy waiting since the stream would just return `None` after that
+        point
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Reset the poll time after triggering new poll
+      hash: f9d64ad021e440940c2c9c9273a080cf6603166a
+      body: |
+        The use of `is_poll_pending` was equivalent to busy waiting and keeping
+        the CPU spinning at a 100%. This change makes it so the poll interval is
+        re-set before and after each poll_future return so the timer will only
+        be ignored during the time the target state is applying (will be fixed
+        in an new commit).
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.1
+  title: ""
+  date: 2025-07-18T11:37:30.700Z
+- commits:
     - subject: Use socket rather than host networking
       hash: 215e1d0d6285ac5636de7ef7dd8e8d945dfa5a40
       body: |
