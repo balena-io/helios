@@ -15,11 +15,9 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::config::Uuid;
 use crate::fallback::{proxy_legacy, FallbackState};
-use crate::target::{
-    App, CurrentState, Device, TargetApp, TargetDevice, TargetStatus, UpdateOpts, UpdateRequest,
-};
+use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
+use crate::state::{CurrentState, TargetStatus, UpdateOpts, UpdateRequest};
 
 pub enum Listener {
     Tcp(TcpListener),

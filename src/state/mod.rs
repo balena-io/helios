@@ -1,5 +1,8 @@
-use bollard::Docker;
 use futures_lite::StreamExt;
+use mahler::{
+    worker::{SeekError, SeekStatus},
+    workflow::Interrupt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -15,19 +18,18 @@ use tokio::sync::{
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::config::{Config, FallbackConfig, Uuid};
+use crate::config::{Config, FallbackConfig};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
 use crate::remote::{
     get_poll_client, get_report_client, next_poll, poll_remote, send_report_if_managed,
     DeviceReport, LastReport, PollResult, Report,
 };
 
-use mahler::{
-    extract::{Args, Pointer, Target, View},
-    task::create,
-    worker::{Ready, SeekError, SeekStatus, Worker},
-};
-use mahler::{task::update, workflow::Interrupt};
+pub mod models;
+mod worker;
+
+use models::{Device, TargetDevice, Uuid};
+use worker::{create, LocalWorker};
 
 #[derive(Clone, Serialize, Default, Debug)]
 #[serde(tag = "status", content = "errors", rename_all = "snake_case")]
@@ -91,46 +93,7 @@ impl CurrentState {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct Image {
-    pub docker_id: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct App {
-    pub name: String,
-}
-
-type DeviceConfig = HashMap<String, String>;
-
-/// Current state of a device
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct Device {
-    /// The device UUID
-    pub uuid: Uuid,
-
-    /// List of docker images on the device
-    pub images: HashMap<String, Image>,
-
-    /// Apps on the device
-    pub apps: HashMap<Uuid, App>,
-
-    /// Config vars
-    pub config: DeviceConfig,
-}
-
 impl Device {
-    /// Read the host and apps state from the underlying system
-    pub fn initial_for(uuid: Uuid) -> Self {
-        // TODO: read initial state from the engine
-        Self {
-            uuid,
-            images: HashMap::new(),
-            apps: HashMap::new(),
-            config: HashMap::new(),
-        }
-    }
-
     /// Convenience for `self.into::<CurrentState>()`
     pub fn into_current_state(self) -> CurrentState {
         self.into()
@@ -153,24 +116,6 @@ impl From<Device> for DeviceReport {
 impl From<Device> for Report {
     fn from(device: Device) -> Self {
         Report::new(HashMap::from([(device.uuid.clone().into(), device.into())]))
-    }
-}
-
-// Alias the App for now, the target app will have
-// its own structure eventually
-pub type TargetApp = App;
-
-/// Target state of a device
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct TargetDevice {
-    pub apps: HashMap<Uuid, TargetApp>,
-    pub config: DeviceConfig,
-}
-
-impl From<Device> for TargetDevice {
-    fn from(device: Device) -> Self {
-        let Device { apps, config, .. } = device;
-        Self { apps, config }
     }
 }
 
@@ -213,56 +158,6 @@ impl Default for UpdateRequest {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CreateWorkerError {
-    #[error("Failed to connect to Docker daemon: {0}")]
-    DockerConnection(#[from] bollard::errors::Error),
-
-    #[error("Failed to serialize initial state: {0}")]
-    StateSerialization(#[from] mahler::errors::SerializationError),
-}
-
-/// Store configuration in memory
-fn store_config(
-    mut config: View<DeviceConfig>,
-    Target(tgt_config): Target<DeviceConfig>,
-) -> View<DeviceConfig> {
-    // If a new config received, just update the in-memory state, the config will be handled
-    // by the legacy supervisor
-    *config = tgt_config;
-    config
-}
-
-/// Initialize the app in memory
-fn new_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
-    let TargetApp { name, .. } = tgt_app;
-    app.assign(App { name });
-    app
-}
-
-fn create_worker(
-    /* jobs: ..., */
-    initial: Device,
-) -> Result<Worker<Device, Ready, TargetDevice>, CreateWorkerError> {
-    // Initialize the connection
-    let docker = Docker::connect_with_defaults().map_err(CreateWorkerError::DockerConnection)?;
-
-    Worker::new()
-        .resource(docker)
-        .job(
-            "/apps/{app_uuid}",
-            create(new_app).with_description(|Args(uuid): Args<Uuid>| {
-                format!("initialize app with uuid '{uuid}'")
-            }),
-        )
-        .job(
-            "/config",
-            update(store_config).with_description(|| "store device configuration"),
-        )
-        .initial_state(initial)
-        .map_err(CreateWorkerError::StateSerialization)
-}
-
 #[derive(Clone)]
 enum SeekState {
     Reset,
@@ -277,9 +172,9 @@ struct SeekConfig {
     raw_target: Option<Value>,
 }
 
-type SeekResult = Result<SeekState, SeekError>;
+type SeekResult = Result<SeekState, CoreError>;
 async fn seek_target(
-    worker: &mut Worker<Device, Ready, TargetDevice>,
+    worker: &mut LocalWorker,
     config: SeekConfig,
     interrupt: Interrupt,
     cur_state: &CurrentState,
@@ -317,12 +212,10 @@ async fn seek_target(
         // the fallback
         fallback_state.set_target_state(target_state).await;
         let interrupted = tokio::select! {
-            _ = legacy_update(
-                            uri,
-                            config.fallback.api_key.clone(),
-                            config.update_opts.force,
-                            config.update_opts.cancel,
-                        ) => false,
+            res = legacy_update(uri, config.fallback.api_key.clone(), config.update_opts.force, config.update_opts.cancel) => {
+                res?;
+                false
+            },
             _ = interrupt.wait() => true
         };
 
@@ -338,9 +231,9 @@ async fn seek_target(
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum StartSupervisorError {
+pub enum CoreError {
     #[error("Failed to create worker: {0}")]
-    CreateWorker(#[from] CreateWorkerError),
+    CreateWorker(#[from] worker::CreateError),
 
     #[error("Failed to reach target state: {0}")]
     SeekTargetState(#[from] SeekError),
@@ -433,7 +326,7 @@ pub async fn start_core(
     current_state: CurrentState,
     fallback_state: FallbackState,
     mut seek_rx: Receiver<UpdateRequest>,
-) -> Result<(), StartSupervisorError> {
+) -> Result<(), CoreError> {
     info!("waiting for target");
 
     let mut report_client = get_report_client(config);
@@ -443,7 +336,7 @@ pub async fn start_core(
 
     // Create a mahler Worker instance
     // and start following changes
-    let mut worker = create_worker(initial_state.clone())?;
+    let mut worker = create(initial_state.clone())?;
     let mut worker_stream = worker.follow();
 
     // Reporting variables
@@ -564,7 +457,7 @@ pub async fn start_core(
 
                     // Update the global state
                     current_state.write(initial_state.clone()).await;
-                    worker = create_worker(initial_state)?;
+                    worker = create(initial_state)?;
                     worker_stream = worker.follow();
                 }
 
