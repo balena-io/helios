@@ -124,18 +124,39 @@ struct TargetState(HashMap<Uuid, TargetDevice>);
 
 /// Options for controlling processing of a new target
 /// by the main loop
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UpdateOpts {
-    /// Trigger an update ignoring locks
+    /// Ignore locks on the next apply
+    /// defaults to false
     #[serde(default)]
     pub force: bool,
 
     /// Cancel the current update if any
-    #[serde(default)]
+    /// defaults to true, unless the value is coming
+    /// from the API for backwards compatibility
+    #[serde(default = "api_cancel_default")]
     pub cancel: bool,
 }
 
+fn api_cancel_default() -> bool {
+    false
+}
+
+impl Default for UpdateOpts {
+    fn default() -> Self {
+        Self {
+            force: false,
+            cancel: true,
+        }
+    }
+}
+
 /// An update request coming from the API
+///
+/// Defaults to UpdateRequest::Poll {reemit: true, UpdateOpts::default()}
+///
+/// This means a new poll request coming will always re-apply the target even if the API request
+/// returns a 304. This is to allow an aborted apply to be re-tried.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UpdateRequest {
     Poll {
@@ -277,7 +298,7 @@ pub async fn start_poll(
             // Wake up on poll if not applying changes
             _ = tokio::time::sleep_until(next_poll_time) => {
                 drop(poll_future);
-                // Trigger a new poll
+                // Trigger a new poll cancelling any pending apply if a new state is received
                 poll_future = Box::pin(poll_remote(config, &mut poll_client, false, UpdateOpts::default()));
                 // Reset the poll interval to avoid busy waiting
                 next_poll_time = Instant::now() + next_poll(config);
