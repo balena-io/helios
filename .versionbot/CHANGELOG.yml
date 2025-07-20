@@ -1,4 +1,27 @@
 - commits:
+    - subject: Rename SupervisorError to CoreError
+      hash: c41839d57494b3b702e7c80743551360831784b0
+      body: |
+        Make sure legacy errors terminate the program
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Split state module into state/worker/models
+      hash: 39673ef6848137e1e12f84e7094c45feae49066c
+      body: |
+        - worker defines jobs and worker creation functions
+        - models includes models for managing the internal state
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.3
+  title: ""
+  date: 2025-07-20T11:53:47.573Z
+- commits:
     - subject: Split the main loop into poll and seek/report
       hash: 6e3fc368bb5aaefaeb6e7a7103a9830678015a0b
       body: |
