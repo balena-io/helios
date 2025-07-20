@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -77,17 +78,12 @@ struct CacheEntry {
 
 /// Generate cache file path based on endpoint
 fn get_cache_path(endpoint: &str) -> PathBuf {
-    let url_without_protocol = endpoint
-        .strip_prefix("https://")
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .unwrap_or(endpoint);
+    let hash = Sha256::digest(endpoint.as_bytes());
 
-    let url_without_query = url_without_protocol
-        .split('?')
-        .next()
-        .unwrap_or(url_without_protocol);
-
-    let filename = url_without_query.replace(['/', ':'], "_") + ".json";
+    // Use first 16 bytes of hash for filename
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    let filename = format!("{:032x}.json", u128::from_be_bytes(bytes));
 
     let cache_dir = if let Some(cache_dir) = dirs::cache_dir() {
         cache_dir.join(env!("CARGO_PKG_NAME"))
