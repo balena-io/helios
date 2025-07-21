@@ -110,22 +110,28 @@ pub async fn start_poll(
 
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(config);
-    let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>> =
-        // Use the client cached target if any as the result of the first poll
-        if let Some(target_state) = initial_target {
-            Box::pin(async move {
-                (Some(target_state), UpdateOpts::default(), Instant::now() + config.remote.min_interval)
-            })
-        } else {
-            Box::pin(poll_remote(
-                config,
-                &mut poll_client,
-                PollRequest {
-                    opts: UpdateOpts::default(),
-                    reemit: false,
-                },
-            ))
-        };
+    let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>>;
+
+    // Use the client cached target if any as the result of the first poll
+    if let Some(target_state) = initial_target {
+        poll_future = Box::pin(async move {
+            (
+                Some(target_state),
+                UpdateOpts::default(),
+                Instant::now() + config.remote.min_interval,
+            )
+        });
+    } else {
+        poll_future = Box::pin(poll_remote(
+            config,
+            &mut poll_client,
+            PollRequest {
+                opts: UpdateOpts::default(),
+                reemit: false,
+            },
+        ));
+    }
+
     loop {
         tokio::select! {
             // Wake up on poll if not applying changes
