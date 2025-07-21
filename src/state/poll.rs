@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
 use crate::config::Config;
-use crate::remote::{get_poll_client, next_poll, poll_remote, PollResult};
+use crate::remote::poll::{get_poll_client, next_poll, poll_remote, PollResult};
 
 use super::models::{TargetDevice, Uuid};
 use super::seek::{SeekRequest, UpdateOpts};

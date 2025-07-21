@@ -16,7 +16,9 @@ use tracing::{error, info, instrument, trace};
 
 use crate::config::{Config, FallbackConfig};
 use crate::fallback::{legacy_update, FallbackError, FallbackState};
-use crate::remote::{get_report_client, send_report_if_managed, DeviceReport, LastReport, Report};
+use crate::remote::report::{
+    get_report_client, send_report_if_managed, DeviceReport, LastReport, Report,
+};
 
 use super::models::{Device, TargetDevice, TargetStatus};
 use super::worker::{create, CreateError as WorkerCreateError, LocalWorker};
