@@ -1,4 +1,46 @@
 - commits:
+    - subject: Merge state/poll with remote/poll
+      hash: 76344c229a7df38066df7b7ca20a705ab75386e4
+      body: >
+        Move polling into remote so that anything that has to do with the
+        backend is nested within this module.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Split poll and report into separate modules
+      hash: ddf3b43fa29ca027406736a2d844e5b639696dc8
+      body: >
+        This is preparing the next commit which will merge everything from
+        `state/poll.rs` into `remote/poll.rs`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Split poll and seek handling into separate modules
+      hash: 6a43164b158936dbac0706e9c18d8c9361b273c7
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Split Poll and Seek variants of UpdateRequest
+      hash: a1a4ea9544ccaee8f9c0eac2ee7f7872dc0bca61
+      body: >
+        This further separates triggering/handling poll and update, and makes it
+        clear which code paths handle which concern.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.4.5
+  title: ""
+  date: 2025-07-21T15:22:51.527Z
+- commits:
     - subject: Hash URL for calculating cache filename
       hash: b4b22b6a49a0bc73e8f10644f93f3dbce73a0047
       body: |
