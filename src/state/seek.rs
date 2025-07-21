@@ -21,7 +21,7 @@ use crate::remote::report::{
     get_report_client, send_report_if_managed, DeviceReport, LastReport, Report,
 };
 
-use super::models::{Device, TargetDevice, TargetStatus};
+use super::models::{Device, TargetDevice};
 use super::worker::{create, CreateError as WorkerCreateError, LocalWorker};
 
 impl From<Device> for DeviceReport {
@@ -37,14 +37,31 @@ impl From<Device> for Report {
     }
 }
 
-impl From<SeekStatus> for TargetStatus {
+/// Represents the service update status according to
+/// https://docs.balena.io/learn/manage/device-statuses/#update-statuses
+///
+/// This is basically the status of the seek loop
+///
+/// TODO: discuss later if we want  to use the interrupted state, it might make
+/// sense in case the device gets stuck on that state
+#[derive(Clone, Serialize, Default, Debug)]
+#[serde(tag = "status", content = "errors", rename_all = "snake_case")]
+pub enum UpdateStatus {
+    #[default]
+    Done,
+    ApplyingChanges,
+    Aborted(Vec<String>),
+    Interrupted,
+}
+
+impl From<SeekStatus> for UpdateStatus {
     fn from(status: SeekStatus) -> Self {
         match status {
-            SeekStatus::Success => TargetStatus::Applied,
-            SeekStatus::NotFound => TargetStatus::NotFound,
-            SeekStatus::Interrupted => TargetStatus::Interrupted,
+            SeekStatus::Success => UpdateStatus::Done,
+            SeekStatus::NotFound => UpdateStatus::Aborted(vec!["workflow not found".to_string()]),
+            SeekStatus::Interrupted => UpdateStatus::Interrupted,
             SeekStatus::Aborted(errors) => {
-                TargetStatus::Aborted(errors.iter().map(|e| e.to_string()).collect())
+                UpdateStatus::Aborted(errors.iter().map(|e| e.to_string()).collect())
             }
         }
     }
@@ -52,7 +69,7 @@ impl From<SeekStatus> for TargetStatus {
 
 struct InnerState {
     device: Device,
-    status: TargetStatus,
+    status: UpdateStatus,
 }
 
 #[derive(Clone)]
@@ -62,7 +79,7 @@ impl CurrentState {
     fn new(device: Device) -> Self {
         Self(Arc::new(RwLock::new(InnerState {
             device,
-            status: TargetStatus::default(),
+            status: UpdateStatus::default(),
         })))
     }
 
@@ -76,12 +93,12 @@ impl CurrentState {
         state.device = device;
     }
 
-    pub async fn status(&self) -> TargetStatus {
+    pub async fn status(&self) -> UpdateStatus {
         let state = self.0.read().await;
         state.status.clone()
     }
 
-    async fn set_status(&self, status: TargetStatus) {
+    async fn set_status(&self, status: UpdateStatus) {
         let mut state = self.0.write().await;
         state.status = status;
     }
@@ -173,7 +190,7 @@ async fn apply_target(
         fallback_state.clear_target_state().await;
 
         // Set the loop status
-        cur_state.set_status(TargetStatus::Applying).await;
+        cur_state.set_status(UpdateStatus::ApplyingChanges).await;
 
         // Apply the target
         let status = tokio::select! {
@@ -345,7 +362,7 @@ pub async fn start_seek(
                         interrupt.trigger();
                         prev_seek_state = apply_future.await?;
 
-                        current_state.set_status(TargetStatus::Interrupted).await;
+                        current_state.set_status(UpdateStatus::Interrupted).await;
 
                         // Reset the future
                         apply_future = Box::pin(future::pending());

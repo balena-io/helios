@@ -17,8 +17,8 @@ use tracing::{
 
 use crate::fallback::{proxy_legacy, FallbackState};
 use crate::remote::PollRequest;
-use crate::state::models::{App, Device, TargetApp, TargetDevice, TargetStatus, Uuid};
-use crate::state::{CurrentState, SeekRequest, UpdateOpts};
+use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
+use crate::state::{CurrentState, SeekRequest, UpdateOpts, UpdateStatus};
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -42,7 +42,7 @@ pub async fn start(
     let target_app_tx = seek_request_tx.clone();
     let app = Router::new()
         .route("/v3/ping", get(|| async { "OK" }))
-        .route("/v3/status", get(target_status))
+        .route("/v3/status", get(update_status))
         .route("/v3/device", get(get_device_cur_state))
         .route(
             "/v3/device",
@@ -115,7 +115,7 @@ async fn trigger_poll(poll_request_tx: Sender<PollRequest>, body: Bytes) -> Stat
 ///
 /// The request only returns the status of the local engine ignoring the status
 /// of the legacy supervisor
-async fn target_status(State(current_state): State<CurrentState>) -> Json<TargetStatus> {
+async fn update_status(State(current_state): State<CurrentState>) -> Json<UpdateStatus> {
     let status = current_state.status().await;
     Json(status)
 }
