@@ -96,3 +96,15 @@ impl From<Device> for TargetDevice {
         Self { apps, config }
     }
 }
+
+#[derive(Clone, Serialize, Default, Debug)]
+#[serde(tag = "status", content = "errors", rename_all = "snake_case")]
+pub enum TargetStatus {
+    #[default]
+    NoTargetYet,
+    Applying,
+    NotFound,
+    Interrupted,
+    Aborted(Vec<String>),
+    Applied,
+}

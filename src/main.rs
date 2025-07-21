@@ -23,7 +23,7 @@ use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
 use register::register;
-use state::models::Device;
+use state::{models::Device, CurrentState};
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -77,8 +77,9 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
         config.fallback.address.clone(),
     );
 
-    // Set-up a channel to receive update requests coming from the API
-    let (update_request_tx, update_request_rx) = watch::channel(state::UpdateRequest::default());
+    // Set-up channels to trigger state poll and updates
+    let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
+    let (poll_request_tx, poll_request_rx) = watch::channel(remote::PollRequest::default());
 
     // Try to bind to the API port first, this will avoid doing an extra poll
     // if the local port is taken
@@ -89,12 +90,12 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     debug!("bound to local address {}", config.local_address);
 
     // Load the initial state
-    let current_state = Device::initial_for(config.uuid.clone()).into_current_state();
+    let current_state: CurrentState = Device::initial_for(config.uuid.clone()).into();
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {
-        _ = api::start(listener, update_request_tx.clone(), current_state.clone(), fallback_state.clone()) => Ok(()),
-        _ = state::start_poll(&config, update_request_rx.clone(), update_request_tx) => Ok(()),
-        res = state::start_core(&config, current_state, fallback_state, update_request_rx) => res.map_err(|err| err.into()),
+        _ = api::start(listener, seek_request_tx.clone(), poll_request_tx.clone(), current_state.clone(), fallback_state.clone()) => Ok(()),
+        _ = remote::start_poll(&config, poll_request_rx.clone(), seek_request_tx) => Ok(()),
+        res = state::start_seek(&config, current_state, fallback_state, seek_request_rx) => res.map_err(|err| err.into()),
     }
 }

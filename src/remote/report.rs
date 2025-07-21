@@ -1,0 +1,80 @@
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use tracing::{instrument, warn};
+
+use crate::config::Config;
+use crate::util::uri::make_uri;
+
+use super::request::{Patch, RequestConfig};
+
+#[derive(Serialize, Debug, Clone)]
+pub struct DeviceReport {}
+
+// The state for report
+#[derive(Serialize, Debug, Clone)]
+pub struct Report(HashMap<String, DeviceReport>);
+
+impl Report {
+    pub fn new(device: HashMap<String, DeviceReport>) -> Self {
+        Report(device)
+    }
+}
+
+impl From<Report> for Value {
+    fn from(value: Report) -> Self {
+        serde_json::to_value(value)
+            // This is probably a bug in the types, it shouldn't really happen
+            .expect("state report serialization failed")
+    }
+}
+
+// Return type from send_report
+pub type LastReport = Option<Value>;
+
+pub fn get_report_client(config: &Config) -> Option<Patch> {
+    if let Some(uri) = config.remote.api_endpoint.clone() {
+        let endpoint = make_uri(uri, "/device/v3/state", None)
+            .expect("remote API endpoint must be a valid URI")
+            .to_string();
+
+        let client_config = RequestConfig {
+            timeout: config.remote.request_timeout,
+            min_interval: config.remote.min_interval,
+            max_backoff: config.remote.poll_interval,
+            api_token: config.remote.api_key.clone(),
+        };
+
+        let client = Patch::new(endpoint, client_config);
+
+        Some(client)
+    } else {
+        None
+    }
+}
+
+#[instrument(skip_all)]
+async fn send_report(client: &mut Patch, report: Report, last_report: LastReport) -> LastReport {
+    // TODO: calculate differences with the last report and just send that
+    let res = match client.patch(report.clone().into()).await {
+        Ok(_) => Some(report.into()),
+        Err(e) => {
+            warn!("patch failed: {e}");
+            last_report
+        }
+    };
+
+    res
+}
+
+pub async fn send_report_if_managed(
+    report_client: &mut Option<Patch>,
+    report: Report,
+    last_report: LastReport,
+) -> LastReport {
+    if let Some(client) = report_client {
+        send_report(client, report, last_report).await
+    } else {
+        last_report
+    }
+}
