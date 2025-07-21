@@ -23,7 +23,7 @@ use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
 use register::register;
-use state::models::Device;
+use state::{models::Device, CurrentState};
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -90,7 +90,7 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     debug!("bound to local address {}", config.local_address);
 
     // Load the initial state
-    let current_state = Device::initial_for(config.uuid.clone()).into_current_state();
+    let current_state: CurrentState = Device::initial_for(config.uuid.clone()).into();
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {
