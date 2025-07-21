@@ -175,8 +175,7 @@ async fn seek_target(
 
         // Apply the target
         let status = tokio::select! {
-            status = worker
-            .seek_target(config.tgt_device.clone()) => status?,
+            status = worker.seek_target(config.tgt_device.clone()) => status?,
             _ = interrupt.wait() => SeekStatus::Interrupted
         };
 
