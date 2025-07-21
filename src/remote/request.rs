@@ -1,7 +1,10 @@
 use axum::http::StatusCode;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tracing::{field, instrument, Span};
+use tracing::{field, instrument, warn, Span};
 
 /// Internal errors that can occur during HTTP GET requests (including retry logic).
 #[derive(Debug, Error)]
@@ -64,6 +67,34 @@ pub struct GetResponse {
     pub value: Option<serde_json::Value>,
     /// Whether the response was modified (false for 304 Not Modified responses).
     pub modified: bool,
+}
+
+/// Cache entry for storing etag and value pairs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CacheEntry {
+    etag: String,
+    value: serde_json::Value,
+}
+
+/// Generate cache file path based on endpoint
+fn get_cache_path(endpoint: &str) -> PathBuf {
+    let hash = Sha256::digest(endpoint.as_bytes());
+
+    // Use first 16 bytes of hash for filename
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    let filename = format!("{:032x}.json", u128::from_be_bytes(bytes));
+
+    let cache_dir = if let Some(cache_dir) = dirs::cache_dir() {
+        cache_dir.join(env!("CARGO_PKG_NAME"))
+    } else {
+        // Fallback to home directory if cache dir is not available
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".cache")
+            .join(env!("CARGO_PKG_NAME"))
+    };
+    cache_dir.join(filename)
 }
 
 /// Errors that can occur during HTTP PATCH requests.
@@ -218,6 +249,7 @@ pub struct Get {
     state: RequestState,
     cached: Option<serde_json::Value>,
     etag: Option<String>,
+    cache_path: PathBuf,
 }
 
 impl Get {
@@ -252,11 +284,71 @@ impl Get {
     /// let client = Get::new("https://public-api.example.com/status", config);
     /// ```
     pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
+        let endpoint: String = endpoint.into();
+        let cache_path = get_cache_path(&endpoint);
         Self {
-            state: RequestState::new(endpoint.into(), config),
+            state: RequestState::new(endpoint, config),
             cached: None,
             etag: None,
+            cache_path,
         }
+    }
+
+    /// Restore cache from file if it exists and returns a reference to the cached value
+    pub async fn restore_cache(&mut self) -> Option<&serde_json::Value> {
+        let cache_path = &self.cache_path;
+        // use blocking read as this only happens when the client is created
+        let (cached, etag) = match tokio::fs::read_to_string(cache_path.clone()).await {
+            Ok(contents) => match serde_json::from_str::<CacheEntry>(&contents) {
+                Ok(entry) => (Some(entry.value), Some(entry.etag)),
+                Err(e) => {
+                    warn!(
+                        "failed to deserialize cache from {}: {e}",
+                        cache_path.display(),
+                    );
+                    (None, None)
+                }
+            },
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => (None, None),
+            Err(e) => {
+                warn!("failed to read cache from {}: {e}", cache_path.display());
+                (None, None)
+            }
+        };
+
+        self.cached = cached;
+        self.etag = etag;
+
+        self.cached.as_ref()
+    }
+
+    /// Save cache to file
+    async fn save_cache(&self) {
+        if let (Some(ref cached), Some(ref etag)) = (&self.cached, &self.etag) {
+            let entry = CacheEntry {
+                etag: etag.clone(),
+                value: cached.clone(),
+            };
+
+            if let Err(e) = self.write_cache_file(&entry).await {
+                warn!(
+                    "failed to write cache to {}: {}",
+                    self.cache_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// Write cache entry to file
+    async fn write_cache_file(&self, entry: &CacheEntry) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(parent) = self.cache_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let contents = serde_json::to_string(entry)?;
+        tokio::fs::write(&self.cache_path, contents).await?;
+        Ok(())
     }
 
     #[instrument(level = "trace", skip_all, fields(response=field::Empty) err)]
@@ -312,6 +404,9 @@ impl Get {
 
                 self.cached = Some(json.clone());
                 self.etag = new_etag;
+                if self.etag.is_some() {
+                    self.save_cache().await;
+                }
                 self.state.record_success();
 
                 Ok(GetResponse {

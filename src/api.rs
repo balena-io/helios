@@ -56,7 +56,7 @@ pub async fn start(
         // Legacy routes
         .route(
             "/v1/update",
-            post(move |body| trigger_update(update_request_tx, body)),
+            post(move |body| trigger_poll(update_request_tx, body)),
         )
         // Default to proxying requests if there is no handler
         .fallback(move |request| proxy_legacy(fallback_state, request))
@@ -90,7 +90,7 @@ pub async fn start(
 /// Handle `/v1/update` requests
 ///
 /// This will trigger a fetch and an update to the API
-async fn trigger_update(update_request_tx: Sender<UpdateRequest>, body: Bytes) -> StatusCode {
+async fn trigger_poll(update_request_tx: Sender<UpdateRequest>, body: Bytes) -> StatusCode {
     let request = if body.is_empty() {
         // Empty payload, use defaults
         UpdateRequest::default()

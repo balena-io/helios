@@ -48,6 +48,9 @@ dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # Make variables available for the new process
 export HELIOS_REMOTE_POLL_INTERVAL
 
+# Set XDG variables to directories on volumes
+export XDG_CACHE_HOME=/cache
+
 # Remove the socket if it exists (we will need some proper handover at some point)
 rm /tmp/run/helios.sock || true
 
