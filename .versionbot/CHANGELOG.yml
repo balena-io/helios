@@ -1,4 +1,57 @@
 - commits:
+    - subject: Hash URL for calculating cache filename
+      hash: b4b22b6a49a0bc73e8f10644f93f3dbce73a0047
+      body: |
+        Uses FNV-1a hashing function
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Modify UpdateOpts to cancel by default
+      hash: b7dd900e52c29d5478ab64d58b048169d4358939
+      body: |
+        A new call to /v1/update or a poll that result in a new target state
+        should cancel whatever apply is happening and trigger a new target
+        apply.
+
+        The exception is with API arguments where the default is cancel: false
+        to keep backwards compatibility.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Write/read GET request cache on disk
+      hash: 9c18d36d5bc1e55d0aa246db78214627a62791b1
+      body: >
+        This modifies the Get client in request to store a cache of the
+
+        response body when the response includes an ETag header. The cache
+        includes
+
+        both the body and etag and is stored using the endpoint as the
+
+        filename. This prevents a restarting/crashing process to continuously
+
+        poll the API.
+
+
+        This also updates the core loop to use the cached state if any as the
+
+        first target. This allows the initial target to be applied even if there
+        is not
+
+        network connection when the service start (e.g after a boot).
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.4
+  title: ""
+  date: 2025-07-21T07:38:02.867Z
+- commits:
     - subject: Rename SupervisorError to CoreError
       hash: c41839d57494b3b702e7c80743551360831784b0
       body: |
