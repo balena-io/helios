@@ -17,7 +17,7 @@ use tracing::{
 
 use crate::fallback::{proxy_legacy, FallbackState};
 use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
-use crate::state::{CurrentState, TargetStatus, UpdateOpts, UpdateRequest};
+use crate::state::{CurrentState, PollRequest, SeekRequest, TargetStatus, UpdateOpts};
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -31,13 +31,14 @@ pub enum Listener {
 #[instrument(name = "api", skip_all)]
 pub async fn start(
     listener: Listener,
-    update_request_tx: Sender<UpdateRequest>,
+    seek_request_tx: Sender<SeekRequest>,
+    poll_request_tx: Sender<PollRequest>,
     current_state: CurrentState,
     fallback_state: FallbackState,
 ) {
     let api_span = Span::current();
-    let target_device_tx = update_request_tx.clone();
-    let target_app_tx = update_request_tx.clone();
+    let target_device_tx = seek_request_tx.clone();
+    let target_app_tx = seek_request_tx.clone();
     let app = Router::new()
         .route("/v3/ping", get(|| async { "OK" }))
         .route("/v3/status", get(target_status))
@@ -56,7 +57,7 @@ pub async fn start(
         // Legacy routes
         .route(
             "/v1/update",
-            post(move |body| trigger_poll(update_request_tx, body)),
+            post(move |body| trigger_poll(poll_request_tx, body)),
         )
         // Default to proxying requests if there is no handler
         .fallback(move |request| proxy_legacy(fallback_state, request))
@@ -90,19 +91,19 @@ pub async fn start(
 /// Handle `/v1/update` requests
 ///
 /// This will trigger a fetch and an update to the API
-async fn trigger_poll(update_request_tx: Sender<UpdateRequest>, body: Bytes) -> StatusCode {
+async fn trigger_poll(poll_request_tx: Sender<PollRequest>, body: Bytes) -> StatusCode {
     let request = if body.is_empty() {
         // Empty payload, use defaults
-        UpdateRequest::default()
+        PollRequest::default()
     } else {
         let opts = serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
 
         // Create a poll request with reemit: true to tell the main loop
         // to re-apply the target even if it was modified
-        UpdateRequest::Poll { opts, reemit: true }
+        PollRequest { opts, reemit: true }
     };
 
-    if update_request_tx.send(request).is_err() {
+    if poll_request_tx.send(request).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
@@ -128,12 +129,12 @@ async fn get_device_cur_state(State(current_state): State<CurrentState>) -> Json
 
 /// Handle `POST /v3/device` request
 async fn set_device_tgt_state(
-    update_request_tx: Sender<UpdateRequest>,
+    seek_request_tx: Sender<SeekRequest>,
     Query(opts): Query<UpdateOpts>,
     Json(target): Json<TargetDevice>,
 ) -> StatusCode {
-    if update_request_tx
-        .send(UpdateRequest::Seek {
+    if seek_request_tx
+        .send(SeekRequest {
             target,
             opts,
             raw_target: None,
@@ -163,7 +164,7 @@ async fn get_app_cur_state(
 ///
 /// Sets the target state for the device apps
 async fn set_app_tgt_state(
-    update_request_tx: Sender<UpdateRequest>,
+    seek_request_tx: Sender<SeekRequest>,
     State(current_state): State<CurrentState>,
     Path(app_uuid): Path<Uuid>,
     Query(opts): Query<UpdateOpts>,
@@ -178,8 +179,8 @@ async fn set_app_tgt_state(
     let mut target: TargetDevice = device.into();
     target.apps.insert(app_uuid, app);
 
-    if update_request_tx
-        .send(UpdateRequest::Seek {
+    if seek_request_tx
+        .send(SeekRequest {
             target,
             opts,
             raw_target: None,
