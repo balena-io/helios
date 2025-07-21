@@ -16,8 +16,9 @@ use tracing::{
 };
 
 use crate::fallback::{proxy_legacy, FallbackState};
+use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice, TargetStatus, Uuid};
-use crate::state::{CurrentState, PollRequest, SeekRequest, UpdateOpts};
+use crate::state::{CurrentState, SeekRequest, UpdateOpts};
 
 pub enum Listener {
     Tcp(TcpListener),

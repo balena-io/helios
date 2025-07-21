@@ -7,6 +7,8 @@ target state and reporting the transition to it, while obeying backend
 constraints such as on frequency of requests.
 */
 
-pub mod poll;
-pub mod report;
+mod poll;
 mod request;
+
+pub mod report;
+pub use poll::{start_poll, PollRequest};
