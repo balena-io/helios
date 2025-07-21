@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    fmt,
     future::{self, Future},
     pin::Pin,
     sync::Arc,
@@ -143,7 +144,7 @@ pub enum SeekError {
     LegacyUpdate(#[from] FallbackError),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum SeekState {
     Reset,
     Local,
@@ -152,7 +153,8 @@ enum SeekState {
 
 type SeekResult = Result<SeekState, SeekError>;
 
-// Ignore linter's warning -- input to this function needs to be trimmed down.
+// input to this function must be trimmed down.
+// ignore the lint warning until then.
 #[allow(clippy::too_many_arguments)]
 async fn apply_target(
     worker: &mut LocalWorker,
@@ -163,9 +165,9 @@ async fn apply_target(
     interrupt: Interrupt,
     cur_state: &CurrentState,
     fallback_state: &FallbackState,
-    prev_state: SeekState,
+    prev_seek_state: SeekState,
 ) -> SeekResult {
-    if matches!(prev_state, SeekState::Local | SeekState::Reset) {
+    if matches!(prev_seek_state, SeekState::Local | SeekState::Reset) {
         // Reset the target state so a supervisor poll cannot
         // lead to a double apply
         fallback_state.clear_target_state().await;
@@ -213,6 +215,28 @@ async fn apply_target(
     Ok(SeekState::Local)
 }
 
+#[derive(Debug, Clone)]
+enum SeekAction {
+    Terminate,
+    Idle(LastReport),
+    Apply(SeekRequest),
+    Report(Device),
+    Complete(SeekState),
+}
+
+impl fmt::Display for SeekAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let action = match self {
+            Self::Terminate => "terminate",
+            Self::Idle(_) => "idle",
+            Self::Apply(_) => "apply",
+            Self::Report(_) => "report",
+            Self::Complete(_) => "complete",
+        };
+        f.write_str(action)
+    }
+}
+
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     config: &Config,
@@ -235,7 +259,7 @@ pub async fn start_seek(
     let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(
         send_report_if_managed(&mut report_client, initial_state.into(), None),
     );
-    let mut last_report: Option<Value> = None;
+    let mut last_report = LastReport::None;
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local;
@@ -244,23 +268,75 @@ pub async fn start_seek(
     let mut interrupt = Interrupt::new();
 
     // The next queued target state
-    let mut next_target: (Option<TargetDevice>, UpdateOpts, Option<Value>) =
-        (None, UpdateOpts::default(), None);
+    let mut next_target: Option<SeekRequest> = None;
 
     // Main loop, applies changes and reports state.
     // Operations may be interrupted by a new seek request.
     loop {
-        tokio::select! {
+        let action: SeekAction = tokio::select! {
             // Wake on update request
             update_requested = seek_rx.changed() => {
                 if update_requested.is_err() {
                     // Not really an error, it just means the API closed
                     trace!("request channel closed");
-                    break;
+                    SeekAction::Terminate
+                } else {
+                    let update_req = seek_rx.borrow_and_update().clone();
+                    SeekAction::Apply(update_req)
                 }
+            }
 
-                let update_req = seek_rx.borrow_and_update().clone();
+            // State changes should trigger a new patch
+            new_state = worker_stream.next() => {
+                // The stream should not return None unless the worker is dropped
+                // so this should not panic unless there is a bug
+                SeekAction::Report(new_state.expect("worker stream should remain open"))
+            }
 
+            // Update the last report on state patch
+            report = &mut report_future => SeekAction::Idle(report),
+
+            // Wake up when apply returns
+            seek_res = &mut apply_future => {
+                // break the main loop if a fatal error happens with the seek state call.
+                // If that happens there is either a loop in a type or task here or
+                // within mahler.
+                // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
+                let seek_state = seek_res?;
+
+                SeekAction::Complete(seek_state)
+            }
+        };
+
+        trace!("performing action: {action}");
+
+        match action {
+            SeekAction::Terminate => {
+                break;
+            }
+
+            SeekAction::Idle(report) => {
+                last_report = report;
+                report_future = Box::pin(future::pending());
+            }
+
+            SeekAction::Report(state) => {
+                // Drop the previous patch if a new state comes before the previous one
+                // is finished. rate limiting is handled by the client
+                drop(report_future);
+
+                // Record the updated global state
+                current_state.write(state.clone()).await;
+
+                // Report state changes to the API
+                report_future = Box::pin(send_report_if_managed(
+                    &mut report_client,
+                    state.into(),
+                    last_report.clone(),
+                ));
+            }
+
+            SeekAction::Apply(update_req) => {
                 if is_apply_pending {
                     // A new target came while applying.
                     // Interrupt the target if we are asked to cancel.
@@ -276,11 +352,7 @@ pub async fn start_seek(
                     }
                     // Otherwise just store the target state for the next iteration
                     else {
-                        next_target = (
-                            Some(update_req.target),
-                            update_req.opts,
-                            update_req.raw_target,
-                        );
+                        next_target = Some(update_req);
                         continue;
                     }
                 }
@@ -302,43 +374,15 @@ pub async fn start_seek(
                 is_apply_pending = true;
             }
 
-            // State changes should trigger a new patch
-            stream_res = worker_stream.next() => {
-                // The stream should not return None unless the worker is dropped
-                // so this should not panic unless there is a bug
-                let cur_state = stream_res.expect("worker stream should remain open");
+            SeekAction::Complete(state) => {
+                prev_seek_state = state.clone();
 
-                // Drop the previous patch if a new state comes before the previous one
-                // is finished rate limiting is handled by the client
-                drop(report_future);
-
-                // Record the updated global state
-                current_state.write(cur_state.clone()).await;
-
-                // Report state changes to the API
-                report_future = Box::pin(send_report_if_managed(&mut report_client, cur_state.into(), last_report.clone()));
-            }
-
-            // Update the last report on state patch
-            report = &mut report_future => {
-                last_report = report;
-                report_future = Box::pin(future::pending());
-            }
-
-            // Wake up when apply returns
-            seek_res = &mut apply_future => {
                 // Reset the state
                 is_apply_pending = false;
                 apply_future = Box::pin(future::pending());
 
-                // break the main loop if a fatal error happens with the seek state call.
-                // If that happens there is either a loop in a type or task here or
-                // within mahler.
-                // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
-                prev_seek_state = seek_res?;
-
                 // if the legacy apply went through
-                if matches!(prev_seek_state, SeekState::Reset) {
+                if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
                     let initial_state = Device::initial_for(config.uuid.clone());
@@ -350,17 +394,17 @@ pub async fn start_seek(
                 }
 
                 // If there is a pending target
-                if let (Some(target), opts, raw_target) = next_target {
+                if let Some(update_req) = next_target {
                     // reset the next target
-                    next_target = (None, UpdateOpts::default(), None);
+                    next_target = None;
                     interrupt = Interrupt::new();
 
                     // Trigger a new apply
                     apply_future = Box::pin(apply_target(
                         &mut worker,
-                        target,
-                        raw_target,
-                        opts,
+                        update_req.target,
+                        update_req.raw_target,
+                        update_req.opts,
                         &config.fallback,
                         interrupt.clone(),
                         &current_state,
