@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -92,6 +93,28 @@ impl Default for PollRequest {
     }
 }
 
+#[derive(Debug, Clone)]
+enum PollAction {
+    Terminate,
+    Poll(PollRequest),
+    Complete {
+        target: Option<Value>,
+        opts: UpdateOpts,
+        next_poll: Instant,
+    },
+}
+
+impl fmt::Display for PollAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let action = match self {
+            Self::Terminate => "terminate",
+            Self::Poll(_) => "poll",
+            Self::Complete { .. } => "complete",
+        };
+        f.write_str(action)
+    }
+}
+
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
     config: &Config,
@@ -133,32 +156,67 @@ pub async fn start_poll(
     }
 
     loop {
-        tokio::select! {
+        let action: PollAction = tokio::select! {
             // Wake up on poll if not applying changes
             _ = tokio::time::sleep_until(next_poll_time) => {
-                drop(poll_future);
-                // Trigger a new poll cancelling any pending apply if a new state is received
-                poll_future = Box::pin(poll_remote(
-                    config,
-                    &mut poll_client,
-                    PollRequest {
-                        opts: UpdateOpts::default(),
+                PollAction::Poll(PollRequest {
+                    opts: UpdateOpts::default(),
                         reemit: false,
-                    },
-                ));
-                // Reset the poll interval to avoid busy waiting
-                next_poll_time = Instant::now() + next_poll(config);
+                })
             }
 
             // Handle poll completion
             response = &mut poll_future => {
+                let (target, opts, next_poll) = response;
+                PollAction::Complete {
+                    target,
+                    opts,
+                    next_poll,
+                }
+            }
+
+            // Handle a poll request
+            update_requested = poll_rx.changed() => {
+                if update_requested.is_err() {
+                    // Not really an error, it just means the API closed
+                    trace!("request channel closed");
+                    PollAction::Terminate
+                } else {
+                    let update_req = poll_rx.borrow_and_update().clone();
+                    PollAction::Poll(update_req)
+                }
+            }
+        };
+
+        trace!("performing action: {action}");
+
+        match action {
+            PollAction::Terminate => {
+                break;
+            }
+
+            PollAction::Poll(update_req) => {
+                // Trigger a new poll
+                drop(poll_future);
+
+                // Trigger a new poll cancelling any pending apply if a new poll is received
+                poll_future = Box::pin(poll_remote(config, &mut poll_client, update_req));
+
+                // Reset the poll interval to avoid busy waiting
+                next_poll_time = Instant::now() + next_poll(config);
+            }
+
+            PollAction::Complete {
+                target,
+                opts,
+                next_poll,
+            } => {
                 // Reset the polling state
                 poll_future = Box::pin(future::pending());
-                let (value, opts, next_poll) = response;
                 next_poll_time = next_poll;
 
                 // If there is a new target
-                if let Some(target_state) = value {
+                if let Some(target_state) = target {
                     // put the poll back on the channel
                     match serde_json::from_value::<TargetState>(target_state.clone()) {
                         Ok(TargetState(mut map)) => {
@@ -171,33 +229,13 @@ pub async fn start_poll(
                             } else {
                                 error!("no target for uuid {} found on target state", config.uuid);
                             }
-                        },
-                        Err(e)  => {
+                        }
+                        Err(e) => {
                             // FIXME: we'll need to reject the target if it cannot be deserialized
                             warn!("failed to deserialize target state: {e}");
                         }
                     };
                 }
-            }
-
-            // Handle a poll request
-            update_requested = poll_rx.changed() => {
-                if update_requested.is_err() {
-                    // Not really an error, it just means the API closed
-                    trace!("request channel closed");
-                    break;
-                }
-
-                let update_req = poll_rx.borrow_and_update().clone();
-
-                // Trigger a new poll
-                drop(poll_future);
-                poll_future = Box::pin(poll_remote(
-                    config,
-                    &mut poll_client,
-                    update_req,
-                ));
-                next_poll_time = Instant::now() + next_poll(config);
             }
         }
     }
