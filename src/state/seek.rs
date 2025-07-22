@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    fmt,
     future::{self, Future},
     pin::Pin,
     sync::Arc,
@@ -96,13 +97,15 @@ impl From<Device> for CurrentState {
 /// by the main loop
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UpdateOpts {
-    /// Ignore locks on the next apply
-    /// defaults to false
+    /// Ignore locks on the next apply.
+    ///
+    /// Defaults to false
     #[serde(default)]
     pub force: bool,
 
-    /// Cancel the current update if any
-    /// defaults to true, unless the value is coming
+    /// Cancel the current update if any.
+    ///
+    /// Defaults to true, unless the value is coming
     /// from the API for backwards compatibility
     #[serde(default = "api_cancel_default")]
     pub cancel: bool,
@@ -129,20 +132,6 @@ pub struct SeekRequest {
     pub opts: UpdateOpts,
 }
 
-#[derive(Clone)]
-enum SeekState {
-    Reset,
-    Local,
-    Fallback,
-}
-
-struct SeekConfig {
-    tgt_device: TargetDevice,
-    update_opts: UpdateOpts,
-    fallback: FallbackConfig,
-    raw_target: Option<Value>,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SeekError {
     #[error("Failed to create worker: {0}")]
@@ -155,17 +144,30 @@ pub enum SeekError {
     LegacyUpdate(#[from] FallbackError),
 }
 
+#[derive(Debug, Clone)]
+enum SeekState {
+    Reset,
+    Local,
+    Fallback,
+}
+
 type SeekResult = Result<SeekState, SeekError>;
 
-async fn seek_target(
+// input to this function must be trimmed down.
+// ignore the lint warning until then.
+#[allow(clippy::too_many_arguments)]
+async fn apply_target(
     worker: &mut LocalWorker,
-    config: SeekConfig,
+    target: TargetDevice,
+    raw_target: Option<Value>,
+    update_opts: UpdateOpts,
+    fallback: &FallbackConfig,
     interrupt: Interrupt,
     cur_state: &CurrentState,
     fallback_state: &FallbackState,
-    prev_state: SeekState,
+    prev_seek_state: SeekState,
 ) -> SeekResult {
-    if matches!(prev_state, SeekState::Local | SeekState::Reset) {
+    if matches!(prev_seek_state, SeekState::Local | SeekState::Reset) {
         // Reset the target state so a supervisor poll cannot
         // lead to a double apply
         fallback_state.clear_target_state().await;
@@ -175,7 +177,7 @@ async fn seek_target(
 
         // Apply the target
         let status = tokio::select! {
-            status = worker.seek_target(config.tgt_device.clone()) => status?,
+            status = worker.seek_target(target.clone()) => status?,
             _ = interrupt.wait() => SeekStatus::Interrupted
         };
 
@@ -190,12 +192,12 @@ async fn seek_target(
 
     // No matter the result of the seek_target call, we need to call the legacy
     // supervisor to re-apply the target
-    if let (Some(uri), Some(target_state)) = (config.fallback.address.clone(), config.raw_target) {
+    if let (Some(uri), Some(target_state)) = (fallback.address.clone(), raw_target) {
         // Set as the target state the raw target accepted by
         // the fallback
         fallback_state.set_target_state(target_state).await;
         let interrupted = tokio::select! {
-            res = legacy_update(uri, config.fallback.api_key.clone(), config.update_opts.force, config.update_opts.cancel) => {
+            res = legacy_update(uri, fallback.api_key.clone(), update_opts.force, update_opts.cancel) => {
                 res?;
                 false
             },
@@ -213,6 +215,28 @@ async fn seek_target(
     Ok(SeekState::Local)
 }
 
+#[derive(Debug, Clone)]
+enum SeekAction {
+    Terminate,
+    Idle(LastReport),
+    Apply(SeekRequest),
+    Report(Device),
+    Complete(SeekState),
+}
+
+impl fmt::Display for SeekAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let action = match self {
+            Self::Terminate => "terminate",
+            Self::Idle(_) => "idle",
+            Self::Apply(_) => "apply",
+            Self::Report(_) => "report",
+            Self::Complete(_) => "complete",
+        };
+        f.write_str(action)
+    }
+}
+
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     config: &Config,
@@ -227,8 +251,7 @@ pub async fn start_seek(
     // Read the initial state
     let initial_state = current_state.read().await;
 
-    // Create a mahler Worker instance
-    // and start following changes
+    // Create a mahler worker and start following changes
     let mut worker = create(initial_state.clone())?;
     let mut worker_stream = worker.follow();
 
@@ -236,112 +259,130 @@ pub async fn start_seek(
     let mut report_future: Pin<Box<dyn Future<Output = LastReport>>> = Box::pin(
         send_report_if_managed(&mut report_client, initial_state.into(), None),
     );
-    let mut last_report: Option<Value> = None;
+    let mut last_report = LastReport::None;
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local;
-    let mut seek_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
+    let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut is_apply_pending = false;
     let mut interrupt = Interrupt::new();
 
     // The next queued target state
-    let mut next_target: (Option<TargetDevice>, UpdateOpts, Option<Value>) =
-        (None, UpdateOpts::default(), None);
+    let mut next_target: Option<SeekRequest> = None;
 
-    // Main loop, polls state, applies changes and reports state
-    // operations may be interrupted by an update request or a new target state
-    // coming from the API
+    // Main loop, applies changes and reports state.
+    // Operations may be interrupted by a new seek request.
     loop {
-        tokio::select! {
+        let action: SeekAction = tokio::select! {
             // Wake on update request
             update_requested = seek_rx.changed() => {
                 if update_requested.is_err() {
                     // Not really an error, it just means the API closed
                     trace!("request channel closed");
-                    break;
+                    SeekAction::Terminate
+                } else {
+                    let update_req = seek_rx.borrow_and_update().clone();
+                    SeekAction::Apply(update_req)
                 }
+            }
 
-                let update_req = seek_rx.borrow_and_update().clone();
+            // State changes should trigger a new patch
+            new_state = worker_stream.next() => {
+                // The stream should not return None unless the worker is dropped
+                // so this should not panic unless there is a bug
+                SeekAction::Report(new_state.expect("worker stream should remain open"))
+            }
 
+            // Update the last report on state patch
+            report = &mut report_future => SeekAction::Idle(report),
+
+            // Wake up when apply returns
+            seek_res = &mut apply_future => {
+                // break the main loop if a fatal error happens with the seek state call.
+                // If that happens there is either a loop in a type or task here or
+                // within mahler.
+                // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
+                let seek_state = seek_res?;
+
+                SeekAction::Complete(seek_state)
+            }
+        };
+
+        trace!("performing action: {action}");
+
+        match action {
+            SeekAction::Terminate => {
+                break;
+            }
+
+            SeekAction::Idle(report) => {
+                last_report = report;
+                report_future = Box::pin(future::pending());
+            }
+
+            SeekAction::Report(state) => {
+                // Drop the previous patch if a new state comes before the previous one
+                // is finished. rate limiting is handled by the client
+                drop(report_future);
+
+                // Record the updated global state
+                current_state.write(state.clone()).await;
+
+                // Report state changes to the API
+                report_future = Box::pin(send_report_if_managed(
+                    &mut report_client,
+                    state.into(),
+                    last_report.clone(),
+                ));
+            }
+
+            SeekAction::Apply(update_req) => {
                 if is_apply_pending {
                     // A new target came while applying.
                     // Interrupt the target if we are asked to cancel.
                     if update_req.opts.cancel {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
-                        prev_seek_state = seek_future.await?;
+                        prev_seek_state = apply_future.await?;
 
                         current_state.set_status(TargetStatus::Interrupted).await;
 
                         // Reset the future
-                        seek_future = Box::pin(future::pending());
+                        apply_future = Box::pin(future::pending());
                     }
                     // Otherwise just store the target state for the next iteration
                     else {
-                        next_target = (
-                            Some(update_req.target.clone()),
-                            update_req.opts.clone(),
-                            update_req.raw_target.clone(),
-                        );
+                        next_target = Some(update_req);
                         continue;
                     }
                 }
 
                 // Trigger a new target state apply if we got here
-                drop(seek_future);
+                drop(apply_future);
                 interrupt = Interrupt::new();
-                let seek_config = SeekConfig {
-                    tgt_device: update_req.target,
-                    fallback: config.fallback.clone(),
-                    update_opts: update_req.opts,
-                    raw_target: update_req.raw_target,
-                };
-                seek_future = Box::pin(
-                    seek_target(&mut worker, seek_config,
-                                interrupt.clone(), &current_state,
-                                &fallback_state, prev_seek_state.clone()
-                    )
-                );
+                apply_future = Box::pin(apply_target(
+                    &mut worker,
+                    update_req.target,
+                    update_req.raw_target,
+                    update_req.opts,
+                    &config.fallback,
+                    interrupt.clone(),
+                    &current_state,
+                    &fallback_state,
+                    prev_seek_state.clone(),
+                ));
                 is_apply_pending = true;
             }
 
-            // State changes should trigger a new patch
-            stream_res = worker_stream.next() => {
-                // The stream should not return None unless the worker is dropped
-                // so this should not panic unless there is a bug
-                let cur_state = stream_res.expect("worker stream should remain open");
+            SeekAction::Complete(state) => {
+                prev_seek_state = state.clone();
 
-                // Drop the previous patch if a new state comes before the previous one is finished
-                // rate limiting is handled by the client
-                drop(report_future);
-
-                // Record the updated global state
-                current_state.write(cur_state.clone()).await;
-
-                // Report state changes to the API
-                report_future = Box::pin(send_report_if_managed(&mut report_client, cur_state.into(), last_report.clone()));
-            }
-
-            // Update the last report on state patch
-            report = &mut report_future => {
-                last_report = report;
-                report_future = Box::pin(future::pending());
-            }
-
-            // Wake up when apply returns
-            seek_res = &mut seek_future => {
                 // Reset the state
                 is_apply_pending = false;
-                seek_future = Box::pin(future::pending());
-
-                // break the main loop if a fatal error happens with the seek state
-                // call. If that happens there is either a loop in a type or task here or
-                // within mahler.
-                // See: https://github.com/balena-io-modules/mahler-rs/blob/main/src/worker/mod.rs#L42-L66
-                prev_seek_state = seek_res?;
+                apply_future = Box::pin(future::pending());
 
                 // if the legacy apply went through
-                if matches!(prev_seek_state, SeekState::Reset) {
+                if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
                     let initial_state = Device::initial_for(config.uuid.clone());
@@ -353,24 +394,23 @@ pub async fn start_seek(
                 }
 
                 // If there is a pending target
-                if let (Some(target), opts, raw_target) = next_target {
+                if let Some(update_req) = next_target {
                     // reset the next target
-                    next_target = (None, UpdateOpts::default(), None);
+                    next_target = None;
                     interrupt = Interrupt::new();
-                    let seek_config = SeekConfig {
-                        tgt_device: target,
-                        fallback: config.fallback.clone(),
-                        update_opts: opts,
-                        raw_target
-                    };
 
                     // Trigger a new apply
-                    seek_future = Box::pin(
-                        seek_target(&mut worker, seek_config,
-                                    interrupt.clone(), &current_state,
-                                    &fallback_state, prev_seek_state.clone()
-                        )
-                    );
+                    apply_future = Box::pin(apply_target(
+                        &mut worker,
+                        update_req.target,
+                        update_req.raw_target,
+                        update_req.opts,
+                        &config.fallback,
+                        interrupt.clone(),
+                        &current_state,
+                        &fallback_state,
+                        prev_seek_state.clone(),
+                    ));
                     is_apply_pending = true;
                 }
             }
