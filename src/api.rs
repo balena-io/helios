@@ -200,3 +200,137 @@ async fn set_app_tgt_state(
 
     StatusCode::ACCEPTED
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fallback::FallbackState;
+    use serde_json::json;
+    use tokio::net::TcpListener;
+    use tokio::sync::watch;
+
+    async fn setup_test_server() -> (
+        u16,
+        watch::Receiver<PollRequest>,
+        watch::Receiver<SeekRequest>,
+    ) {
+        let (seek_request_tx, seek_rx) = watch::channel(SeekRequest {
+            target: TargetDevice::default(),
+            opts: UpdateOpts::default(),
+            raw_target: None,
+        });
+        let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
+        let device = Device::initial_for(Uuid::default());
+        let local_state = LocalState {
+            device,
+            status: UpdateStatus::default(),
+        };
+        let (_, state_rx) = watch::channel(local_state);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let fallback_state = FallbackState::new("test-device".to_string(), None, None);
+
+        tokio::spawn(start(
+            Listener::Tcp(listener),
+            seek_request_tx,
+            poll_request_tx,
+            state_rx,
+            fallback_state,
+        ));
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        (port, poll_rx, seek_rx)
+    }
+
+    #[tokio::test]
+    async fn test_v1_update_empty_body() {
+        let (port, mut poll_rx, _) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v1/update"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(poll_rx.changed().await.is_ok());
+        let poll_request = poll_rx.borrow().clone();
+        assert!(!poll_request.opts.force);
+        assert!(poll_request.opts.cancel); // Default is true
+        assert!(poll_request.reemit); // The state should be reemited by default
+    }
+
+    #[tokio::test]
+    async fn test_v1_update_with_body() {
+        let (port, mut poll_rx, _) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let body = json!({"force": true});
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v1/update"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(poll_rx.changed().await.is_ok());
+        let poll_request = poll_rx.borrow().clone();
+        assert!(poll_request.opts.force);
+        assert!(!poll_request.opts.cancel); // API default via serde is false
+        assert!(poll_request.reemit);
+    }
+
+    #[tokio::test]
+    async fn test_set_app_without_query_params() {
+        let (port, _, mut seek_rx) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let app_uuid = Uuid::default();
+        let target_app = TargetApp::default();
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
+            .json(&target_app)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(seek_rx.changed().await.is_ok());
+        let seek_request = seek_rx.borrow().clone();
+        assert!(!seek_request.opts.force);
+        assert!(!seek_request.opts.cancel); // API default via serde is false
+        assert!(seek_request.target.apps.contains_key(&app_uuid));
+    }
+
+    #[tokio::test]
+    async fn test_set_app_with_query_params() {
+        let (port, _, mut seek_rx) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let app_uuid = Uuid::default();
+        let target_app = TargetApp::default();
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true",
+            ))
+            .json(&target_app)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(seek_rx.changed().await.is_ok());
+        let seek_request = seek_rx.borrow().clone();
+        assert!(seek_request.opts.force);
+        assert!(seek_request.target.apps.contains_key(&app_uuid));
+    }
+}
