@@ -36,7 +36,7 @@ pub enum CreateError {
     StateSerialization(#[from] mahler::errors::SerializationError),
 }
 
-pub type LocalWorker = Worker<Device, Ready, TargetDevice>;
+type LocalWorker = Worker<Device, Ready, TargetDevice>;
 
 pub fn create(initial: Device) -> Result<LocalWorker, CreateError> {
     // Initialize the connection

@@ -6,8 +6,11 @@ use axum::{
     Json, Router,
 };
 use std::time::Duration;
-use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::Sender;
+use tokio::{
+    net::{TcpListener, UnixListener},
+    sync::watch::Receiver,
+};
 use tower_http::trace::TraceLayer;
 use tracing::{
     debug_span,
@@ -18,12 +21,14 @@ use tracing::{
 use crate::fallback::{proxy_legacy, FallbackState};
 use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
-use crate::state::{CurrentState, SeekRequest, UpdateOpts, UpdateStatus};
+use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
 
 pub enum Listener {
     Tcp(TcpListener),
     Unix(UnixListener),
 }
+
+type LocalStateRx = Receiver<LocalState>;
 
 /// Start the API
 ///
@@ -34,7 +39,7 @@ pub async fn start(
     listener: Listener,
     seek_request_tx: Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
-    current_state: CurrentState,
+    state_rx: LocalStateRx,
     fallback_state: FallbackState,
 ) {
     let api_span = Span::current();
@@ -77,7 +82,7 @@ pub async fn start(
                     span.record("status", display(response.status()));
                 }),
         )
-        .with_state(current_state);
+        .with_state(state_rx);
 
     info!("ready");
 
@@ -115,17 +120,17 @@ async fn trigger_poll(poll_request_tx: Sender<PollRequest>, body: Bytes) -> Stat
 ///
 /// The request only returns the status of the local engine ignoring the status
 /// of the legacy supervisor
-async fn update_status(State(current_state): State<CurrentState>) -> Json<UpdateStatus> {
-    let status = current_state.status().await;
-    Json(status)
+async fn update_status(State(state_rx): State<LocalStateRx>) -> Json<UpdateStatus> {
+    let state = state_rx.borrow();
+    Json(state.status.clone())
 }
 
 /// Handle `GET /v3/device` request
 ///
 /// Returns the device state
-async fn get_device_cur_state(State(current_state): State<CurrentState>) -> Json<Device> {
-    let device = current_state.read().await;
-    Json(device)
+async fn get_device_cur_state(State(state_rx): State<LocalStateRx>) -> Json<Device> {
+    let state = state_rx.borrow();
+    Json(state.device.clone())
 }
 
 /// Handle `POST /v3/device` request
@@ -150,10 +155,11 @@ async fn set_device_tgt_state(
 
 /// Handle `GET /v3/device/apps/{uuid}`
 async fn get_app_cur_state(
-    State(current_state): State<CurrentState>,
+    State(state_rx): State<LocalStateRx>,
     Path(app_uuid): Path<Uuid>,
 ) -> Result<Json<App>, StatusCode> {
-    let device = current_state.read().await;
+    let state = state_rx.borrow();
+    let device = state.device.clone();
     if let Some(app) = device.apps.get(&app_uuid) {
         return Ok(Json(app.clone()));
     }
@@ -166,7 +172,7 @@ async fn get_app_cur_state(
 /// Sets the target state for the device apps
 async fn set_app_tgt_state(
     seek_request_tx: Sender<SeekRequest>,
-    State(current_state): State<CurrentState>,
+    State(state_rx): State<LocalStateRx>,
     Path(app_uuid): Path<Uuid>,
     Query(opts): Query<UpdateOpts>,
     Json(app): Json<TargetApp>,
@@ -176,7 +182,8 @@ async fn set_app_tgt_state(
     // - convert it to a target
     // - replace the relevant part of the target with the input
     // - send the full target to the channel
-    let device = current_state.read().await;
+    let state = state_rx.borrow();
+    let device = state.device.clone();
     let mut target: TargetDevice = device.into();
     target.apps.insert(app_uuid, app);
 
