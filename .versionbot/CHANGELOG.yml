@@ -1,4 +1,24 @@
 - commits:
+    - subject: Break up main seek loop into separate actions
+      hash: 266bf2df6219b47701b0f9b51c0c89759fdab602
+      body: >
+        The original motivation for this change was to get out of tokio::select
+        as soon as possible because it causes issues with automatic code
+        formatting and inference.
+
+
+        But breaking it up this way can also help towards ultimately capturing
+        the loop’s state machine in a type, which should make it more robust and
+        easier to work on.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.4.6
+  title: ""
+  date: 2025-07-22T14:55:28.715Z
+- commits:
     - subject: Merge state/poll with remote/poll
       hash: 76344c229a7df38066df7b7ca20a705ab75386e4
       body: >
