@@ -1,4 +1,17 @@
 - commits:
+    - subject: Break up main poll loop into separate actions
+      hash: 568583b20148a55dd01e084d2ffecdcd9357a25f
+      body: |
+        Similar to 0d5d40e3
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.4.7
+  title: ""
+  date: 2025-07-22T15:34:08.508Z
+- commits:
     - subject: Break up main seek loop into separate actions
       hash: 266bf2df6219b47701b0f9b51c0c89759fdab602
       body: >
