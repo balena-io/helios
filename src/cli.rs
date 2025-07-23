@@ -1,5 +1,5 @@
 use axum::http::Uri;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::fmt::{self, Display};
@@ -9,8 +9,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::legacy::LegacyConfig;
-use crate::remote::RemoteConfig;
 use crate::state::models::Uuid;
 
 /// Local API listen address
@@ -56,12 +54,24 @@ fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     Ok(Duration::from_millis(millis))
 }
 
+#[derive(Clone, Debug, Args)]
+pub struct GlobalArgs {
+    // declare here arguments that should be available and
+    // apply across all commands, eg. `--verbose`.
+}
+
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)] // read from Cargo.toml
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 
+    #[command(flatten)]
+    args: GlobalArgs,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct StartArgs {
     /// Device UUID. If not provided, a random value will be generated and used
     /// on each run of this command
     #[arg(
@@ -70,7 +80,7 @@ struct Cli {
         value_parser = parse_uuid,
         env = "HELIOS_UUID"
     )]
-    uuid: Option<Uuid>,
+    pub uuid: Option<Uuid>,
 
     /// Local API listen address
     #[arg(
@@ -79,7 +89,7 @@ struct Cli {
         env = "HELIOS_LOCAL_ADDRESS",
         default_value_t
     )]
-    local_address: LocalAddress,
+    pub local_address: LocalAddress,
 
     /// Remote API endpoint
     #[arg(
@@ -87,7 +97,7 @@ struct Cli {
         value_name = "uri",
         env = "HELIOS_REMOTE_API_ENDPOINT"
     )]
-    remote_api_endpoint: Option<Uri>,
+    pub remote_api_endpoint: Option<Uri>,
 
     /// API key to use for authentication with remote
     #[arg(
@@ -96,7 +106,7 @@ struct Cli {
         env = "HELIOS_REMOTE_API_KEY",
         requires = "remote_api_endpoint"
     )]
-    remote_api_key: Option<String>,
+    pub remote_api_key: Option<String>,
 
     /// Remote request timeout in milliseconds
     #[arg(
@@ -107,7 +117,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "59000"
     )]
-    remote_request_timeout_ms: Duration,
+    pub remote_request_timeout_ms: Duration,
 
     /// Remote poll interval in milliseconds
     #[arg(
@@ -118,7 +128,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "900000"
     )]
-    remote_poll_interval_ms: Duration,
+    pub remote_poll_interval_ms: Duration,
 
     /// Remote rate limiting interval in milliseconds
     #[arg(
@@ -129,7 +139,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "10000"
     )]
-    remote_min_interval_ms: Duration,
+    pub remote_min_interval_ms: Duration,
 
     /// Remote target state poll max jitter in milliseconds
     #[arg(
@@ -140,7 +150,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "60000"
     )]
-    remote_max_poll_jitter_ms: Duration,
+    pub remote_max_poll_jitter_ms: Duration,
 
     /// Legacy Supervisor API endpoint URI to redirect unsupported API requests
     #[arg(
@@ -148,7 +158,7 @@ struct Cli {
         value_name = "uri",
         env = "HELIOS_LEGACY_ADDRESS"
     )]
-    legacy_address: Option<Uri>,
+    pub legacy_address: Option<Uri>,
 
     /// API key to use for authentication with legacy Supervisor
     #[arg(
@@ -157,54 +167,26 @@ struct Cli {
         env = "HELIOS_LEGACY_API_KEY",
         requires = "legacy_address"
     )]
-    legacy_api_key: Option<String>,
+    pub legacy_api_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct RegisterArgs {
+    /// Provisioning key
+    #[arg(long = "provisioning-key", value_name = "key")]
+    pub provisioning_key: String,
 }
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Start Helios
+    Start(Box<StartArgs>),
+
     /// Provision device to remote endpoint (TODO!)
-    Register {
-        /// Provisioning key
-        #[arg(long = "provisioning-key", value_name = "key")]
-        provisioning_key: String,
-    },
+    Register(Box<RegisterArgs>),
 }
 
-pub type Args = (
-    Option<Uuid>,
-    LocalAddress,
-    Option<RemoteConfig>,
-    Option<LegacyConfig>,
-);
-
-pub fn load() -> (Option<Command>, Args) {
+pub fn load() -> (Command, GlobalArgs) {
     let cli = Cli::parse();
-
-    let uuid = cli.uuid;
-
-    let local_address = cli.local_address;
-
-    let remote = if let Some(api_endpoint) = cli.remote_api_endpoint {
-        Some(RemoteConfig {
-            api_endpoint,
-            api_key: cli.remote_api_key,
-            request_timeout: cli.remote_request_timeout_ms,
-            poll_interval: cli.remote_poll_interval_ms,
-            min_interval: cli.remote_min_interval_ms,
-            max_poll_jitter: cli.remote_max_poll_jitter_ms,
-        })
-    } else {
-        None
-    };
-
-    let legacy = if let Some(address) = cli.legacy_address {
-        Some(LegacyConfig {
-            address,
-            api_key: cli.legacy_api_key,
-        })
-    } else {
-        None
-    };
-
-    (cli.command, (uuid, local_address, remote, legacy))
+    (cli.command, cli.args)
 }
