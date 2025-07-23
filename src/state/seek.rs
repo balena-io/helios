@@ -337,29 +337,36 @@ pub async fn start_seek(
                             // Set as the target state the raw target accepted by
                             // the fallback
                             fallback_state.set_target_state(target_state).await;
-                            let interrupted = tokio::select! {
-                                res = legacy_update(uri, config.fallback.api_key.clone(), update_req.opts.force, update_req.opts.cancel) => {
-                                    res?;
-                                    false
-                                },
-                                _ = interrupt.wait() => true
+                            return match legacy_update(
+                                uri,
+                                config.fallback.api_key.clone(),
+                                update_req.opts.force,
+                                update_req.opts.cancel,
+                                interrupt,
+                            )
+                            .await
+                            {
+                                // Tell the caller that they need to reset the worker
+                                Ok(_) => Ok(SeekState::Reset),
+                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(e) => return Err(e)?,
                             };
-
-                            if interrupted {
-                                return Ok(SeekState::Fallback);
-                            }
-
-                            // Tell the caller that they need to reset the worker
-                            return Ok(SeekState::Reset);
                         }
 
                         if let (Some(uri), SeekState::Fallback) =
                             (config.fallback.address.clone(), prev_seek_state)
                         {
                             // if we get here it means there is no raw target, so we need to keep waiting
-                            return tokio::select! {
-                                _ = wait_for_state_settle(uri, config.fallback.api_key.clone()) => Ok(SeekState::Reset),
-                                _ = interrupt.wait() => Ok(SeekState::Fallback),
+                            return match wait_for_state_settle(
+                                uri,
+                                config.fallback.api_key.clone(),
+                                interrupt,
+                            )
+                            .await
+                            {
+                                Ok(_) => Ok(SeekState::Reset),
+                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(e) => Err(e)?,
                             };
                         }
 

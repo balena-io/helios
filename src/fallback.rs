@@ -4,6 +4,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use mahler::workflow::Interrupt;
 use serde::Deserialize;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -70,6 +71,9 @@ pub enum FallbackError {
 
     #[error("JSON serialization failed: {0}")]
     JsonSerialization(#[from] serde_json::Error),
+
+    #[error("Operation was interrupted")]
+    Interrupted,
 }
 
 impl FallbackError {
@@ -79,6 +83,7 @@ impl FallbackError {
             Self::UpstreamConnection(_) => StatusCode::BAD_GATEWAY,
             Self::UpstreamProxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JsonSerialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Interrupted => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -104,6 +109,7 @@ impl From<axum::http::uri::InvalidUriParts> for FallbackError {
 pub async fn wait_for_state_settle(
     fallback_uri: Uri,
     fallback_key: Option<String>,
+    interrupt: Interrupt,
 ) -> Result<(), FallbackError> {
     let client = reqwest::Client::new();
     // Build the status check URI
@@ -128,7 +134,10 @@ pub async fn wait_for_state_settle(
             }
         }
         trace!("waiting for fallback state to settle");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
+            _ = interrupt.wait() => return Err(FallbackError::Interrupted)
+        }
     }
     Ok(())
 }
@@ -140,6 +149,7 @@ pub async fn legacy_update(
     fallback_key: Option<String>,
     force: bool,
     cancel: bool,
+    interrupt: Interrupt,
 ) -> Result<(), FallbackError> {
     let client = reqwest::Client::new();
 
@@ -178,7 +188,7 @@ pub async fn legacy_update(
 
     // Wait for the state to settle
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    wait_for_state_settle(fallback_uri.clone(), fallback_key.clone()).await?;
+    wait_for_state_settle(fallback_uri.clone(), fallback_key.clone(), interrupt).await?;
 
     Ok(())
 }
