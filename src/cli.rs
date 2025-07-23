@@ -46,20 +46,20 @@ struct Cli {
     remote_api_key: Option<String>,
 
     #[arg(
-        long = "remote-poll-interval-ms",
-        value_name = "poll_interval_ms",
-        help = "Remote API poll interval in milliseconds",
-        env = "HELIOS_REMOTE_POLL_INTERVAL_MS"
-    )]
-    remote_poll_interval_ms: Option<u64>,
-
-    #[arg(
         long = "remote-request-timeout-ms",
         value_name = "request_timeout_ms",
         help = "Remote API request timeout in milliseconds",
         env = "HELIOS_REMOTE_REQUEST_TIMEOUT_MS"
     )]
     remote_request_timeout_ms: Option<u64>,
+
+    #[arg(
+        long = "remote-poll-interval-ms",
+        value_name = "poll_interval_ms",
+        help = "Remote API poll interval in milliseconds",
+        env = "HELIOS_REMOTE_POLL_INTERVAL_MS"
+    )]
+    remote_poll_interval_ms: Option<u64>,
 
     #[arg(
         long = "remote-min-interval-ms",

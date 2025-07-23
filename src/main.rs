@@ -98,8 +98,8 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
     // Start the API and the main loop and terminate on any error
     tokio::select! {
         _ = api::start(listener, seek_request_tx.clone(), poll_request_tx.clone(), local_state_rx.clone(), fallback_state.clone()) => Ok(()),
-        _ = remote::start_poll(&config, poll_request_rx.clone(), seek_request_tx) => Ok(()),
-        _ = remote::start_report(&config, local_state_rx) => Ok(()),
-        res = state::start_seek(&config, initial_state, fallback_state, seek_request_rx, local_state_tx) => res.map_err(|err| err.into()),
+        _ = remote::start_poll(&config.uuid, &config.remote, poll_request_rx.clone(), seek_request_tx) => Ok(()),
+        _ = remote::start_report(&config.remote, local_state_rx) => Ok(()),
+        res = state::start_seek(&config.uuid, initial_state, fallback_state, &config.fallback, seek_request_rx, local_state_tx) => res.map_err(|err| err.into()),
     }
 }

@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
 use tracing::{info, instrument, trace, warn};
 
+use crate::state::LocalState;
 use crate::util::uri::make_uri;
-use crate::{config::Config, state::LocalState};
 
+use super::config::RemoteConfig;
 use super::request::{Patch, RequestConfig};
 
 #[derive(Serialize, Debug, Clone)]
@@ -47,17 +48,17 @@ impl From<LocalState> for Report {
     }
 }
 
-fn get_report_client(config: &Config) -> Option<Patch> {
-    if let Some(uri) = config.remote.api_endpoint.clone() {
+fn get_report_client(config: &RemoteConfig) -> Option<Patch> {
+    if let Some(uri) = config.api_endpoint.clone() {
         let endpoint = make_uri(uri, "/device/v3/state", None)
             .expect("remote API endpoint must be a valid URI")
             .to_string();
 
         let client_config = RequestConfig {
-            timeout: config.remote.request_timeout,
-            min_interval: config.remote.min_interval,
-            max_backoff: config.remote.poll_interval,
-            api_token: config.remote.api_key.clone(),
+            timeout: config.request_timeout,
+            min_interval: config.min_interval,
+            max_backoff: config.poll_interval,
+            api_token: config.api_key.clone(),
         };
 
         let client = Patch::new(endpoint, client_config);
@@ -86,7 +87,7 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
 }
 
 #[instrument(name = "report", skip_all)]
-pub async fn start_report(config: &Config, mut state_rx: Receiver<LocalState>) {
+pub async fn start_report(config: &RemoteConfig, mut state_rx: Receiver<LocalState>) {
     let mut report_client = match get_report_client(config) {
         Some(client) => client,
         None => {

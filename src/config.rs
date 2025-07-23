@@ -1,11 +1,11 @@
-use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::Duration;
 
+use crate::fallback::FallbackConfig;
+use crate::remote::RemoteConfig;
 use crate::state::models::Uuid;
 
 /// Local API listen address
@@ -43,63 +43,6 @@ impl Default for LocalAddress {
     }
 }
 
-/// Remote API configurations
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RemoteConfig {
-    #[serde(
-        deserialize_with = "deserialize_optional_uri",
-        serialize_with = "serialize_optional_uri",
-        default
-    )]
-    pub api_endpoint: Option<Uri>,
-    pub api_key: Option<String>,
-    #[serde(
-        deserialize_with = "deserialize_duration_from_ms",
-        serialize_with = "serialize_duration_to_ms"
-    )]
-    pub poll_interval: Duration,
-    #[serde(
-        deserialize_with = "deserialize_duration_from_ms",
-        serialize_with = "serialize_duration_to_ms"
-    )]
-    pub request_timeout: Duration,
-    #[serde(
-        deserialize_with = "deserialize_duration_from_ms",
-        serialize_with = "serialize_duration_to_ms"
-    )]
-    pub min_interval: Duration,
-    #[serde(
-        deserialize_with = "deserialize_duration_from_ms",
-        serialize_with = "serialize_duration_to_ms"
-    )]
-    pub max_poll_jitter: Duration,
-}
-
-impl Default for RemoteConfig {
-    fn default() -> Self {
-        Self {
-            api_endpoint: None,
-            api_key: None,
-            poll_interval: Duration::from_millis(900000),
-            request_timeout: Duration::from_millis(59000),
-            min_interval: Duration::from_millis(10000),
-            max_poll_jitter: Duration::from_millis(60000),
-        }
-    }
-}
-
-/// Fallback API configurations
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct FallbackConfig {
-    #[serde(
-        deserialize_with = "deserialize_optional_uri",
-        serialize_with = "serialize_optional_uri",
-        default
-    )]
-    pub address: Option<Uri>,
-    pub api_key: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -110,47 +53,4 @@ pub struct Config {
     pub remote: RemoteConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
-}
-
-fn deserialize_optional_uri<'de, D>(deserializer: D) -> std::result::Result<Option<Uri>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let s: Option<String> = Option::deserialize(deserializer)?;
-    match s {
-        Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
-        None => Ok(None),
-    }
-}
-
-fn serialize_optional_uri<S>(
-    uri: &Option<Uri>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    match uri {
-        Some(uri) => serializer.serialize_some(&uri.to_string()),
-        None => serializer.serialize_none(),
-    }
-}
-
-fn deserialize_duration_from_ms<'de, D>(deserializer: D) -> std::result::Result<Duration, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let ms: u64 = serde::Deserialize::deserialize(deserializer)?;
-    Ok(Duration::from_millis(ms))
-}
-
-fn serialize_duration_to_ms<S>(
-    duration: &Duration,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_u64(duration.as_millis() as u64)
 }

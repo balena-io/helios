@@ -16,8 +16,10 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::config::Config;
-use crate::fallback::{legacy_update, wait_for_state_settle, FallbackError, FallbackState};
+use crate::fallback::{
+    legacy_update, wait_for_state_settle, FallbackConfig, FallbackError, FallbackState,
+};
+use crate::state::models::Uuid;
 
 use super::models::{Device, TargetDevice};
 use super::worker::{create, CreateError as WorkerCreateError};
@@ -185,9 +187,10 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
-    config: &Config,
+    uuid: &Uuid,
     initial_state: Device,
     fallback_state: FallbackState,
+    fallback_config: &FallbackConfig,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
 ) -> Result<(), SeekError> {
@@ -205,7 +208,7 @@ pub async fn start_seek(
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
     let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut interrupt = Interrupt::new();
-    if config.fallback.address.is_some() {
+    if fallback_config.address.is_some() {
         // If there is a fallback, we just assume it is applying changes, so the first apply will
         // go to the legacy supervisor instead of the local worker
         prev_seek_state = SeekState::Fallback;
@@ -332,14 +335,14 @@ pub async fn start_seek(
                         }
 
                         if let (Some(uri), Some(target_state)) =
-                            (config.fallback.address.clone(), update_req.raw_target)
+                            (fallback_config.address.clone(), update_req.raw_target)
                         {
                             // Set as the target state the raw target accepted by
                             // the fallback
                             fallback_state.set_target_state(target_state).await;
                             return match legacy_update(
                                 uri,
-                                config.fallback.api_key.clone(),
+                                fallback_config.api_key.clone(),
                                 update_req.opts.force,
                                 update_req.opts.cancel,
                                 interrupt,
@@ -354,12 +357,12 @@ pub async fn start_seek(
                         }
 
                         if let (Some(uri), SeekState::Fallback) =
-                            (config.fallback.address.clone(), prev_seek_state)
+                            (fallback_config.address.clone(), prev_seek_state)
                         {
                             // if we get here it means there is no raw target, so we need to keep waiting
                             return match wait_for_state_settle(
                                 uri,
-                                config.fallback.api_key.clone(),
+                                fallback_config.api_key.clone(),
                                 interrupt,
                             )
                             .await
@@ -389,7 +392,7 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state = Device::initial_for(config.uuid.clone());
+                    let initial_state = Device::initial_for(uuid.clone());
 
                     worker = create(initial_state)?;
                     worker_stream = worker.follow();

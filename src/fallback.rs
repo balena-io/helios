@@ -5,14 +5,27 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use mahler::workflow::Interrupt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, field, instrument, trace, warn};
 
+use crate::util::json::{deserialize_optional_uri, serialize_optional_uri};
 use crate::util::uri::{make_uri, UriError};
+
+/// Fallback API configurations
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct FallbackConfig {
+    #[serde(
+        deserialize_with = "deserialize_optional_uri",
+        serialize_with = "serialize_optional_uri",
+        default
+    )]
+    pub address: Option<Uri>,
+    pub api_key: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct StateStatusResponse {
