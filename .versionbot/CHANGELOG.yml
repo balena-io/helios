@@ -1,4 +1,43 @@
 - commits:
+    - subject: Add Interrupt argument to fallback functions
+      hash: 9a9a3861c9c497f18a018ce7919bb4b5037b27e3
+      body: |
+        Add an explicit interrupt flag to wait_for_state_settle and
+        update_legacy to remove the need to wrap those methods in a
+        `tokio::select!`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Wait for fallback state to settle on the seek loop
+      hash: 332601e792c53616eacf30ad3ce447144e50b957
+      body: |
+        The old supervisor may be in the middle of an apply when starting the
+        service, so we need the service to wait for the supervisor to report
+        `applied` before applying the target locally.
+
+        This moves the apply_future poll at the beginning of the tokio select to
+        give the future a chance to complete before it gets cancelled by a new
+        seek request comming from the API
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Split wait for settle step from legacy_update fn
+      hash: b8d60a6bff0b234464199e92965a5478f27887f9
+      body: |
+        This will be used later by the seek loop
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.9
+  title: ""
+  date: 2025-07-23T22:32:32.933Z
+- commits:
     - subject: Add API tests
       hash: bf896028c9621aa7d01f50c10c77cb64782dc1ce
       body: |
