@@ -126,17 +126,17 @@ pub async fn wait_for_state_settle(
 
     // Poll the status endpoint until appState is 'applied'
     loop {
+        trace!("waiting for fallback state to settle");
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
+            _ = interrupt.wait() => return Err(FallbackError::Interrupted)
+        }
         let status_response = client.get(&status_url).send().await?;
         if status_response.status().is_success() {
             let status: StateStatusResponse = status_response.json().await?;
             if status.app_state == "applied" {
                 break;
             }
-        }
-        trace!("waiting for fallback state to settle");
-        tokio::select! {
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
-            _ = interrupt.wait() => return Err(FallbackError::Interrupted)
         }
     }
     Ok(())
@@ -187,7 +187,6 @@ pub async fn legacy_update(
     debug!(response = field::display(response.status()), "success");
 
     // Wait for the state to settle
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     wait_for_state_settle(fallback_uri.clone(), fallback_key.clone(), interrupt).await?;
 
     Ok(())
