@@ -1,4 +1,46 @@
 - commits:
+    - subject: Add API tests
+      hash: bf896028c9621aa7d01f50c10c77cb64782dc1ce
+      body: |
+        Adds some basic tests for /v1/update and /v3/device/apps/{uuid}
+
+        The tests check that the right values get placed on the output channels
+        on POST
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Split seek and report into separate loops
+      hash: 7f84240b993499df69ffb0ed97022ba191d04c38
+      body: >
+        - Isolates the remote dependent behavior under the remote folder
+
+        - Removes the need for the CurrentState type with values behind RwLock
+
+        - Removes the apply_target function, moving the state into the core loop
+
+        - This will also make it easy to write API tests as every API endpoint
+        either
+          reads/writes to some channel
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Rename TargetStatus to UpdateStatus, move to seek.rs
+      hash: c5f89c4fd10b09425d5eb48a45c951c2f165d89c
+      body: |
+        UpdateStatus is a property of the seek loop more than a device model
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.8
+  title: ""
+  date: 2025-07-23T18:16:09.884Z
+- commits:
     - subject: Break up main poll loop into separate actions
       hash: 568583b20148a55dd01e084d2ffecdcd9357a25f
       body: |
