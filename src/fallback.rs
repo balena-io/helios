@@ -101,6 +101,40 @@ impl From<axum::http::uri::InvalidUriParts> for FallbackError {
     }
 }
 
+async fn wait_for_state_settle(
+    fallback_uri: Uri,
+    fallback_key: Option<String>,
+) -> Result<(), FallbackError> {
+    let client = reqwest::Client::new();
+    // Build the status check URI
+    let status_url = if let Some(apikey) = &fallback_key {
+        make_uri(
+            fallback_uri,
+            "/v2/state/status",
+            Some(&format!("apikey={apikey}")),
+        )
+    } else {
+        make_uri(fallback_uri, "/v2/state/status", None)
+    };
+    let status_url = status_url?.to_string();
+
+    // Poll the status endpoint until appState is 'applied'
+    loop {
+        trace!("waiting for the state to settle");
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let status_response = client.get(&status_url).send().await?;
+
+        if status_response.status().is_success() {
+            let status: StateStatusResponse = status_response.json().await?;
+            if status.app_state == "applied" {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, err)]
 pub async fn legacy_update(
@@ -144,32 +178,8 @@ pub async fn legacy_update(
     };
     debug!(response = field::display(response.status()), "success");
 
-    // Build the status check URI
-    let status_url = if let Some(apikey) = &fallback_key {
-        make_uri(
-            fallback_uri,
-            "/v2/state/status",
-            Some(&format!("apikey={apikey}")),
-        )
-    } else {
-        make_uri(fallback_uri, "/v2/state/status", None)
-    };
-    let status_url = status_url?.to_string();
-
-    // Poll the status endpoint until appState is 'applied'
-    loop {
-        trace!("waiting for the state to settle");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-        let status_response = client.get(&status_url).send().await?;
-
-        if status_response.status().is_success() {
-            let status: StateStatusResponse = status_response.json().await?;
-            if status.app_state == "applied" {
-                break;
-            }
-        }
-    }
+    // Wait for the state to settle
+    wait_for_state_settle(fallback_uri.clone(), fallback_key.clone()).await?;
 
     Ok(())
 }
