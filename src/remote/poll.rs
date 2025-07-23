@@ -129,7 +129,7 @@ pub async fn start_poll(
             return future::pending::<()>().await;
         }
     };
-    info!("ready");
+    info!("starting");
 
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(config);

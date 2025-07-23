@@ -1,19 +1,21 @@
+use futures_lite::future;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{instrument, warn};
+use tokio::sync::watch::Receiver;
+use tracing::{info, instrument, trace, warn};
 
-use crate::config::Config;
 use crate::util::uri::make_uri;
+use crate::{config::Config, state::LocalState};
 
 use super::request::{Patch, RequestConfig};
 
 #[derive(Serialize, Debug, Clone)]
-pub struct DeviceReport {}
+struct DeviceReport {}
 
 // The state for report
 #[derive(Serialize, Debug, Clone)]
-pub struct Report(HashMap<String, DeviceReport>);
+struct Report(HashMap<String, DeviceReport>);
 
 impl Report {
     pub fn new(device: HashMap<String, DeviceReport>) -> Self {
@@ -29,10 +31,23 @@ impl From<Report> for Value {
     }
 }
 
-// Return type from send_report
-pub type LastReport = Option<Value>;
+impl From<LocalState> for DeviceReport {
+    fn from(_: LocalState) -> Self {
+        // TODO
+        DeviceReport {}
+    }
+}
 
-pub fn get_report_client(config: &Config) -> Option<Patch> {
+impl From<LocalState> for Report {
+    fn from(state: LocalState) -> Self {
+        Report::new(HashMap::from([(
+            state.device.uuid.clone().into(),
+            state.into(),
+        )]))
+    }
+}
+
+fn get_report_client(config: &Config) -> Option<Patch> {
     if let Some(uri) = config.remote.api_endpoint.clone() {
         let endpoint = make_uri(uri, "/device/v3/state", None)
             .expect("remote API endpoint must be a valid URI")
@@ -53,11 +68,14 @@ pub fn get_report_client(config: &Config) -> Option<Patch> {
     }
 }
 
-#[instrument(skip_all)]
+// Return type from send_report
+type LastReport = Option<Value>;
+
 async fn send_report(client: &mut Patch, report: Report, last_report: LastReport) -> LastReport {
     // TODO: calculate differences with the last report and just send that
-    let res = match client.patch(report.clone().into()).await {
-        Ok(_) => Some(report.into()),
+    let new_report: Value = report.into();
+    let res = match client.patch(new_report.clone()).await {
+        Ok(_) => Some(new_report),
         Err(e) => {
             warn!("patch failed: {e}");
             last_report
@@ -67,14 +85,63 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
     res
 }
 
-pub async fn send_report_if_managed(
-    report_client: &mut Option<Patch>,
-    report: Report,
-    last_report: LastReport,
-) -> LastReport {
-    if let Some(client) = report_client {
-        send_report(client, report, last_report).await
-    } else {
-        last_report
+#[instrument(name = "report", skip_all)]
+pub async fn start_report(config: &Config, mut state_rx: Receiver<LocalState>) {
+    let mut report_client = match get_report_client(config) {
+        Some(client) => client,
+        None => {
+            warn!("running in unmanaged mode");
+            // just disable this branch
+            return future::pending::<()>().await;
+        }
+    };
+    info!("waiting for state changes");
+
+    // Send initial report
+    let initial_report = state_rx.borrow().clone().into();
+    let mut last_report = send_report(&mut report_client, initial_report, LastReport::None).await;
+
+    loop {
+        let state_changed = state_rx.changed().await;
+        if state_changed.is_err() {
+            // Not really an error, it just means the API closed
+            trace!("state channel closed");
+            break;
+        }
+
+        let report = state_rx.borrow_and_update().clone().into();
+        // Wait for the report to be sent or cancel the patch if the state changes
+        // before the patch is completed
+        last_report = tokio::select! {
+            res = send_report(&mut report_client, report, last_report.clone()) => res,
+            _ = state_rx.changed() => last_report
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::state::models::Device;
+
+    use super::*;
+
+    #[test]
+    fn it_creates_a_device_report_from_a_device() {
+        let device = Device {
+            uuid: "test-uuid".to_string().into(),
+            images: HashMap::new(),
+            apps: HashMap::new(),
+            config: HashMap::new(),
+        };
+
+        let report = Report::from(LocalState {
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let value: Value = report.into();
+        assert_eq!(value, json!({"test-uuid": {}}))
     }
 }

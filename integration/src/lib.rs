@@ -15,7 +15,7 @@ mod tests {
             .await
             .unwrap();
 
-        while status == "applying" || status == "no_target_yet" {
+        while status == "applying_changes" {
             tokio::time::sleep(Duration::from_secs(1)).await;
             status = reqwest::get(format!("{HELIOS_URL}/v3/status"))
                 .await
@@ -65,7 +65,7 @@ mod tests {
             .unwrap();
         assert_eq!(body.status(), StatusCode::ACCEPTED);
         let status = wait_for_target_apply().await;
-        assert_eq!(status, json!({"status": "applied"}));
+        assert_eq!(status, json!({"status": "done"}));
     }
 
     #[tokio::test]
@@ -91,7 +91,7 @@ mod tests {
             .unwrap();
         assert_eq!(body.status(), StatusCode::ACCEPTED);
         let status = wait_for_target_apply().await;
-        assert_eq!(status, json!({"status": "applied"}));
+        assert_eq!(status, json!({"status": "done"}));
 
         // test that the app is returned by the API
         let app: serde_json::Value = reqwest::get(format!("{HELIOS_URL}/v3/device/apps/test-app"))
