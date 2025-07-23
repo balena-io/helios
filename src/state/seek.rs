@@ -17,7 +17,7 @@ use tokio::sync::{
 use tracing::{error, info, instrument, trace};
 
 use crate::config::Config;
-use crate::fallback::{legacy_update, FallbackError, FallbackState};
+use crate::fallback::{legacy_update, wait_for_state_settle, FallbackError, FallbackState};
 
 use super::models::{Device, TargetDevice};
 use super::worker::{create, CreateError as WorkerCreateError};
@@ -205,6 +205,11 @@ pub async fn start_seek(
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
     let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut interrupt = Interrupt::new();
+    if config.fallback.address.is_some() {
+        // If there is a fallback, we just assume it is applying changes, so the first apply will
+        // go to the legacy supervisor instead of the local worker
+        prev_seek_state = SeekState::Fallback;
+    }
 
     // The next queued target state
     let mut next_target = NextTarget::new();
@@ -215,6 +220,7 @@ pub async fn start_seek(
         let action: SeekAction = tokio::select! {
             // Prioritize new requests over a pending target
             biased;
+
             // Wake on update request
             update_requested = seek_rx.changed() => {
                 if update_requested.is_err() {
@@ -300,6 +306,15 @@ pub async fn start_seek(
                     let fallback_state = &fallback_state;
                     let worker = &mut worker;
                     let prev_seek_state = prev_seek_state.clone();
+
+                    // If this is the case we already know the target won't be processed by the
+                    // apply block so, we just put it back on the pending queue.
+                    if update_req.raw_target.is_none()
+                        && matches!(prev_seek_state, SeekState::Fallback)
+                    {
+                        next_target.set(update_req.clone());
+                    }
+
                     Box::pin(async move {
                         let mut status = UpdateStatus::ApplyingChanges;
                         if !matches!(prev_seek_state, SeekState::Fallback) {
@@ -322,20 +337,37 @@ pub async fn start_seek(
                             // Set as the target state the raw target accepted by
                             // the fallback
                             fallback_state.set_target_state(target_state).await;
-                            let interrupted = tokio::select! {
-                                res = legacy_update(uri, config.fallback.api_key.clone(), update_req.opts.force, update_req.opts.cancel) => {
-                                    res?;
-                                    false
-                                },
-                                _ = interrupt.wait() => true
+                            return match legacy_update(
+                                uri,
+                                config.fallback.api_key.clone(),
+                                update_req.opts.force,
+                                update_req.opts.cancel,
+                                interrupt,
+                            )
+                            .await
+                            {
+                                // Tell the caller that they need to reset the worker
+                                Ok(_) => Ok(SeekState::Reset),
+                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(e) => return Err(e)?,
                             };
+                        }
 
-                            if interrupted {
-                                return Ok(SeekState::Fallback);
-                            }
-
-                            // Tell the caller that they need to reset the worker
-                            return Ok(SeekState::Reset);
+                        if let (Some(uri), SeekState::Fallback) =
+                            (config.fallback.address.clone(), prev_seek_state)
+                        {
+                            // if we get here it means there is no raw target, so we need to keep waiting
+                            return match wait_for_state_settle(
+                                uri,
+                                config.fallback.api_key.clone(),
+                                interrupt,
+                            )
+                            .await
+                            {
+                                Ok(_) => Ok(SeekState::Reset),
+                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(e) => Err(e)?,
+                            };
                         }
 
                         Ok(SeekState::Local(status))

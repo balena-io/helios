@@ -4,6 +4,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use mahler::workflow::Interrupt;
 use serde::Deserialize;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -70,6 +71,9 @@ pub enum FallbackError {
 
     #[error("JSON serialization failed: {0}")]
     JsonSerialization(#[from] serde_json::Error),
+
+    #[error("Operation was interrupted")]
+    Interrupted,
 }
 
 impl FallbackError {
@@ -79,6 +83,7 @@ impl FallbackError {
             Self::UpstreamConnection(_) => StatusCode::BAD_GATEWAY,
             Self::UpstreamProxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JsonSerialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Interrupted => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -101,6 +106,42 @@ impl From<axum::http::uri::InvalidUriParts> for FallbackError {
     }
 }
 
+pub async fn wait_for_state_settle(
+    fallback_uri: Uri,
+    fallback_key: Option<String>,
+    interrupt: Interrupt,
+) -> Result<(), FallbackError> {
+    let client = reqwest::Client::new();
+    // Build the status check URI
+    let status_url = if let Some(apikey) = &fallback_key {
+        make_uri(
+            fallback_uri,
+            "/v2/state/status",
+            Some(&format!("apikey={apikey}")),
+        )
+    } else {
+        make_uri(fallback_uri, "/v2/state/status", None)
+    };
+    let status_url = status_url?.to_string();
+
+    // Poll the status endpoint until appState is 'applied'
+    loop {
+        let status_response = client.get(&status_url).send().await?;
+        if status_response.status().is_success() {
+            let status: StateStatusResponse = status_response.json().await?;
+            if status.app_state == "applied" {
+                break;
+            }
+        }
+        trace!("waiting for fallback state to settle");
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
+            _ = interrupt.wait() => return Err(FallbackError::Interrupted)
+        }
+    }
+    Ok(())
+}
+
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, err)]
 pub async fn legacy_update(
@@ -108,6 +149,7 @@ pub async fn legacy_update(
     fallback_key: Option<String>,
     force: bool,
     cancel: bool,
+    interrupt: Interrupt,
 ) -> Result<(), FallbackError> {
     let client = reqwest::Client::new();
 
@@ -144,32 +186,9 @@ pub async fn legacy_update(
     };
     debug!(response = field::display(response.status()), "success");
 
-    // Build the status check URI
-    let status_url = if let Some(apikey) = &fallback_key {
-        make_uri(
-            fallback_uri,
-            "/v2/state/status",
-            Some(&format!("apikey={apikey}")),
-        )
-    } else {
-        make_uri(fallback_uri, "/v2/state/status", None)
-    };
-    let status_url = status_url?.to_string();
-
-    // Poll the status endpoint until appState is 'applied'
-    loop {
-        trace!("waiting for the state to settle");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-        let status_response = client.get(&status_url).send().await?;
-
-        if status_response.status().is_success() {
-            let status: StateStatusResponse = status_response.json().await?;
-            if status.app_state == "applied" {
-                break;
-            }
-        }
-    }
+    // Wait for the state to settle
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    wait_for_state_settle(fallback_uri.clone(), fallback_key.clone(), interrupt).await?;
 
     Ok(())
 }
