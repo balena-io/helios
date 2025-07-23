@@ -1,4 +1,27 @@
 - commits:
+    - subject: Fix the order of query/sleep in wait_for_state
+      hash: 15b869d77c36a13a64d2cc7c1e41d1b592ad2e02
+      body: |
+        This reverts the order to what existed before #36 to communicate what is
+        happening during a legacy update to the user
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Update dependencies
+      hash: d423ee73707d9a46f962c4151cf3bff96a0e90c4
+      body: |
+        Bump version for all dependencies in Cargo.toml
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.4.10
+  title: ""
+  date: 2025-07-23T23:36:06.252Z
+- commits:
     - subject: Add Interrupt argument to fallback functions
       hash: 9a9a3861c9c497f18a018ce7919bb4b5037b27e3
       body: |
