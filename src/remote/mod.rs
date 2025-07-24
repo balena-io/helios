@@ -7,9 +7,13 @@ target state and reporting the transition to it, while obeying backend
 constraints such as on frequency of requests.
 */
 
+mod config;
 mod poll;
+mod register;
 mod report;
 mod request;
 
+pub use config::RemoteConfig;
 pub use poll::{start_poll, PollRequest};
+pub use register::register;
 pub use report::start_report;
