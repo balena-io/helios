@@ -1,4 +1,57 @@
 - commits:
+    - subject: Split proxy into config and state cache parts
+      hash: 6a6eb91a47b4984b3e9d71f9a9d75e953d1bcfa1
+      body: |
+        This allows us to pass around only the relevant parts of data.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Rename “fallback” to “legacy”
+      hash: 2c5c8e1b52583f64ab416ba08e17dd8a95a02044
+      body: >
+        Refer to what we previously called “fallback” as “legacy” or “legacy
+        Supervisor” as appropriate.
+
+
+        “Fallback” is a good term, in that it describes what the code does (and
+        not “what it is”), but “legacy” is more familiar, specific and
+        semantically appropriate, as it is not suggesting that this is about
+        some general feature Helios provides but is specific to allowing us to
+        deploy Helios alongside the legacy Supervisor and is thus ephemeral.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Akis Kesoglou
+      nested: []
+    - subject: Break up fallback into submodules
+      hash: 65ffc64d078a2bffc89cbe59bc176d8dfb0b07cb
+      body: >
+        Also:
+
+
+        - rename FallbackState into ProxyContext which better captures intent
+
+        - use different Error enums for proxy and state update to avoid allowing
+        impossible runtime states
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Turn fallback into a submodule
+      hash: f4dc2a5e1dc96da00661d443c233c89792e987ee
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.5.0
+  title: ""
+  date: 2025-07-24T14:44:47.743Z
+- commits:
     - subject: Flesh out the CLI providing defaults and encoding dependencies between
         arguments
       hash: 736a2a4be1eac1d0e8872d2c35aa43be76f9e4cc
