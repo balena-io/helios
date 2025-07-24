@@ -36,6 +36,9 @@ pub enum GetError {
 
     #[error("not found")]
     NotFound,
+
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl From<TryGetError> for GetError {
@@ -455,13 +458,18 @@ impl Get {
     /// returns 304 Not Modified, the cached response is returned instead. On errors
     /// (rate limiting, server errors), returns cached data if available.
     ///
+    /// The request can be cancelled via the `interrupt` argument
+    ///
+    /// # Arguments
+    /// * `interrupt` - Interrupt token allowing the get to be cancelled
+    ///
     /// # Returns
     /// * `Ok(Response)` - Successfully retrieved response or cached data
     /// * `Err(GetError)` - Authentication failed or no cached data available for error
     ///
     /// # Example
     /// ```rust,ignore
-    /// let response = client.get().await?;
+    /// let response = client.get(Interrupt::new()).await?;
     ///
     /// if response.modified {
     ///     println!("Fresh data: {:?}", response.value);
@@ -469,13 +477,21 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty))]
-    pub async fn get(&mut self) -> Result<GetResponse, GetError> {
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty))]
+    pub async fn get(&mut self, interrupt: Interrupt) -> Result<GetResponse, GetError> {
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
         let mut tries = 1;
         loop {
-            match self.try_get().await {
+            let result = tokio::select! {
+                res = self.try_get() => res,
+                _ = interrupt.wait() => {
+                    Span::current().record("cancelled", true);
+                    return Err(GetError::Cancelled)
+                }
+            };
+
+            match result {
                 Ok(response) => {
                     Span::current().record("retries", tries - 1);
                     Span::current().record("success_rate", self.metrics().success_rate());
@@ -714,7 +730,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint, client_config);
-        let response = client.get().await.unwrap();
+        let response = client.get(Interrupt::new()).await.unwrap();
 
         assert_eq!(response.value, Some(json!({"status": "running"})));
         assert!(response.modified);
@@ -740,7 +756,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint.clone(), client_config);
-        let response1 = client.get().await.unwrap();
+        let response1 = client.get(Interrupt::new()).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
         assert!(response1.modified);
@@ -755,7 +771,7 @@ mod tests {
             .create_async()
             .await;
 
-        let response2 = client.get().await.unwrap();
+        let response2 = client.get(Interrupt::new()).await.unwrap();
 
         assert_eq!(response2.value, Some(json!({"status": "running"})));
         assert!(!response2.modified);
@@ -787,8 +803,8 @@ mod tests {
         let mut client = Get::new(endpoint, config);
 
         let start = std::time::Instant::now();
-        client.get().await.unwrap();
-        client.get().await.unwrap();
+        client.get(Interrupt::new()).await.unwrap();
+        client.get(Interrupt::new()).await.unwrap();
         let end = std::time::Instant::now();
 
         assert!(end.duration_since(start) >= Duration::from_millis(100));
@@ -916,7 +932,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("invalid-token".to_string());
         let mut client = Get::new(endpoint, client_config);
-        let response = client.get().await;
+        let response = client.get(Interrupt::new()).await;
 
         assert!(matches!(response, Err(GetError::Unauthorized)));
 
@@ -945,7 +961,7 @@ mod tests {
         };
 
         let mut client = Get::new(endpoint, config);
-        let response = client.get().await;
+        let response = client.get(Interrupt::new()).await;
 
         // Should return error for invalid JSON instead of retrying
         assert!(matches!(response, Err(GetError::Serialization(_))));
@@ -975,7 +991,7 @@ mod tests {
         };
 
         let mut client = Get::new(endpoint.clone(), config);
-        let response1 = client.get().await.unwrap();
+        let response1 = client.get(Interrupt::new()).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
         assert!(response1.modified);
@@ -998,7 +1014,7 @@ mod tests {
             .create_async()
             .await;
 
-        let response2 = client.get().await.unwrap();
+        let response2 = client.get(Interrupt::new()).await.unwrap();
 
         assert_eq!(response2.value, Some(json!({"status": "recovered"})));
         assert!(response2.modified);
@@ -1040,7 +1056,7 @@ mod tests {
 
         // Should eventually succeed after rate limit expires
         let start_time = std::time::Instant::now();
-        let result = client.get().await.unwrap();
+        let result = client.get(Interrupt::new()).await.unwrap();
         let elapsed = start_time.elapsed();
 
         // Verify that at least 1 second passed (respecting the retry-after header)
@@ -1319,7 +1335,7 @@ mod tests {
         let mut client = Get::new(endpoint, config);
 
         // Start first request that will fail and increase backoff
-        let first_request = client.get();
+        let first_request = client.get(Interrupt::new());
 
         // Drop the future before the second request
         tokio::select! {
@@ -1329,7 +1345,7 @@ mod tests {
 
         // This request should use start the backoff from min_interval
         let start_time = std::time::Instant::now();
-        let _result = client.get().await.unwrap();
+        let _result = client.get(Interrupt::new()).await.unwrap();
         let elapsed = start_time.elapsed();
 
         // Should complete within 2 * min_interval + network time, meaning the backoff was re-set
@@ -1442,5 +1458,73 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 10);
         assert_eq!(metrics.success_rate(), 70.0);
+    }
+
+    #[tokio::test]
+    async fn test_get_cancellation() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // Set up a normal response
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status": "response"}"#)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(60),
+            api_token: Some("test-token".to_string()),
+        };
+
+        let mut client = Get::new(endpoint, config);
+
+        // Create an interrupt that triggers immediately
+        let interrupt = Interrupt::new();
+        interrupt.trigger();
+
+        // The request should be cancelled immediately
+        let result = client.get(interrupt).await;
+        assert!(matches!(result, Err(GetError::Cancelled)));
+
+        // Mock should not be hit due to immediate cancellation
+    }
+
+    #[tokio::test]
+    async fn test_patch_cancellation() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // Set up a normal response
+        let _mock = server
+            .mock("PATCH", "/")
+            .match_header("content-type", "application/json")
+            .match_body(Matcher::Json(json!({"status": "test"})))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(60),
+            api_token: Some("test-token".to_string()),
+        };
+
+        let mut client = Patch::new(endpoint, config);
+
+        // Create an interrupt that triggers immediately
+        let interrupt = Interrupt::new();
+        interrupt.trigger();
+
+        // The request should be cancelled immediately
+        let result = client.patch(json!({"status": "test"}), interrupt).await;
+        assert!(matches!(result, Err(PatchError::Cancelled)));
+
+        // Mock should not be hit due to immediate cancellation
     }
 }
