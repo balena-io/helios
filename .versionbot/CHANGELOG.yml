@@ -1,4 +1,25 @@
 - commits:
+    - subject: Add Start command
+      hash: 78f3e3cc54f804607f07790cf45704d0b6719fdf
+      body: ""
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Akis Kesoglou
+      nested: []
+    - subject: Use CLI directly for all configuration
+      hash: 759b051ce5e1c6d6bc28ebf6529f682dd7c18273
+      body: |
+        There is now a single source of truth for configuring execution.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.6.0
+  title: ""
+  date: 2025-07-24T18:01:43.090Z
+- commits:
     - subject: Split proxy into config and state cache parts
       hash: 6a6eb91a47b4984b3e9d71f9a9d75e953d1bcfa1
       body: |
