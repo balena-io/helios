@@ -1,4 +1,33 @@
 - commits:
+    - subject: Flesh out the CLI providing defaults and encoding dependencies between
+        arguments
+      hash: 736a2a4be1eac1d0e8872d2c35aa43be76f9e4cc
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Stop carrying Config around and forward only necessary values
+      hash: edcd3e9da7c5cf6dc2982380348838b5fb0a9291
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move register into remote
+      hash: 43497f5b27dc762cfd2e186b6250f7b98c6c511c
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.4.11
+  title: ""
+  date: 2025-07-24T12:02:14.752Z
+- commits:
     - subject: Fix the order of query/sleep in wait_for_state
       hash: 15b869d77c36a13a64d2cc7c1e41d1b592ad2e02
       body: |
