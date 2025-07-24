@@ -18,31 +18,23 @@ use crate::util::uri::make_uri;
 use super::config::RemoteConfig;
 use super::request::{Get, RequestConfig};
 
-type PollClient = Get;
+async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Value>) {
+    let uri = config.api_endpoint.clone();
+    let endpoint = make_uri(uri, format!("/device/v3/{uuid}/state").as_str(), None)
+        .expect("remote API endpoint must be a valid URI")
+        .to_string();
 
-async fn get_poll_client(
-    uuid: &Uuid,
-    config: &RemoteConfig,
-) -> (Option<PollClient>, Option<Value>) {
-    if let Some(uri) = config.api_endpoint.clone() {
-        let endpoint = make_uri(uri, format!("/device/v3/{uuid}/state").as_str(), None)
-            .expect("remote API endpoint must be a valid URI")
-            .to_string();
+    let client_config = RequestConfig {
+        timeout: config.request_timeout,
+        min_interval: config.min_interval,
+        max_backoff: config.poll_interval,
+        api_token: config.api_key.clone(),
+    };
 
-        let client_config = RequestConfig {
-            timeout: config.request_timeout,
-            min_interval: config.min_interval,
-            max_backoff: config.poll_interval,
-            api_token: config.api_key.clone(),
-        };
+    let mut client = Get::new(endpoint, client_config);
+    let cached = client.restore_cache().await.cloned();
 
-        let mut client = PollClient::new(endpoint, client_config);
-        let cached = client.restore_cache().await.cloned();
-
-        (Some(client), cached)
-    } else {
-        (None, None)
-    }
+    (client, cached)
 }
 
 fn next_poll(config: &RemoteConfig) -> Duration {
@@ -57,11 +49,7 @@ type PollResult = (Option<Value>, UpdateOpts, Instant);
 
 /// Poll the remote target returning the metadata back
 /// to the caller after the request succeeds
-async fn poll_remote(
-    config: &RemoteConfig,
-    poll_client: &mut PollClient,
-    req: PollRequest,
-) -> PollResult {
+async fn poll_remote(config: &RemoteConfig, poll_client: &mut Get, req: PollRequest) -> PollResult {
     // poll if we have a client
     let value = match poll_client.get().await {
         Ok(res) if req.reemit || res.modified => res.value,
@@ -123,17 +111,17 @@ impl fmt::Display for PollAction {
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
     uuid: &Uuid,
-    config: &RemoteConfig,
+    config: &Option<RemoteConfig>,
     mut poll_rx: Receiver<PollRequest>,
     seek_tx: Sender<SeekRequest>,
 ) {
-    let (mut poll_client, initial_target) = match get_poll_client(uuid, config).await {
-        (Some(client), cached) => (client, cached),
-        (None, _) => {
-            warn!("running in unmanaged mode");
-            // just disable this branch
-            return future::pending::<()>().await;
-        }
+    let (mut poll_client, initial_target, config) = if let Some(remote) = config {
+        let (client, cached) = get_poll_client(uuid, remote).await;
+        (client, cached, remote)
+    } else {
+        warn!("running in unmanaged mode");
+        // just disable this branch
+        return future::pending::<()>().await;
     };
     info!("starting");
 
