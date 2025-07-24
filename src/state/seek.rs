@@ -6,7 +6,6 @@ use mahler::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    fmt,
     future::{self, Future},
     pin::Pin,
 };
@@ -129,18 +128,6 @@ enum SeekAction {
     Complete(SeekState),
 }
 
-impl fmt::Display for SeekAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let action = match self {
-            Self::Terminate => "terminate",
-            Self::Apply(_) => "apply",
-            Self::Report(_) => "report",
-            Self::Complete(_) => "complete",
-        };
-        f.write_str(action)
-    }
-}
-
 // Helper struct to keep track of the next seek request
 struct NextTarget {
     next: Option<SeekRequest>,
@@ -259,8 +246,6 @@ pub async fn start_seek(
                 SeekAction::Complete(seek_state)
             }
         };
-
-        trace!("performing action: {action}");
 
         match action {
             SeekAction::Terminate => {

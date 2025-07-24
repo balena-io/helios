@@ -1,7 +1,6 @@
 use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -103,17 +102,6 @@ enum PollAction {
     },
 }
 
-impl fmt::Display for PollAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let action = match self {
-            Self::Terminate => "terminate",
-            Self::Poll(_) => "poll",
-            Self::Complete { .. } => "complete",
-        };
-        f.write_str(action)
-    }
-}
-
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
     uuid: &Uuid,
@@ -189,8 +177,6 @@ pub async fn start_poll(
                 }
             }
         };
-
-        trace!("performing action: {action}");
 
         match action {
             PollAction::Terminate => {
