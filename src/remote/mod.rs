@@ -8,8 +8,10 @@ constraints such as on frequency of requests.
 */
 
 mod poll;
+mod register;
 mod report;
 mod request;
 
 pub use poll::{start_poll, PollRequest};
+pub use register::register;
 pub use report::start_report;

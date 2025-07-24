@@ -14,7 +14,6 @@ mod api;
 mod cli;
 mod config;
 mod fallback;
-mod register;
 mod remote;
 mod state;
 mod util;
@@ -22,7 +21,7 @@ mod util;
 use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
-use register::register;
+use remote::register;
 use state::models::Device;
 
 fn initialize_tracing() {
