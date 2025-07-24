@@ -24,7 +24,7 @@ unset HELIOS_REMOTE_MIN_INTERVAL_MS
   exit 1
 )
 
-# Check for supervisor set variables and configure the local service, the variables come from these features
+# Check for Supervisor set variables and configure the local service, the variables come from these features
 # - io.balena.features.supervisor-api: '1'
 # - io.balena.features.balena-socket: '1'
 # - io.balena.features.dbus: '1'
@@ -33,7 +33,7 @@ unset HELIOS_REMOTE_MIN_INTERVAL_MS
 # Read configuration from BALENA_* variables
 HELIOS_DEVICE_UUID="${BALENA_DEVICE_UUID}"
 
-# Run in unmanaged mode if the fallback supervisor is unmanaged
+# Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"
   HELIOS_REMOTE_API_KEY="${BALENA_API_KEY}"
@@ -41,7 +41,7 @@ if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   export HELIOS_REMOTE_API_KEY
 fi
 
-# Setup the supervisor
+# Setup the Supervisor
 dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$dir/setup-supervisor.sh"
 

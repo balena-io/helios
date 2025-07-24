@@ -18,7 +18,7 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::fallback::{proxy_legacy, FallbackState};
+use crate::legacy::{proxy, ProxyConfig, ProxyState};
 use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
 use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
@@ -40,7 +40,8 @@ pub async fn start(
     seek_request_tx: Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
     state_rx: LocalStateRx,
-    fallback_state: FallbackState,
+    proxy_config: ProxyConfig,
+    proxy_state: ProxyState,
 ) {
     let api_span = Span::current();
     let target_device_tx = seek_request_tx.clone();
@@ -66,7 +67,7 @@ pub async fn start(
             post(move |body| trigger_poll(poll_request_tx, body)),
         )
         // Default to proxying requests if there is no handler
-        .fallback(move |request| proxy_legacy(fallback_state, request))
+        .fallback(move |request| proxy(proxy_config, proxy_state, request))
         // Enable tracing
         .layer(
             TraceLayer::new_for_http()
@@ -204,7 +205,7 @@ async fn set_app_tgt_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fallback::FallbackState;
+    use crate::legacy::ProxyConfig;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -230,14 +231,16 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let fallback_state = FallbackState::new("test-device".to_string(), None, None);
+        let proxy_config = ProxyConfig::new("test-device".to_string(), None, None);
+        let proxy_state = ProxyState::new(None);
 
         tokio::spawn(start(
             Listener::Tcp(listener),
             seek_request_tx,
             poll_request_tx,
             state_rx,
-            fallback_state,
+            proxy_config,
+            proxy_state,
         ));
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

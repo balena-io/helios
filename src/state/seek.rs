@@ -16,8 +16,8 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::fallback::{
-    legacy_update, wait_for_state_settle, FallbackConfig, FallbackError, FallbackState,
+use crate::legacy::{
+    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
 use crate::state::models::Uuid;
 
@@ -109,14 +109,14 @@ pub enum SeekError {
     SeekTargetState(#[from] WorkerSeekError),
 
     #[error("Failed to update state on legacy Supervisor: {0}")]
-    LegacyUpdate(#[from] FallbackError),
+    LegacyUpdate(#[from] StateUpdateError),
 }
 
 #[derive(Debug, Clone)]
 enum SeekState {
     Reset,
     Local(UpdateStatus),
-    Fallback,
+    Legacy,
 }
 
 type SeekResult = Result<SeekState, SeekError>;
@@ -189,8 +189,8 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 pub async fn start_seek(
     uuid: &Uuid,
     initial_state: Device,
-    fallback_state: FallbackState,
-    fallback_config: &FallbackConfig,
+    proxy_state: ProxyState,
+    legacy_config: &LegacyConfig,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
 ) -> Result<(), SeekError> {
@@ -208,10 +208,10 @@ pub async fn start_seek(
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
     let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut interrupt = Interrupt::new();
-    if fallback_config.address.is_some() {
+    if legacy_config.address.is_some() {
         // If there is a fallback, we just assume it is applying changes, so the first apply will
         // go to the legacy supervisor instead of the local worker
-        prev_seek_state = SeekState::Fallback;
+        prev_seek_state = SeekState::Legacy;
     }
 
     // The next queued target state
@@ -306,24 +306,24 @@ pub async fn start_seek(
                 // Create the apply future
                 apply_future = {
                     let interrupt = interrupt.clone();
-                    let fallback_state = &fallback_state;
+                    let proxy_state = &proxy_state;
                     let worker = &mut worker;
                     let prev_seek_state = prev_seek_state.clone();
 
                     // If this is the case we already know the target won't be processed by the
                     // apply block so, we just put it back on the pending queue.
                     if update_req.raw_target.is_none()
-                        && matches!(prev_seek_state, SeekState::Fallback)
+                        && matches!(prev_seek_state, SeekState::Legacy)
                     {
                         next_target.set(update_req.clone());
                     }
 
                     Box::pin(async move {
                         let mut status = UpdateStatus::ApplyingChanges;
-                        if !matches!(prev_seek_state, SeekState::Fallback) {
+                        if !matches!(prev_seek_state, SeekState::Legacy) {
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
-                            fallback_state.clear_target_state().await;
+                            proxy_state.clear().await;
 
                             // Apply the target
                             status = tokio::select! {
@@ -335,14 +335,14 @@ pub async fn start_seek(
                         }
 
                         if let (Some(uri), Some(target_state)) =
-                            (fallback_config.address.clone(), update_req.raw_target)
+                            (legacy_config.address.clone(), update_req.raw_target)
                         {
-                            // Set as the target state the raw target accepted by
-                            // the fallback
-                            fallback_state.set_target_state(target_state).await;
-                            return match legacy_update(
+                            // Set the raw target accepted by the legacy Supervisor
+                            // as the target state
+                            proxy_state.set(target_state).await;
+                            return match trigger_update(
                                 uri,
-                                fallback_config.api_key.clone(),
+                                legacy_config.api_key.clone(),
                                 update_req.opts.force,
                                 update_req.opts.cancel,
                                 interrupt,
@@ -351,24 +351,24 @@ pub async fn start_seek(
                             {
                                 // Tell the caller that they need to reset the worker
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Legacy),
                                 Err(e) => return Err(e)?,
                             };
                         }
 
-                        if let (Some(uri), SeekState::Fallback) =
-                            (fallback_config.address.clone(), prev_seek_state)
+                        if let (Some(uri), SeekState::Legacy) =
+                            (legacy_config.address.clone(), prev_seek_state)
                         {
                             // if we get here it means there is no raw target, so we need to keep waiting
                             return match wait_for_state_settle(
                                 uri,
-                                fallback_config.api_key.clone(),
+                                legacy_config.api_key.clone(),
                                 interrupt,
                             )
                             .await
                             {
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Legacy),
                                 Err(e) => Err(e)?,
                             };
                         }
