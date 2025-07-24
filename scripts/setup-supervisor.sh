@@ -2,9 +2,9 @@
 
 set -e
 
-# Supervisor fallback port
-fallback_port=${HELIOS_FALLBACK_PORT:-48480}
-unset HELIOS_FALLBACK_PORT
+# Legacy Supervisor port
+legacy_port=${HELIOS_LEGACY_PORT:-48480}
+unset HELIOS_LEGACY_PORT
 
 # Terminate early if supervisor variables are not set
 [ -n "${BALENA_SUPERVISOR_API_KEY}" ] && [ -n "${BALENA_SUPERVISOR_HOST}" ] && [ -n "${BALENA_SUPERVISOR_PORT}" ] || return 0
@@ -85,7 +85,7 @@ const rows = await query(
 );
 if (rows.length > 0) {
   const { value } = rows[0];
-  if (value === '$fallback_port') {
+  if (value === '$legacy_port') {
     console.log('false');
     process.exit(0);
   }
@@ -95,17 +95,17 @@ await query(
   "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', 'http://127.0.0.1:$BALENA_SUPERVISOR_PORT') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 );
 await query(
-  "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${fallback_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  "INSERT INTO config (key, value) VALUES ('listenPortOverride', '${legacy_port}') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 );
 console.log('true');
 EOF
 }
 
-# Set-up helios fallback variables
-HELIOS_FALLBACK_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:$fallback_port"
-HELIOS_FALLBACK_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
-export HELIOS_FALLBACK_ADDRESS
-export HELIOS_FALLBACK_API_KEY
+# Set-up helios legacy variables
+HELIOS_LEGACY_ADDRESS="http://${BALENA_SUPERVISOR_HOST}:$legacy_port"
+HELIOS_LEGACY_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
+export HELIOS_LEGACY_ADDRESS
+export HELIOS_LEGACY_API_KEY
 
 setup_supervisor() {
   # Configure the supervisor overrides

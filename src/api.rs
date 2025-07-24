@@ -18,7 +18,7 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::fallback::{proxy_legacy, ProxyContext};
+use crate::legacy::{proxy, ProxyContext};
 use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
 use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
@@ -40,7 +40,7 @@ pub async fn start(
     seek_request_tx: Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
     state_rx: LocalStateRx,
-    fallback_state: ProxyContext,
+    legacy_proxy_ctx: ProxyContext,
 ) {
     let api_span = Span::current();
     let target_device_tx = seek_request_tx.clone();
@@ -66,7 +66,7 @@ pub async fn start(
             post(move |body| trigger_poll(poll_request_tx, body)),
         )
         // Default to proxying requests if there is no handler
-        .fallback(move |request| proxy_legacy(fallback_state, request))
+        .fallback(move |request| proxy(legacy_proxy_ctx, request))
         // Enable tracing
         .layer(
             TraceLayer::new_for_http()
@@ -204,7 +204,7 @@ async fn set_app_tgt_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fallback::ProxyContext;
+    use crate::legacy::ProxyContext;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -230,14 +230,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let fallback_state = ProxyContext::new("test-device".to_string(), None, None);
+        let legacy_proxy_ctx = ProxyContext::new("test-device".to_string(), None, None);
 
         tokio::spawn(start(
             Listener::Tcp(listener),
             seek_request_tx,
             poll_request_tx,
             state_rx,
-            fallback_state,
+            legacy_proxy_ctx,
         ));
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

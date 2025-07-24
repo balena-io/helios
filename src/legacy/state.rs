@@ -35,20 +35,20 @@ struct StateStatusResponse {
 }
 
 pub async fn wait_for_state_settle(
-    fallback_uri: Uri,
-    fallback_key: Option<String>,
+    legacy_uri: Uri,
+    legacy_api_key: Option<String>,
     interrupt: Interrupt,
 ) -> Result<(), StateUpdateError> {
     let client = reqwest::Client::new();
     // Build the status check URI
-    let status_url = if let Some(apikey) = &fallback_key {
+    let status_url = if let Some(apikey) = &legacy_api_key {
         make_uri(
-            fallback_uri,
+            legacy_uri,
             "/v2/state/status",
             Some(&format!("apikey={apikey}")),
         )
     } else {
-        make_uri(fallback_uri, "/v2/state/status", None)
+        make_uri(legacy_uri, "/v2/state/status", None)
     };
     let status_url = status_url
         .map_err(StateUpdateError::from_upstream)?
@@ -56,7 +56,7 @@ pub async fn wait_for_state_settle(
 
     // Poll the status endpoint until appState is 'applied'
     loop {
-        trace!("waiting for fallback state to settle");
+        trace!("waiting for legacy Supervisor state to settle");
         tokio::select! {
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
             _ = interrupt.wait() => return Err(StateUpdateError::Interrupted)
@@ -81,9 +81,9 @@ pub async fn wait_for_state_settle(
 
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, err)]
-pub async fn legacy_update(
-    fallback_uri: Uri,
-    fallback_key: Option<String>,
+pub async fn trigger_update(
+    legacy_uri: Uri,
+    legacy_api_key: Option<String>,
     force: bool,
     cancel: bool,
     interrupt: Interrupt,
@@ -91,14 +91,14 @@ pub async fn legacy_update(
     let client = reqwest::Client::new();
 
     // Build the URI from the address parts
-    let update_url = if let Some(apikey) = &fallback_key {
+    let update_url = if let Some(apikey) = &legacy_api_key {
         make_uri(
-            fallback_uri.clone(),
+            legacy_uri.clone(),
             "/v1/update",
             Some(format!("apikey={apikey}").as_str()),
         )
     } else {
-        make_uri(fallback_uri.clone(), "/v1/update", None)
+        make_uri(legacy_uri.clone(), "/v1/update", None)
     };
     let update_url = update_url
         .map_err(StateUpdateError::from_upstream)?
@@ -109,7 +109,7 @@ pub async fn legacy_update(
         "cancel": cancel
     });
 
-    debug!("calling fallback");
+    debug!("calling legacy Supervisor");
     let response = loop {
         match client.post(&update_url).json(&payload).send().await {
             Ok(res) if res.status().is_success() => break res,
@@ -126,7 +126,7 @@ pub async fn legacy_update(
     debug!(response = field::display(response.status()), "success");
 
     // Wait for the state to settle
-    wait_for_state_settle(fallback_uri.clone(), fallback_key.clone(), interrupt).await?;
+    wait_for_state_settle(legacy_uri.clone(), legacy_api_key.clone(), interrupt).await?;
 
     Ok(())
 }

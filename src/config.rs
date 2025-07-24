@@ -4,7 +4,7 @@ use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::fallback::FallbackConfig;
+use crate::legacy::LegacyConfig;
 use crate::remote::RemoteConfig;
 use crate::state::models::Uuid;
 
@@ -52,5 +52,5 @@ pub struct Config {
     #[serde(default)]
     pub remote: RemoteConfig,
     #[serde(default)]
-    pub fallback: FallbackConfig,
+    pub legacy: LegacyConfig,
 }

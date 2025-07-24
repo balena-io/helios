@@ -104,22 +104,22 @@ struct Cli {
     )]
     remote_max_poll_jitter_ms: Duration,
 
-    /// Fallback URI to redirect unsupported API requests
+    /// Legacy Supervisor API endpoint URI to redirect unsupported API requests
     #[arg(
-        long = "fallback-address",
+        long = "legacy-address",
         value_name = "uri",
-        env = "HELIOS_FALLBACK_ADDRESS"
+        env = "HELIOS_LEGACY_ADDRESS"
     )]
-    fallback_address: Option<Uri>,
+    legacy_address: Option<Uri>,
 
-    /// API key to use for authentication with fallback
+    /// API key to use for authentication with legacy Supervisor
     #[arg(
-        long = "fallback-api-key",
+        long = "legacy-api-key",
         value_name = "key",
-        requires = "fallback_address",
-        env = "HELIOS_FALLBACK_API_KEY"
+        env = "HELIOS_LEGACY_API_KEY",
+        requires = "legacy_address"
     )]
-    fallback_api_key: Option<String>,
+    legacy_api_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -165,11 +165,11 @@ pub fn load() -> io::Result<(Option<Command>, Config)> {
     config.remote.min_interval = cli.remote_min_interval_ms;
     config.remote.max_poll_jitter = cli.remote_max_poll_jitter_ms;
 
-    if let Some(address) = &cli.fallback_address {
-        config.fallback.address = Some(address.clone());
+    if let Some(address) = &cli.legacy_address {
+        config.legacy.address = Some(address.clone());
     }
-    if let Some(key) = &cli.fallback_api_key {
-        config.fallback.api_key = Some(key.clone());
+    if let Some(key) = &cli.legacy_api_key {
+        config.legacy.api_key = Some(key.clone());
     }
 
     Ok((cli.command, config))

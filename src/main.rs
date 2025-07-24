@@ -13,7 +13,7 @@ use tracing_subscriber::{
 mod api;
 mod cli;
 mod config;
-mod fallback;
+mod legacy;
 mod remote;
 mod state;
 mod util;
@@ -21,7 +21,7 @@ mod util;
 use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
-use fallback::ProxyContext;
+use legacy::ProxyContext;
 use remote::register;
 use state::models::Device;
 
@@ -71,10 +71,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[instrument(name = "helios", skip_all, err)]
 pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
-    let fallback_state = ProxyContext::new(
+    let proxy_ctx = ProxyContext::new(
         config.uuid.clone().into(),
         config.remote.api_endpoint.clone(),
-        config.fallback.address.clone(),
+        config.legacy.address.clone(),
     );
 
     // Load the initial state
@@ -98,9 +98,9 @@ pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
 
     // Start the API and the main loop and terminate on any error
     tokio::select! {
-        _ = api::start(listener, seek_request_tx.clone(), poll_request_tx.clone(), local_state_rx.clone(), fallback_state.clone()) => Ok(()),
+        _ = api::start(listener, seek_request_tx.clone(), poll_request_tx.clone(), local_state_rx.clone(), proxy_ctx.clone()) => Ok(()),
         _ = remote::start_poll(&config.uuid, &config.remote, poll_request_rx.clone(), seek_request_tx) => Ok(()),
         _ = remote::start_report(&config.remote, local_state_rx) => Ok(()),
-        res = state::start_seek(&config.uuid, initial_state, fallback_state, &config.fallback, seek_request_rx, local_state_tx) => res.map_err(|err| err.into()),
+        res = state::start_seek(&config.uuid, initial_state, proxy_ctx, &config.legacy, seek_request_rx, local_state_tx) => res.map_err(|err| err.into()),
     }
 }

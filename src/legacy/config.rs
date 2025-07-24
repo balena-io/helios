@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::json::{deserialize_optional_uri, serialize_optional_uri};
 
-/// Fallback API configurations
+/// Legacy Supervisor API configuration
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct FallbackConfig {
+pub struct LegacyConfig {
     #[serde(
         deserialize_with = "deserialize_optional_uri",
         serialize_with = "serialize_optional_uri",

@@ -13,34 +13,34 @@ use crate::util::uri::make_uri;
 
 use super::error::UpstreamError;
 
-type FallbackTarget = serde_json::Value;
+type LegacyTarget = serde_json::Value;
 
 #[derive(Clone)]
 pub struct ProxyContext {
     pub uuid: String,
     pub remote_uri: Option<Uri>,
-    pub fallback_uri: Option<Uri>,
+    pub legacy_uri: Option<Uri>,
     pub https_client: reqwest::Client,
-    pub target: Arc<RwLock<Option<FallbackTarget>>>,
+    pub target: Arc<RwLock<Option<LegacyTarget>>>,
 }
 
 impl ProxyContext {
-    pub fn new(uuid: String, remote_uri: Option<Uri>, fallback_uri: Option<Uri>) -> Self {
+    pub fn new(uuid: String, remote_uri: Option<Uri>, legacy_uri: Option<Uri>) -> Self {
         Self {
             uuid,
             remote_uri,
-            fallback_uri,
+            legacy_uri,
             target: Arc::new(RwLock::new(None)),
             https_client: reqwest::Client::new(),
         }
     }
 
-    pub async fn target_state(&self) -> Option<FallbackTarget> {
+    pub async fn target_state(&self) -> Option<LegacyTarget> {
         let target = self.target.read().await;
         target.clone()
     }
 
-    pub async fn set_target_state(&self, target_state: FallbackTarget) {
+    pub async fn set_target_state(&self, target_state: LegacyTarget) {
         let mut target = self.target.write().await;
         target.replace(target_state);
     }
@@ -86,11 +86,11 @@ impl IntoResponse for ProxyError {
     }
 }
 
-/// Proxy requests to/from fallback supervisor to the relevant target
+/// Proxy requests to/from legacy Supervisor to the relevant target
 ///
-/// This is the fallback API behavior while the supervisor migration is ongoing
-pub async fn proxy_legacy(state: ProxyContext, request: Request) -> Result<Response, ProxyError> {
-    // Check if this is a target state request from the supervisor to the API
+/// This is the legacy API behavior while the Supervisor migration is ongoing
+pub async fn proxy(ctx: ProxyContext, request: Request) -> Result<Response, ProxyError> {
+    // Check if this is a target state request from the Supervisor to the API
     let is_supervisor_ua = request
         .headers()
         .get("user-agent")
@@ -101,11 +101,11 @@ pub async fn proxy_legacy(state: ProxyContext, request: Request) -> Result<Respo
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", state.uuid);
+        let expected_path = format!("/device/v3/{}/state", ctx.uuid);
 
         if path == expected_path {
             // Try to serve from local cache
-            let response = if let Some(target) = state.target_state().await {
+            let response = if let Some(target) = ctx.target_state().await {
                 trace!("returning cached target state");
                 // XXX:
                 let response_body =
@@ -132,19 +132,19 @@ pub async fn proxy_legacy(state: ProxyContext, request: Request) -> Result<Respo
 
     // Default proxy behavior for non-target-state requests
     let target_endpoint = if is_supervisor_ua {
-        if let Some(ref remote_uri) = state.remote_uri {
+        if let Some(ref remote_uri) = ctx.remote_uri {
             remote_uri
         } else {
             // No remote API available, return 503 with Retry-After header
-            // tell the fallback to retry in 10 minutes
+            // tell the legacy Supervisor to retry in 10 minutes
             let mut headers = HeaderMap::new();
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref fallback_uri) = state.fallback_uri {
-        fallback_uri
+    } else if let Some(ref legacy_uri) = ctx.legacy_uri {
+        legacy_uri
     } else {
-        // No fallback configured, return 404
+        // No legacy Supervisor configured, return 404
         return Ok((StatusCode::NOT_FOUND).into_response());
     };
 
@@ -168,7 +168,7 @@ pub async fn proxy_legacy(state: ProxyContext, request: Request) -> Result<Respo
     parts.headers.remove("host");
 
     // Send the request
-    let res = state
+    let res = ctx
         .https_client
         .request(parts.method, parts.uri.to_string())
         .headers(parts.headers)
@@ -193,29 +193,28 @@ mod tests {
 
     use super::*;
 
-    type FallbackTarget = serde_json::Value;
+    type LegacyTarget = serde_json::Value;
 
     async fn create_test_state(
         remote_uri: Uri,
-        fallback_uri: Uri,
-        target: Option<FallbackTarget>,
+        legacy_uri: Uri,
+        target: Option<LegacyTarget>,
     ) -> ProxyContext {
-        create_test_state_with_none_uris(Some(remote_uri), Some(fallback_uri), target).await
+        create_test_state_with_none_uris(Some(remote_uri), Some(legacy_uri), target).await
     }
 
     async fn create_test_state_with_none_uris(
         remote_uri: Option<Uri>,
-        fallback_uri: Option<Uri>,
-        target: Option<FallbackTarget>,
+        legacy_uri: Option<Uri>,
+        target: Option<LegacyTarget>,
     ) -> ProxyContext {
-        let fallback_state =
-            ProxyContext::new("test-device-uuid".to_string(), remote_uri, fallback_uri);
+        let proxy_ctx = ProxyContext::new("test-device-uuid".to_string(), remote_uri, legacy_uri);
 
         if let Some(tgt) = target {
-            fallback_state.set_target_state(tgt).await;
+            proxy_ctx.set_target_state(tgt).await;
         }
 
-        fallback_state
+        proxy_ctx
     }
 
     fn create_test_request(path: &str, user_agent: Option<&str>) -> Request {
@@ -239,77 +238,77 @@ mod tests {
             .await;
 
         let remote_uri: Uri = server.url().parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
 
     #[tokio::test]
-    async fn test_non_supervisor_user_agent_routes_to_fallback() {
+    async fn test_non_supervisor_user_agent_routes_to_legacy() {
         let mut server = Server::new_async().await;
-        let fallback_mock = server
+        let legacy_mock = server
             .mock("GET", "/test")
             .with_status(200)
-            .with_body("fallback response")
+            .with_body("legacy response")
             .create_async()
             .await;
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = server.url().parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = server.url().parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
-        fallback_mock.assert_async().await;
+        legacy_mock.assert_async().await;
     }
 
     #[tokio::test]
-    async fn test_no_user_agent_routes_to_fallback() {
+    async fn test_no_user_agent_routes_to_legacy() {
         let mut server = Server::new_async().await;
-        let fallback_mock = server
+        let legacy_mock = server
             .mock("GET", "/test")
             .with_status(200)
-            .with_body("fallback response")
+            .with_body("legacy response")
             .create_async()
             .await;
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = server.url().parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = server.url().parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", None);
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
-        fallback_mock.assert_async().await;
+        legacy_mock.assert_async().await;
     }
 
     #[tokio::test]
-    async fn test_partial_supervisor_user_agent_routes_to_fallback() {
+    async fn test_partial_supervisor_user_agent_routes_to_legacy() {
         let mut server = Server::new_async().await;
-        let fallback_mock = server
+        let legacy_mock = server
             .mock("GET", "/test")
             .with_status(200)
-            .with_body("fallback response")
+            .with_body("legacy response")
             .create_async()
             .await;
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = server.url().parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = server.url().parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", Some("MySupervisor/1.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
-        fallback_mock.assert_async().await;
+        legacy_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -323,12 +322,12 @@ mod tests {
             .await;
 
         let remote_uri: Uri = server.url().parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/api/v1/test?param=value", Some("Supervisor/1.0.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
         mock.assert_async().await;
     }
@@ -344,12 +343,12 @@ mod tests {
             .await;
 
         let remote_uri: Uri = server.url().parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         mock.assert_async().await;
@@ -358,12 +357,12 @@ mod tests {
     #[tokio::test]
     async fn test_connection_error_handling() {
         let remote_uri: Uri = "http://localhost:1".parse().unwrap(); // Invalid port
-        let fallback_uri: Uri = "http://localhost:2".parse().unwrap(); // Invalid port
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = "http://localhost:2".parse().unwrap(); // Invalid port
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let result = proxy_legacy(state, request).await;
+        let result = proxy(state, request).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -387,16 +386,16 @@ mod tests {
     #[tokio::test]
     async fn test_target_state_interception_with_cached_state() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state(remote_uri, fallback_uri, Some(target_state.clone())).await;
+        let state = create_test_state(remote_uri, legacy_uri, Some(target_state.clone())).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get("content-type").unwrap(),
@@ -407,15 +406,15 @@ mod tests {
     #[tokio::test]
     async fn test_target_state_interception_without_cached_state() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state(remote_uri, fallback_uri, None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state(remote_uri, legacy_uri, None).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "15");
     }
@@ -431,13 +430,13 @@ mod tests {
             .await;
 
         let remote_uri: Uri = server.url().parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state(remote_uri, fallback_uri, Some(target_state)).await;
+        let state = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
 
         let request = create_test_request("/device/v3/wrong-uuid/state", Some("Supervisor/1.0.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
@@ -445,26 +444,26 @@ mod tests {
     #[tokio::test]
     async fn test_target_state_interception_non_supervisor_user_agent() {
         let mut server = Server::new_async().await;
-        let fallback_mock = server
+        let legacy_mock = server
             .mock("GET", "/device/v3/test-device-uuid/state")
             .with_status(200)
-            .with_body("fallback response")
+            .with_body("legacy response")
             .create_async()
             .await;
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let fallback_uri: Uri = server.url().parse().unwrap();
+        let legacy_uri: Uri = server.url().parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state(remote_uri, fallback_uri, Some(target_state)).await;
+        let state = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("CustomClient/1.0"),
         );
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
-        fallback_mock.assert_async().await;
+        legacy_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -478,69 +477,67 @@ mod tests {
             .await;
 
         let remote_uri: Uri = server.url().parse().unwrap();
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let state = create_test_state(remote_uri, fallback_uri, Some(target_state)).await;
+        let state = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
 
         let request =
             create_test_request("/device/v3/test-device-uuid/logs", Some("Supervisor/1.0.0"));
 
-        proxy_legacy(state, request).await.unwrap();
+        proxy(state, request).await.unwrap();
 
         remote_mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_supervisor_request_with_no_remote_uri() {
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state_with_none_uris(None, Some(fallback_uri), None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state_with_none_uris(None, Some(legacy_uri), None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "600");
     }
 
     #[tokio::test]
-    async fn test_non_supervisor_request_with_no_fallback_uri() {
+    async fn test_non_supervisor_request_with_no_legacy_uri() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let state = create_test_state_with_none_uris(Some(remote_uri), None, None).await;
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn test_target_state_interception_with_no_remote_uri() {
-        let fallback_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let state = create_test_state_with_none_uris(None, Some(fallback_uri), None).await;
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let state = create_test_state_with_none_uris(None, Some(legacy_uri), None).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
             Some("Supervisor/1.0.0"),
         );
 
-        let response = proxy_legacy(state, request).await.unwrap();
+        let response = proxy(state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "15");
     }
 
     #[tokio::test]
-    async fn test_both_remote_and_fallback_uris_none() {
+    async fn test_both_remote_and_legacy_uris_none() {
         let state = create_test_state_with_none_uris(None, None, None).await;
 
         let supervisor_request = create_test_request("/test", Some("Supervisor/1.0.0"));
-        let response = proxy_legacy(state.clone(), supervisor_request)
-            .await
-            .unwrap();
+        let response = proxy(state.clone(), supervisor_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "600");
 
         let non_supervisor_request = create_test_request("/test", Some("CustomClient/1.0"));
-        let response = proxy_legacy(state, non_supervisor_request).await.unwrap();
+        let response = proxy(state, non_supervisor_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
