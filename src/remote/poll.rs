@@ -55,7 +55,7 @@ async fn poll_remote(config: &RemoteConfig, poll_client: &mut Get, req: PollRequ
         Ok(res) if req.reemit || res.modified => res.value,
         Ok(_) => None,
         Err(e) => {
-            warn!("poll failed: {e}");
+            error!("poll failed: {e}");
             None
         }
     };

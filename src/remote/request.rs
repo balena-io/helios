@@ -11,15 +11,15 @@ use tracing::{field, instrument, warn, Span};
 #[derive(Debug, Error)]
 enum TryGetError {
     /// Could not serialize the response into JSON
-    #[error("Failed to serialize response: {0}")]
+    #[error("failed to serialize response: {0}")]
     Serialization(#[from] reqwest::Error),
 
     /// HTTP request failed with permanent client error that will not be retried.
-    #[error("Request failed with status code {0}")]
+    #[error("server replied: {0}")]
     Status(StatusCode),
 
     /// Request failed but should be retried (used internally)
-    #[error("Request failed with: {0} ... will retry in {1:#?}")]
+    #[error("request failed with: {0} ... will retry in {1:#?}")]
     WillRetry(String, Duration),
 }
 
@@ -27,14 +27,14 @@ enum TryGetError {
 #[derive(Debug, Error)]
 pub enum GetError {
     /// Could not serialize the response into JSON
-    #[error("Failed to serialize response: {0}")]
+    #[error("failed to serialize response: {0}")]
     Serialization(#[from] reqwest::Error),
 
     /// Authentication failed due to an invalid or expired token.
-    #[error("Unauthorized")]
+    #[error("unauthorized")]
     Unauthorized,
 
-    #[error("Not found")]
+    #[error("not found")]
     NotFound,
 }
 
@@ -102,19 +102,20 @@ fn get_cache_path(endpoint: &str) -> PathBuf {
 #[derive(Debug, Error)]
 enum TryPatchError {
     /// Request failed with a 5xx or other recoverable errors that will be retried.
-    #[error("Request failed with: {0} ... will retry in {1:#?}")]
+    #[error("request failed with: {0} ... will retry in {1:#?}")]
     WillRetry(String, Duration),
 
     /// HTTP request failed with permanent client error that will not be retried.
-    #[error("Request failed with status code {0}")]
+    #[error("server replied: {0}")]
     Status(StatusCode),
 }
 
 #[derive(Debug, Error)]
 pub enum PatchError {
-    #[error("Cancelled")]
+    #[error("cancelled")]
     Cancelled,
-    #[error("Request failed with status code {0}")]
+
+    #[error("server replied with status {0}")]
     Status(u16),
 }
 
@@ -356,7 +357,7 @@ impl Get {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(response=field::Empty) err)]
+    #[instrument(level = "trace", skip_all, fields(response=field::Empty) err(level="warn"))]
     async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
 
@@ -468,7 +469,7 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty))]
     pub async fn get(&mut self) -> Result<GetResponse, GetError> {
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
