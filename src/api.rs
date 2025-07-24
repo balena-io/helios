@@ -18,7 +18,7 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::fallback::{proxy_legacy, FallbackState};
+use crate::fallback::{proxy_legacy, ProxyContext};
 use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
 use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
@@ -40,7 +40,7 @@ pub async fn start(
     seek_request_tx: Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
     state_rx: LocalStateRx,
-    fallback_state: FallbackState,
+    fallback_state: ProxyContext,
 ) {
     let api_span = Span::current();
     let target_device_tx = seek_request_tx.clone();
@@ -204,7 +204,7 @@ async fn set_app_tgt_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fallback::FallbackState;
+    use crate::fallback::ProxyContext;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -230,7 +230,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let fallback_state = FallbackState::new("test-device".to_string(), None, None);
+        let fallback_state = ProxyContext::new("test-device".to_string(), None, None);
 
         tokio::spawn(start(
             Listener::Tcp(listener),

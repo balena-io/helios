@@ -17,7 +17,7 @@ use tokio::sync::{
 use tracing::{error, info, instrument, trace};
 
 use crate::fallback::{
-    legacy_update, wait_for_state_settle, FallbackConfig, FallbackError, FallbackState,
+    legacy_update, wait_for_state_settle, FallbackConfig, ProxyContext, StateUpdateError,
 };
 use crate::state::models::Uuid;
 
@@ -109,7 +109,7 @@ pub enum SeekError {
     SeekTargetState(#[from] WorkerSeekError),
 
     #[error("Failed to update state on legacy Supervisor: {0}")]
-    LegacyUpdate(#[from] FallbackError),
+    LegacyUpdate(#[from] StateUpdateError),
 }
 
 #[derive(Debug, Clone)]
@@ -189,7 +189,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 pub async fn start_seek(
     uuid: &Uuid,
     initial_state: Device,
-    fallback_state: FallbackState,
+    fallback_state: ProxyContext,
     fallback_config: &FallbackConfig,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
@@ -351,7 +351,7 @@ pub async fn start_seek(
                             {
                                 // Tell the caller that they need to reset the worker
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Fallback),
                                 Err(e) => return Err(e)?,
                             };
                         }
@@ -368,7 +368,7 @@ pub async fn start_seek(
                             .await
                             {
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(FallbackError::Interrupted) => Ok(SeekState::Fallback),
+                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Fallback),
                                 Err(e) => Err(e)?,
                             };
                         }

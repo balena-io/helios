@@ -21,6 +21,7 @@ mod util;
 use api::Listener;
 use cli::Command;
 use config::{Config, LocalAddress};
+use fallback::ProxyContext;
 use remote::register;
 use state::models::Device;
 
@@ -70,7 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[instrument(name = "helios", skip_all, err)]
 pub async fn run_supervisor(config: Config) -> Result<(), Box<dyn Error>> {
-    let fallback_state = fallback::FallbackState::new(
+    let fallback_state = ProxyContext::new(
         config.uuid.clone().into(),
         config.remote.api_endpoint.clone(),
         config.fallback.address.clone(),
