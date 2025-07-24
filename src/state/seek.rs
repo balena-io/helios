@@ -17,7 +17,7 @@ use tokio::sync::{
 use tracing::{error, info, instrument, trace};
 
 use crate::legacy::{
-    trigger_update, wait_for_state_settle, LegacyConfig, ProxyContext, StateUpdateError,
+    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
 use crate::state::models::Uuid;
 
@@ -189,7 +189,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 pub async fn start_seek(
     uuid: &Uuid,
     initial_state: Device,
-    proxy_ctx: ProxyContext,
+    proxy_state: ProxyState,
     legacy_config: &LegacyConfig,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
@@ -306,7 +306,7 @@ pub async fn start_seek(
                 // Create the apply future
                 apply_future = {
                     let interrupt = interrupt.clone();
-                    let proxy_ctx = &proxy_ctx;
+                    let proxy_state = &proxy_state;
                     let worker = &mut worker;
                     let prev_seek_state = prev_seek_state.clone();
 
@@ -323,7 +323,7 @@ pub async fn start_seek(
                         if !matches!(prev_seek_state, SeekState::Legacy) {
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
-                            proxy_ctx.clear_target_state().await;
+                            proxy_state.clear().await;
 
                             // Apply the target
                             status = tokio::select! {
@@ -339,7 +339,7 @@ pub async fn start_seek(
                         {
                             // Set the raw target accepted by the legacy Supervisor
                             // as the target state
-                            proxy_ctx.set_target_state(target_state).await;
+                            proxy_state.set(target_state).await;
                             return match trigger_update(
                                 uri,
                                 legacy_config.api_key.clone(),
