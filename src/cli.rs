@@ -1,15 +1,50 @@
 use axum::http::Uri;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::fmt::{self, Display};
+use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
 use std::num::ParseIntError;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
-use std::{fs, io};
-use tracing::debug;
 
-use crate::config::{Config, LocalAddress};
 use crate::state::models::Uuid;
 
+/// Local API listen address
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum LocalAddress {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+impl Display for LocalAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocalAddress::Tcp(socket_addr) => socket_addr.fmt(f),
+            LocalAddress::Unix(path) => path.as_path().display().fmt(f),
+        }
+    }
+}
+
+impl FromStr for LocalAddress {
+    type Err = AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<SocketAddr>()
+            .map(LocalAddress::Tcp)
+            .or_else(|_| Ok(LocalAddress::Unix(Path::new(s).to_path_buf())))
+    }
+}
+
+impl Default for LocalAddress {
+    fn default() -> Self {
+        LocalAddress::Tcp(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            48484,
+        ))
+    }
+}
 fn parse_uuid(s: &str) -> Result<Uuid, Infallible> {
     Ok(s.to_string().into())
 }
@@ -19,20 +54,33 @@ fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     Ok(Duration::from_millis(millis))
 }
 
+#[derive(Clone, Debug, Args)]
+pub struct GlobalArgs {
+    // declare here arguments that should be available and
+    // apply across all commands, eg. `--verbose`.
+}
+
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)] // read from Cargo.toml
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 
-    /// Device UUID
+    #[command(flatten)]
+    args: GlobalArgs,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct StartArgs {
+    /// Device UUID. If not provided, a random value will be generated and used
+    /// on each run of this command
     #[arg(
         long = "uuid",
         value_name = "uuid",
         value_parser = parse_uuid,
         env = "HELIOS_UUID"
     )]
-    uuid: Option<Uuid>,
+    pub uuid: Option<Uuid>,
 
     /// Local API listen address
     #[arg(
@@ -41,7 +89,7 @@ struct Cli {
         env = "HELIOS_LOCAL_ADDRESS",
         default_value_t
     )]
-    local_address: LocalAddress,
+    pub local_address: LocalAddress,
 
     /// Remote API endpoint
     #[arg(
@@ -49,7 +97,7 @@ struct Cli {
         value_name = "uri",
         env = "HELIOS_REMOTE_API_ENDPOINT"
     )]
-    remote_api_endpoint: Option<Uri>,
+    pub remote_api_endpoint: Option<Uri>,
 
     /// API key to use for authentication with remote
     #[arg(
@@ -58,7 +106,7 @@ struct Cli {
         env = "HELIOS_REMOTE_API_KEY",
         requires = "remote_api_endpoint"
     )]
-    remote_api_key: Option<String>,
+    pub remote_api_key: Option<String>,
 
     /// Remote request timeout in milliseconds
     #[arg(
@@ -69,7 +117,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "59000"
     )]
-    remote_request_timeout_ms: Duration,
+    pub remote_request_timeout_ms: Duration,
 
     /// Remote poll interval in milliseconds
     #[arg(
@@ -80,7 +128,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "900000"
     )]
-    remote_poll_interval_ms: Duration,
+    pub remote_poll_interval_ms: Duration,
 
     /// Remote rate limiting interval in milliseconds
     #[arg(
@@ -91,7 +139,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "10000"
     )]
-    remote_min_interval_ms: Duration,
+    pub remote_min_interval_ms: Duration,
 
     /// Remote target state poll max jitter in milliseconds
     #[arg(
@@ -102,7 +150,7 @@ struct Cli {
         requires = "remote_api_endpoint",
         default_value = "60000"
     )]
-    remote_max_poll_jitter_ms: Duration,
+    pub remote_max_poll_jitter_ms: Duration,
 
     /// Legacy Supervisor API endpoint URI to redirect unsupported API requests
     #[arg(
@@ -110,7 +158,7 @@ struct Cli {
         value_name = "uri",
         env = "HELIOS_LEGACY_ADDRESS"
     )]
-    legacy_address: Option<Uri>,
+    pub legacy_address: Option<Uri>,
 
     /// API key to use for authentication with legacy Supervisor
     #[arg(
@@ -119,71 +167,26 @@ struct Cli {
         env = "HELIOS_LEGACY_API_KEY",
         requires = "legacy_address"
     )]
-    legacy_api_key: Option<String>,
+    pub legacy_api_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct RegisterArgs {
+    /// Provisioning key
+    #[arg(long = "provisioning-key", value_name = "key")]
+    pub provisioning_key: String,
 }
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Start Helios
+    Start(Box<StartArgs>),
+
     /// Provision device to remote endpoint (TODO!)
-    Register {
-        /// Provisioning key
-        #[arg(long = "provisioning-key", value_name = "key")]
-        provisioning_key: String,
-    },
+    Register(Box<RegisterArgs>),
 }
 
-pub fn load() -> io::Result<(Option<Command>, Config)> {
-    let config_path = get_config_path();
-
-    // Start with default config
-    let mut config = if config_path.exists() {
-        // Load from file if it exists
-        debug!("Loading config from {}", config_path.display());
-        let contents = fs::read_to_string(&config_path)?;
-        serde_json::from_str::<Config>(&contents).unwrap_or_default()
-    } else {
-        // Create default config
-        Config::default()
-    };
-
+pub fn load() -> (Command, GlobalArgs) {
     let cli = Cli::parse();
-
-    // Apply CLI overrides in order of precedence
-    if let Some(uuid) = cli.uuid {
-        config.uuid = uuid;
-    }
-    config.local_address = cli.local_address;
-
-    if let Some(endpoint) = &cli.remote_api_endpoint {
-        config.remote.api_endpoint = Some(endpoint.clone());
-    }
-    if let Some(key) = &cli.remote_api_key {
-        config.remote.api_key = Some(key.clone());
-    }
-    config.remote.request_timeout = cli.remote_request_timeout_ms;
-    config.remote.poll_interval = cli.remote_poll_interval_ms;
-    config.remote.min_interval = cli.remote_min_interval_ms;
-    config.remote.max_poll_jitter = cli.remote_max_poll_jitter_ms;
-
-    if let Some(address) = &cli.legacy_address {
-        config.legacy.address = Some(address.clone());
-    }
-    if let Some(key) = &cli.legacy_api_key {
-        config.legacy.api_key = Some(key.clone());
-    }
-
-    Ok((cli.command, config))
-}
-
-fn get_config_path() -> PathBuf {
-    if let Some(config_dir) = dirs::config_dir() {
-        config_dir.join(env!("CARGO_PKG_NAME")).join("config.json")
-    } else {
-        // Fallback to home directory if config dir is not available
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".config")
-            .join(env!("CARGO_PKG_NAME"))
-            .join("config.json")
-    }
+    (cli.command, cli.args)
 }

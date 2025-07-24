@@ -190,7 +190,7 @@ pub async fn start_seek(
     uuid: &Uuid,
     initial_state: Device,
     proxy_state: ProxyState,
-    legacy_config: &LegacyConfig,
+    legacy_config: &Option<LegacyConfig>,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
 ) -> Result<(), SeekError> {
@@ -208,7 +208,7 @@ pub async fn start_seek(
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
     let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut interrupt = Interrupt::new();
-    if legacy_config.address.is_some() {
+    if legacy_config.is_some() {
         // If there is a fallback, we just assume it is applying changes, so the first apply will
         // go to the legacy supervisor instead of the local worker
         prev_seek_state = SeekState::Legacy;
@@ -334,15 +334,15 @@ pub async fn start_seek(
                             };
                         }
 
-                        if let (Some(uri), Some(target_state)) =
-                            (legacy_config.address.clone(), update_req.raw_target)
+                        if let (Some(config), Some(target_state)) =
+                            (legacy_config.clone(), update_req.raw_target)
                         {
-                            // Set the raw target accepted by the legacy Supervisor
-                            // as the target state
+                            // Set as the target state the raw target accepted by
+                            // the fallback
                             proxy_state.set(target_state).await;
                             return match trigger_update(
-                                uri,
-                                legacy_config.api_key.clone(),
+                                config.address,
+                                config.api_key,
                                 update_req.opts.force,
                                 update_req.opts.cancel,
                                 interrupt,
@@ -356,13 +356,13 @@ pub async fn start_seek(
                             };
                         }
 
-                        if let (Some(uri), SeekState::Legacy) =
-                            (legacy_config.address.clone(), prev_seek_state)
+                        if let (Some(config), SeekState::Legacy) =
+                            (legacy_config.clone(), prev_seek_state)
                         {
                             // if we get here it means there is no raw target, so we need to keep waiting
                             return match wait_for_state_settle(
-                                uri,
-                                legacy_config.api_key.clone(),
+                                config.address,
+                                config.api_key,
                                 interrupt,
                             )
                             .await

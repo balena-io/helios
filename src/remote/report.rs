@@ -48,25 +48,20 @@ impl From<LocalState> for Report {
     }
 }
 
-fn get_report_client(config: &RemoteConfig) -> Option<Patch> {
-    if let Some(uri) = config.api_endpoint.clone() {
-        let endpoint = make_uri(uri, "/device/v3/state", None)
-            .expect("remote API endpoint must be a valid URI")
-            .to_string();
+fn get_report_client(config: &RemoteConfig) -> Patch {
+    let uri = config.api_endpoint.clone();
+    let endpoint = make_uri(uri, "/device/v3/state", None)
+        .expect("remote API endpoint must be a valid URI")
+        .to_string();
 
-        let client_config = RequestConfig {
-            timeout: config.request_timeout,
-            min_interval: config.min_interval,
-            max_backoff: config.poll_interval,
-            api_token: config.api_key.clone(),
-        };
+    let client_config = RequestConfig {
+        timeout: config.request_timeout,
+        min_interval: config.min_interval,
+        max_backoff: config.poll_interval,
+        api_token: config.api_key.clone(),
+    };
 
-        let client = Patch::new(endpoint, client_config);
-
-        Some(client)
-    } else {
-        None
-    }
+    Patch::new(endpoint, client_config)
 }
 
 // Return type from send_report
@@ -87,14 +82,13 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
 }
 
 #[instrument(name = "report", skip_all)]
-pub async fn start_report(config: &RemoteConfig, mut state_rx: Receiver<LocalState>) {
-    let mut report_client = match get_report_client(config) {
-        Some(client) => client,
-        None => {
-            warn!("running in unmanaged mode");
-            // just disable this branch
-            return future::pending::<()>().await;
-        }
+pub async fn start_report(config: &Option<RemoteConfig>, mut state_rx: Receiver<LocalState>) {
+    let mut report_client = if let Some(config) = config {
+        get_report_client(config)
+    } else {
+        warn!("running in unmanaged mode");
+        // just disable this branch
+        return future::pending::<()>().await;
     };
     info!("waiting for state changes");
 
