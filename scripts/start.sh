@@ -55,4 +55,4 @@ export XDG_CACHE_HOME=/cache
 rm /tmp/run/helios.sock || true
 
 # Start the new supervisor
-exec helios start --uuid "${HELIOS_DEVICE_UUID}" --local-address /tmp/run/helios.sock
+exec helios start --uuid "${HELIOS_DEVICE_UUID}" --local-api-address /tmp/run/helios.sock

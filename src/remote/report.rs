@@ -1,4 +1,3 @@
-use futures_lite::future;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -55,10 +54,10 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
         .to_string();
 
     let client_config = RequestConfig {
-        timeout: config.request_timeout,
-        min_interval: config.min_interval,
-        max_backoff: config.poll_interval,
-        api_token: config.api_key.clone(),
+        timeout: config.connection.request_timeout,
+        min_interval: config.connection.min_interval,
+        max_backoff: config.connection.poll_interval,
+        api_token: Some(config.api_key.clone()),
     };
 
     Patch::new(endpoint, client_config)
@@ -82,19 +81,14 @@ async fn send_report(client: &mut Patch, report: Report, last_report: LastReport
 }
 
 #[instrument(name = "report", skip_all)]
-pub async fn start_report(config: &Option<RemoteConfig>, mut state_rx: Receiver<LocalState>) {
-    let mut report_client = if let Some(config) = config {
-        get_report_client(config)
-    } else {
-        warn!("running in unmanaged mode");
-        // just disable this branch
-        return future::pending::<()>().await;
-    };
-    info!("waiting for state changes");
+pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalState>) {
+    let mut report_client = get_report_client(&config);
 
     // Send initial report
     let initial_report = state_rx.borrow().clone().into();
     let mut last_report = send_report(&mut report_client, initial_report, LastReport::None).await;
+
+    info!("waiting for state changes");
 
     loop {
         let state_changed = state_rx.changed().await;

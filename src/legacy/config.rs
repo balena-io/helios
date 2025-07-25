@@ -7,6 +7,6 @@ use crate::util::json::{deserialize_uri, serialize_uri};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LegacyConfig {
     #[serde(deserialize_with = "deserialize_uri", serialize_with = "serialize_uri")]
-    pub address: Uri,
-    pub api_key: Option<String>,
+    pub api_endpoint: Uri,
+    pub api_key: String,
 }

@@ -9,11 +9,11 @@ constraints such as on frequency of requests.
 
 mod config;
 mod poll;
-mod register;
+mod provision;
 mod report;
 mod request;
 
-pub use config::RemoteConfig;
+pub use config::{ConnectionConfig, ProvisioningConfig, RemoteConfig};
 pub use poll::{start_poll, PollRequest};
-pub use register::register;
+pub use provision::{register, RegisterRequest};
 pub use report::start_report;

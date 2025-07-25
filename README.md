@@ -15,29 +15,36 @@ This project is an experimental replacement for the current [balenaSupervisor](h
 
 ## Quickstart
 
-You need the [balenaCLI](https://docs.balena.io/reference/balena-cli/latest/) for now.
+- Visit balenaCloud Dashboard at https://dashboard.balena-cloud.com/ and login.
 
-Register a new device and note the UUID
+- Create a new fleet choosing "Generic AARCH64" for device type (slug: "generic-aarch64"). You may choose whatever device type you want, but make sure you know its slug as you'll have a hard time finding it on the Dashboard.
 
-```sh
-balena device register <fleet-name> --deviceType generic-aarch64
-# Registering to <fleet-name>: <uuid>
-```
+- Get the fleet ID from the URL in the browser's address bar.
 
-Get the device API key
+- Go to Provisioning Keys from the left sidebar and create a new one. Make sure to copy its value when shown. If you miss it, just make a new provisioning key.
 
-```sh
-balena config generate --device <uuid> --version 6.5.39+rev2 --appUpdatePollInterval 15
-# deviceApiKey:          <api-key>
-```
+- We now have the values we need:
+    - The ID of the fleet to provision the device into
+    - The device type of the fleet
+    - A provisioning key for this fleet
 
-Run the service
+- With that, you can start Helios with:
 
 ```
-cargo run -- --uuid <uuid> --remote-api-key <api-key> --remote-api-endpoint https://api.balena-cloud.com
+cargo run -- \
+    --remote-api-endpoint https://api.balena-cloud.com \
+    --provisioning-fleet=2279545 \
+    --provisioning-device-type=generic-aarch64 \
+    --provisioning-key=aqP2b0SYkSqAN5rUmEHgU5aX75Cg3n0D
 ```
 
 For the full list of command line arguments use `cargo run -- --help`
+
+Helios will register with the remote and the device will appear on the Dashboard.
+
+Helios will store all necessary information into its config file after successful registration, so you can run the binary without any argument and it'll assume the same identity.
+
+If you want Helios to forget this identity
 
 ## Running on a Balena device
 
