@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -10,15 +11,15 @@ use tracing::{field, instrument, warn, Span};
 #[derive(Debug, Error)]
 enum TryGetError {
     /// Could not serialize the response into JSON
-    #[error("Failed to serialize response: {0}")]
+    #[error("failed to serialize response: {0}")]
     Serialization(#[from] reqwest::Error),
 
     /// HTTP request failed with permanent client error that will not be retried.
-    #[error("Request failed with status code {0}")]
+    #[error("server replied: {0}")]
     Status(StatusCode),
 
     /// Request failed but should be retried (used internally)
-    #[error("Request failed with: {0} ... will retry in {1:#?}")]
+    #[error("request failed with: {0} ... will retry in {1:#?}")]
     WillRetry(String, Duration),
 }
 
@@ -26,15 +27,18 @@ enum TryGetError {
 #[derive(Debug, Error)]
 pub enum GetError {
     /// Could not serialize the response into JSON
-    #[error("Failed to serialize response: {0}")]
+    #[error("failed to serialize response: {0}")]
     Serialization(#[from] reqwest::Error),
 
     /// Authentication failed due to an invalid or expired token.
-    #[error("Unauthorized")]
+    #[error("unauthorized")]
     Unauthorized,
 
-    #[error("Not found")]
+    #[error("not found")]
     NotFound,
+
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl From<TryGetError> for GetError {
@@ -54,7 +58,7 @@ impl From<TryGetError> for GetError {
 impl From<TryPatchError> for PatchError {
     fn from(err: TryPatchError) -> Self {
         match err {
-            TryPatchError::Status(status) => PatchError(status.as_u16()),
+            TryPatchError::Status(status) => PatchError::Status(status.as_u16()),
             TryPatchError::WillRetry(_, _) => unreachable!(),
         }
     }
@@ -101,17 +105,22 @@ fn get_cache_path(endpoint: &str) -> PathBuf {
 #[derive(Debug, Error)]
 enum TryPatchError {
     /// Request failed with a 5xx or other recoverable errors that will be retried.
-    #[error("Request failed with: {0} ... will retry in {1:#?}")]
+    #[error("request failed with: {0} ... will retry in {1:#?}")]
     WillRetry(String, Duration),
 
     /// HTTP request failed with permanent client error that will not be retried.
-    #[error("Request failed with status code {0}")]
+    #[error("server replied: {0}")]
     Status(StatusCode),
 }
 
 #[derive(Debug, Error)]
-#[error("Request failed with status code {0}")]
-pub struct PatchError(pub u16);
+pub enum PatchError {
+    #[error("cancelled")]
+    Cancelled,
+
+    #[error("server replied with status {0}")]
+    Status(u16),
+}
 
 /// HTTP PATCH response
 pub type PatchResponse = ();
@@ -351,7 +360,7 @@ impl Get {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(response=field::Empty) err)]
+    #[instrument(level = "trace", skip_all, fields(response=field::Empty) err(level="warn"))]
     async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
 
@@ -449,13 +458,18 @@ impl Get {
     /// returns 304 Not Modified, the cached response is returned instead. On errors
     /// (rate limiting, server errors), returns cached data if available.
     ///
+    /// The request can be cancelled via the `interrupt` argument
+    ///
+    /// # Arguments
+    /// * `interrupt` - optional Interrupt token allowing the get to be cancelled
+    ///
     /// # Returns
     /// * `Ok(Response)` - Successfully retrieved response or cached data
     /// * `Err(GetError)` - Authentication failed or no cached data available for error
     ///
     /// # Example
     /// ```rust,ignore
-    /// let response = client.get().await?;
+    /// let response = client.get(None).await?;
     ///
     /// if response.modified {
     ///     println!("Fresh data: {:?}", response.value);
@@ -463,13 +477,22 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
-    pub async fn get(&mut self) -> Result<GetResponse, GetError> {
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty))]
+    pub async fn get(&mut self, interrupt: Option<Interrupt>) -> Result<GetResponse, GetError> {
+        let interrupt = interrupt.unwrap_or_default();
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
         let mut tries = 1;
         loop {
-            match self.try_get().await {
+            let result = tokio::select! {
+                res = self.try_get() => res,
+                _ = interrupt.wait() => {
+                    Span::current().record("cancelled", true);
+                    return Err(GetError::Cancelled)
+                }
+            };
+
+            match result {
                 Ok(response) => {
                     Span::current().record("retries", tries - 1);
                     Span::current().record("success_rate", self.metrics().success_rate());
@@ -538,8 +561,11 @@ impl Patch {
     /// Blocks until the request completes successfully or fails with a permanent error.
     /// Uses exponential backoff for retryable errors (rate limiting, server errors).
     ///
+    /// The request can be cancelled via the `interrupt` argument
+    ///
     /// # Arguments
     /// * `new_state` - JSON value representing the new state to send
+    /// * `interrupt` - optional Interrupt token allowing the patch to be cancelled
     ///
     /// # Returns
     /// * `Ok(())` - Request was successful (2xx status code)
@@ -549,19 +575,29 @@ impl Patch {
     /// ```rust,ignore
     /// use serde_json::json;
     ///
-    /// let result = client.patch(json!({"status": "running"})).await?;
+    /// let result = client.patch(json!({"status": "running"}), None).await?;
     /// println!("Patch succeeded");
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty), err)]
+    #[instrument(name = "patch", level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty))]
     pub async fn patch(
         &mut self,
         new_state: serde_json::Value,
+        interrupt: Option<Interrupt>,
     ) -> Result<PatchResponse, PatchError> {
+        let interrupt = interrupt.unwrap_or_default();
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
         let mut tries = 1;
         loop {
-            match Self::try_patch(&mut self.state, new_state.clone()).await {
+            let result = tokio::select! {
+                res = Self::try_patch(&mut self.state, new_state.clone()) => res,
+                _ = interrupt.wait() => {
+                    Span::current().record("cancelled", true);
+                    return Err(PatchError::Cancelled)
+                }
+            };
+
+            match result {
                 Ok(_status) => {
                     Span::current().record("retries", tries - 1);
                     Span::current().record("success_rate", self.metrics().success_rate());
@@ -576,7 +612,7 @@ impl Patch {
         }
     }
 
-    #[instrument(level = "trace", skip_all, fields(response=field::Empty), err)]
+    #[instrument(level = "trace", skip_all, fields(response=field::Empty), err(level="warn"))]
     async fn try_patch(
         state: &mut RequestState,
         state_to_send: serde_json::Value,
@@ -696,7 +732,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint, client_config);
-        let response = client.get().await.unwrap();
+        let response = client.get(None).await.unwrap();
 
         assert_eq!(response.value, Some(json!({"status": "running"})));
         assert!(response.modified);
@@ -722,7 +758,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint.clone(), client_config);
-        let response1 = client.get().await.unwrap();
+        let response1 = client.get(None).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
         assert!(response1.modified);
@@ -737,7 +773,7 @@ mod tests {
             .create_async()
             .await;
 
-        let response2 = client.get().await.unwrap();
+        let response2 = client.get(None).await.unwrap();
 
         assert_eq!(response2.value, Some(json!({"status": "running"})));
         assert!(!response2.modified);
@@ -769,8 +805,8 @@ mod tests {
         let mut client = Get::new(endpoint, config);
 
         let start = std::time::Instant::now();
-        client.get().await.unwrap();
-        client.get().await.unwrap();
+        client.get(None).await.unwrap();
+        client.get(None).await.unwrap();
         let end = std::time::Instant::now();
 
         assert!(end.duration_since(start) >= Duration::from_millis(100));
@@ -797,7 +833,10 @@ mod tests {
         client_config.api_token = Some("test-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
-        client.patch(json!({"status": "updated"})).await.unwrap();
+        client
+            .patch(json!({"status": "updated"}), None)
+            .await
+            .unwrap();
 
         mock.assert_async().await;
     }
@@ -832,9 +871,18 @@ mod tests {
         client_config.api_token = Some("test-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
-        client.patch(json!({"status": "first"})).await.unwrap();
-        client.patch(json!({"status": "second"})).await.unwrap();
-        client.patch(json!({"status": "final"})).await.unwrap();
+        client
+            .patch(json!({"status": "first"}), None)
+            .await
+            .unwrap();
+        client
+            .patch(json!({"status": "second"}), None)
+            .await
+            .unwrap();
+        client
+            .patch(json!({"status": "final"}), None)
+            .await
+            .unwrap();
 
         mock1.assert_async().await;
         mock2.assert_async().await;
@@ -860,7 +908,7 @@ mod tests {
         assert_eq!(metrics_before.success_count, 0);
         assert_eq!(metrics_before.error_count, 0);
 
-        client.patch(json!({"status": "test"})).await.unwrap();
+        client.patch(json!({"status": "test"}), None).await.unwrap();
 
         let metrics_after = client.metrics();
         assert_eq!(metrics_after.success_count, 1);
@@ -883,7 +931,7 @@ mod tests {
         let mut client_config = test_config();
         client_config.api_token = Some("invalid-token".to_string());
         let mut client = Get::new(endpoint, client_config);
-        let response = client.get().await;
+        let response = client.get(None).await;
 
         assert!(matches!(response, Err(GetError::Unauthorized)));
 
@@ -912,7 +960,7 @@ mod tests {
         };
 
         let mut client = Get::new(endpoint, config);
-        let response = client.get().await;
+        let response = client.get(None).await;
 
         // Should return error for invalid JSON instead of retrying
         assert!(matches!(response, Err(GetError::Serialization(_))));
@@ -942,7 +990,7 @@ mod tests {
         };
 
         let mut client = Get::new(endpoint.clone(), config);
-        let response1 = client.get().await.unwrap();
+        let response1 = client.get(None).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
         assert!(response1.modified);
@@ -965,7 +1013,7 @@ mod tests {
             .create_async()
             .await;
 
-        let response2 = client.get().await.unwrap();
+        let response2 = client.get(None).await.unwrap();
 
         assert_eq!(response2.value, Some(json!({"status": "recovered"})));
         assert!(response2.modified);
@@ -1007,7 +1055,7 @@ mod tests {
 
         // Should eventually succeed after rate limit expires
         let start_time = std::time::Instant::now();
-        let result = client.get().await.unwrap();
+        let result = client.get(None).await.unwrap();
         let elapsed = start_time.elapsed();
 
         // Verify that at least 1 second passed (respecting the retry-after header)
@@ -1048,11 +1096,14 @@ mod tests {
         let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 400
-        let result1 = client.patch(json!({"status": "will_fail"})).await;
-        assert!(matches!(result1, Err(PatchError(400))));
+        let result1 = client.patch(json!({"status": "will_fail"}), None).await;
+        assert!(matches!(result1, Err(PatchError::Status(400))));
 
         // Second patch should succeed
-        client.patch(json!({"status": "success"})).await.unwrap();
+        client
+            .patch(json!({"status": "success"}), None)
+            .await
+            .unwrap();
 
         mock1.assert_async().await;
         mock2.assert_async().await;
@@ -1084,11 +1135,16 @@ mod tests {
         let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 401
-        let result1 = client.patch(json!({"status": "will_fail_auth"})).await;
-        assert!(matches!(result1, Err(PatchError(401))));
+        let result1 = client
+            .patch(json!({"status": "will_fail_auth"}), None)
+            .await;
+        assert!(matches!(result1, Err(PatchError::Status(401))));
 
         // Second patch should succeed
-        client.patch(json!({"status": "success"})).await.unwrap();
+        client
+            .patch(json!({"status": "success"}), None)
+            .await
+            .unwrap();
 
         mock1.assert_async().await;
         mock2.assert_async().await;
@@ -1128,7 +1184,7 @@ mod tests {
         // Send patch that will be rate limited and then retried - this should block until success
         let start_time = std::time::Instant::now();
         client
-            .patch(json!({"status": "will_be_rate_limited"}))
+            .patch(json!({"status": "will_be_rate_limited"}), None)
             .await
             .unwrap();
         let elapsed = start_time.elapsed();
@@ -1175,7 +1231,7 @@ mod tests {
 
         // Send patch that will fail with server error and then be retried - this should block until success
         client
-            .patch(json!({"status": "network_test"}))
+            .patch(json!({"status": "network_test"}), None)
             .await
             .unwrap();
 
@@ -1222,12 +1278,12 @@ mod tests {
         let mut client = Patch::new(endpoint, config);
 
         // Send 409 request - should fail permanently
-        let result1 = client.patch(json!({"status": "conflict_test"})).await;
-        assert!(matches!(result1, Err(PatchError(409))));
+        let result1 = client.patch(json!({"status": "conflict_test"}), None).await;
+        assert!(matches!(result1, Err(PatchError::Status(409))));
 
         // Send 502 request - should be retried and eventually succeed
         client
-            .patch(json!({"status": "server_error_test"}))
+            .patch(json!({"status": "server_error_test"}), None)
             .await
             .unwrap();
 
@@ -1274,7 +1330,7 @@ mod tests {
         let mut client = Get::new(endpoint, config);
 
         // Start first request that will fail and increase backoff
-        let first_request = client.get();
+        let first_request = client.get(None);
 
         // Drop the future before the second request
         tokio::select! {
@@ -1284,7 +1340,7 @@ mod tests {
 
         // This request should use start the backoff from min_interval
         let start_time = std::time::Instant::now();
-        let _result = client.get().await.unwrap();
+        let _result = client.get(None).await.unwrap();
         let elapsed = start_time.elapsed();
 
         // Should complete within 2 * min_interval + network time, meaning the backoff was re-set
@@ -1337,7 +1393,7 @@ mod tests {
         let mut client = Patch::new(endpoint, config);
 
         // Start first request that will fail and increase backoff
-        let first_request = client.patch(json!({"status": "test"}));
+        let first_request = client.patch(json!({"status": "test"}), None);
 
         // Drop the future before the second request
         tokio::select! {
@@ -1347,7 +1403,7 @@ mod tests {
 
         // This request should use start the backoff from min_interval
         let start_time = std::time::Instant::now();
-        client.patch(json!({"status": "test"})).await.unwrap();
+        client.patch(json!({"status": "test"}), None).await.unwrap();
         let elapsed = start_time.elapsed();
 
         // Should complete within 2 * min_interval + network time, meaning the backoff was re-set
@@ -1394,5 +1450,75 @@ mod tests {
         };
         assert_eq!(metrics.total_requests(), 10);
         assert_eq!(metrics.success_rate(), 70.0);
+    }
+
+    #[tokio::test]
+    async fn test_get_cancellation() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // Set up a normal response
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status": "response"}"#)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(60),
+            api_token: Some("test-token".to_string()),
+        };
+
+        let mut client = Get::new(endpoint, config);
+
+        // Create an interrupt that triggers immediately
+        let interrupt = Interrupt::new();
+        interrupt.trigger();
+
+        // The request should be cancelled immediately
+        let result = client.get(Some(interrupt)).await;
+        assert!(matches!(result, Err(GetError::Cancelled)));
+
+        // Mock should not be hit due to immediate cancellation
+    }
+
+    #[tokio::test]
+    async fn test_patch_cancellation() {
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+
+        // Set up a normal response
+        let _mock = server
+            .mock("PATCH", "/")
+            .match_header("content-type", "application/json")
+            .match_body(Matcher::Json(json!({"status": "test"})))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = RequestConfig {
+            timeout: Duration::from_secs(10),
+            min_interval: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(60),
+            api_token: Some("test-token".to_string()),
+        };
+
+        let mut client = Patch::new(endpoint, config);
+
+        // Create an interrupt that triggers immediately
+        let interrupt = Interrupt::new();
+        interrupt.trigger();
+
+        // The request should be cancelled immediately
+        let result = client
+            .patch(json!({"status": "test"}), Some(interrupt))
+            .await;
+        assert!(matches!(result, Err(PatchError::Cancelled)));
+
+        // Mock should not be hit due to immediate cancellation
     }
 }

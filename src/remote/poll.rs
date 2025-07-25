@@ -1,6 +1,6 @@
+use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -49,13 +49,18 @@ type PollResult = (Option<Value>, UpdateOpts, Instant);
 
 /// Poll the remote target returning the metadata back
 /// to the caller after the request succeeds
-async fn poll_remote(config: &RemoteConfig, poll_client: &mut Get, req: PollRequest) -> PollResult {
+async fn poll_remote(
+    config: &RemoteConfig,
+    poll_client: &mut Get,
+    req: PollRequest,
+    interrupt: Interrupt,
+) -> PollResult {
     // poll if we have a client
-    let value = match poll_client.get().await {
+    let value = match poll_client.get(Some(interrupt)).await {
         Ok(res) if req.reemit || res.modified => res.value,
         Ok(_) => None,
         Err(e) => {
-            warn!("poll failed: {e}");
+            error!("poll failed: {e}");
             None
         }
     };
@@ -97,17 +102,6 @@ enum PollAction {
     },
 }
 
-impl fmt::Display for PollAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let action = match self {
-            Self::Terminate => "terminate",
-            Self::Poll(_) => "poll",
-            Self::Complete { .. } => "complete",
-        };
-        f.write_str(action)
-    }
-}
-
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
     uuid: &Uuid,
@@ -128,6 +122,7 @@ pub async fn start_poll(
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(config);
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>>;
+    let mut interrupt = Interrupt::new();
 
     // Use the client cached target if any as the result of the first poll
     if let Some(target_state) = initial_target {
@@ -146,6 +141,7 @@ pub async fn start_poll(
                 opts: UpdateOpts::default(),
                 reemit: false,
             },
+            interrupt.clone(),
         ));
     }
 
@@ -182,19 +178,26 @@ pub async fn start_poll(
             }
         };
 
-        trace!("performing action: {action}");
-
         match action {
             PollAction::Terminate => {
                 break;
             }
 
             PollAction::Poll(update_req) => {
-                // Trigger a new poll
-                drop(poll_future);
+                // Interrupt the poll in progress
+                interrupt.trigger();
+
+                // Wait for the poll to return
+                poll_future.await;
 
                 // Trigger a new poll cancelling any pending apply if a new poll is received
-                poll_future = Box::pin(poll_remote(config, &mut poll_client, update_req));
+                interrupt = Interrupt::new();
+                poll_future = Box::pin(poll_remote(
+                    config,
+                    &mut poll_client,
+                    update_req,
+                    interrupt.clone(),
+                ));
 
                 // Reset the poll interval to avoid busy waiting
                 next_poll_time = Instant::now() + next_poll(config);
@@ -206,7 +209,15 @@ pub async fn start_poll(
                 next_poll,
             } => {
                 // Reset the polling state
-                poll_future = Box::pin(future::pending());
+                interrupt = Interrupt::new();
+                poll_future = {
+                    let interrupt = interrupt.clone();
+                    // create a future that just waits for an interrupt
+                    Box::pin(async move {
+                        interrupt.wait().await;
+                        (None, UpdateOpts::default(), next_poll)
+                    })
+                };
                 next_poll_time = next_poll;
 
                 // If there is a new target
