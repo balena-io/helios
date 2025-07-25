@@ -1,9 +1,10 @@
 use bollard::Docker;
 
 use mahler::extract::{Pointer, Target, View};
+use mahler::worker::Uninitialized;
 use mahler::{
     extract::Args,
-    task::{create as add, update},
+    task,
     worker::{Ready, Worker},
 };
 
@@ -36,24 +37,111 @@ pub enum CreateError {
     StateSerialization(#[from] mahler::errors::SerializationError),
 }
 
-type LocalWorker = Worker<Device, Ready, TargetDevice>;
-
-pub fn create(initial: Device) -> Result<LocalWorker, CreateError> {
-    // Initialize the connection
-    let docker = Docker::connect_with_defaults().map_err(CreateError::DockerConnection)?;
-
+/// Configure the worker jobs
+///
+/// This is mostly used for tests
+fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
     Worker::new()
-        .resource(docker)
         .job(
             "/apps/{app_uuid}",
-            add(new_app).with_description(|Args(uuid): Args<Uuid>| {
+            task::create(new_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
         .job(
             "/config",
-            update(store_config).with_description(|| "store device configuration"),
+            task::update(store_config).with_description(|| "store device configuration"),
         )
+}
+
+type LocalWorker = Worker<Device, Ready, TargetDevice>;
+
+/// Create and initialize the worker
+pub fn create(initial: Device) -> Result<LocalWorker, CreateError> {
+    // Initialize the connection
+    let docker = Docker::connect_with_defaults().map_err(CreateError::DockerConnection)?;
+
+    // Create the worker and set-up resources
+    worker()
+        .resource(docker)
         .initial_state(initial)
         .map_err(CreateError::StateSerialization)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use mahler::{par, seq, Dag};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use tracing_subscriber::fmt::{self, format::FmtSpan};
+    use tracing_subscriber::{prelude::*, EnvFilter};
+
+    fn before() {
+        // Initialize tracing subscriber with custom formatting
+        tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_span_events(FmtSpan::CLOSE)
+                    .event_format(fmt::format().pretty().with_target(false)),
+            )
+            .try_init()
+            .unwrap_or(());
+    }
+
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_create_an_app() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "name": "my-app"
+                }
+            }
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = seq!("initialize app with uuid 'my-app-uuid'",);
+        assert_eq!(workflow.to_string(), expected.to_string());
+    }
+
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_create_an_app_and_configs() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "name": "my-app"
+                }
+            },
+            "config": {
+                "SOME_VAR": "one",
+                "OTHER_VAR": "two"
+            }
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = par!(
+            "initialize app with uuid 'my-app-uuid'",
+            "store device configuration"
+        );
+        assert_eq!(workflow.to_string(), expected.to_string());
+    }
 }

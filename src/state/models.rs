@@ -57,12 +57,15 @@ pub struct Device {
     pub uuid: Uuid,
 
     /// List of docker images on the device
+    #[serde(default)]
     pub images: HashMap<String, Image>,
 
     /// Apps on the device
+    #[serde(default)]
     pub apps: HashMap<Uuid, App>,
 
     /// Config vars
+    #[serde(default)]
     pub config: DeviceConfig,
 }
 
@@ -86,7 +89,9 @@ pub type TargetApp = App;
 /// Target state of a device
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetDevice {
+    #[serde(default)]
     pub apps: HashMap<Uuid, TargetApp>,
+    #[serde(default)]
     pub config: DeviceConfig,
 }
 
