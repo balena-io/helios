@@ -76,7 +76,7 @@ async fn send_report(
 ) -> LastReport {
     // TODO: calculate differences with the last report and just send that
     let new_report: Value = report.into();
-    let res = match client.patch(new_report.clone(), interrupt).await {
+    let res = match client.patch(new_report.clone(), Some(interrupt)).await {
         Ok(_) => Some(new_report),
         Err(PatchError::Cancelled) => last_report,
         Err(e) => {

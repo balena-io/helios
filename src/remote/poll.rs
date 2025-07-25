@@ -56,7 +56,7 @@ async fn poll_remote(
     interrupt: Interrupt,
 ) -> PollResult {
     // poll if we have a client
-    let value = match poll_client.get(interrupt).await {
+    let value = match poll_client.get(Some(interrupt)).await {
         Ok(res) if req.reemit || res.modified => res.value,
         Ok(_) => None,
         Err(e) => {
