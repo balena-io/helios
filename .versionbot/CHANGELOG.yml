@@ -1,4 +1,63 @@
 - commits:
+    - subject: Make get/patch interrupt an Option
+      hash: a4731712c7eec7a08b60e0a4a17629534a3fae6a
+      body: |
+        This avoids having to pass a new interrupt that will not be used
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove `performing action` logs
+      hash: c7c8ffe81ca1d329e0a4843da983166d2a14149e
+      body: |
+        The use of PollAction and SeekAction is an internal implementation
+        detail that is adding noise to the logs. The Get/Patch client
+        and worker instrumentation already provides information about the state
+        of each loop.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make poll request interruptible
+      hash: c0be3e3831ac7782eb30263774e1e0901d1bafe8
+      body: |
+        While poll requests should get cancelled much less often than report
+        requests, this makes both the poll and report consistent in terms of the
+        context provided by the instrumentation.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make Get request error reporting consistent with patch
+      hash: 87d91af00c6d3c389a196f82d8b79a7d23779a0c
+      body: |
+        Clean up error messages.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add interrupt signal to request Patch
+      hash: 17b2914cedb9ffc4e30962cc17b492a63b5363c2
+      body: |
+        This provides more visilibity on the logs of when a report was cancelled
+        because of new changes. Before this, you would just see a `close` event
+        without any context.
+
+        This also skips the initial report and just reports on changes for
+        simplicity.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.6.1
+  title: ""
+  date: 2025-07-25T19:37:42.313Z
+- commits:
     - subject: Add Start command
       hash: 78f3e3cc54f804607f07790cf45704d0b6719fdf
       body: ""
