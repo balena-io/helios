@@ -1,192 +1,185 @@
 use axum::http::Uri;
-use clap::{Args, Parser, Subcommand};
-use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
-use std::fmt::{self, Display};
-use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
+use clap::{CommandFactory, Parser};
 use std::num::ParseIntError;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
 
-use crate::state::models::Uuid;
+use crate::api::LocalAddress;
+use crate::types::{ApiKey, Uuid};
 
-/// Local API listen address
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum LocalAddress {
-    Tcp(SocketAddr),
-    Unix(PathBuf),
-}
-
-impl Display for LocalAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LocalAddress::Tcp(socket_addr) => socket_addr.fmt(f),
-            LocalAddress::Unix(path) => path.as_path().display().fmt(f),
-        }
-    }
-}
-
-impl FromStr for LocalAddress {
-    type Err = AddrParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<SocketAddr>()
-            .map(LocalAddress::Tcp)
-            .or_else(|_| Ok(LocalAddress::Unix(Path::new(s).to_path_buf())))
-    }
-}
-
-impl Default for LocalAddress {
-    fn default() -> Self {
-        LocalAddress::Tcp(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            48484,
-        ))
-    }
-}
-fn parse_uuid(s: &str) -> Result<Uuid, Infallible> {
-    Ok(s.to_string().into())
-}
+pub use clap::error::ErrorKind;
 
 fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     let millis: u64 = s.parse()?;
     Ok(Duration::from_millis(millis))
 }
 
-#[derive(Clone, Debug, Args)]
-pub struct GlobalArgs {
-    // declare here arguments that should be available and
-    // apply across all commands, eg. `--verbose`.
-}
-
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)] // read from Cargo.toml
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-
-    #[command(flatten)]
-    args: GlobalArgs,
-}
-
-#[derive(Clone, Debug, Args)]
-pub struct StartArgs {
-    /// Device UUID. If not provided, a random value will be generated and used
-    /// on each run of this command
-    #[arg(
-        long = "uuid",
-        value_name = "uuid",
-        value_parser = parse_uuid,
-        env = "HELIOS_UUID"
-    )]
+pub struct Cli {
+    /// Unique identifier for this device
+    #[arg(env = "HELIOS_UUID", long = "uuid", value_name = "uuid")]
     pub uuid: Option<Uuid>,
 
     /// Local API listen address
     #[arg(
-        long = "local-address",
-        value_name = "address",
-        env = "HELIOS_LOCAL_ADDRESS",
-        default_value_t
+        env = "HELIOS_LOCAL_API_ADDRESS",
+        long = "local-api-address",
+        value_name = "addr"
     )]
-    pub local_address: LocalAddress,
+    pub local_api_address: Option<LocalAddress>,
 
-    /// Remote API endpoint
+    /// Remote API endpoint URI
     #[arg(
+        env = "HELIOS_REMOTE_API_ENDPOINT",
         long = "remote-api-endpoint",
-        value_name = "uri",
-        env = "HELIOS_REMOTE_API_ENDPOINT"
+        value_name = "uri"
     )]
     pub remote_api_endpoint: Option<Uri>,
 
-    /// API key to use for authentication with remote
+    /// API key for authentication with remote
     #[arg(
+        env = "HELIOS_REMOTE_API_KEY",
         long = "remote-api-key",
         value_name = "key",
-        env = "HELIOS_REMOTE_API_KEY",
+        requires = "uuid",
         requires = "remote_api_endpoint"
     )]
-    pub remote_api_key: Option<String>,
+    pub remote_api_key: Option<ApiKey>,
 
     /// Remote request timeout in milliseconds
     #[arg(
-        long = "remote-request-timeout-ms",
-        value_name = "request_timeout_ms",
+        env = "HELIOS_REMOTE_REQUEST_TIMEOUT",
+        long = "remote-request-timeout",
+        value_name = "ms",
         value_parser = parse_duration,
-        env = "HELIOS_REMOTE_REQUEST_TIMEOUT_MS",
-        requires = "remote_api_endpoint",
-        default_value = "59000"
+        requires = "remote_api_endpoint"
     )]
-    pub remote_request_timeout_ms: Duration,
+    pub remote_request_timeout: Option<Duration>,
 
-    /// Remote poll interval in milliseconds
+    /// Remote target state poll interval in milliseconds
     #[arg(
-        long = "remote-poll-interval-ms",
-        value_name = "poll_interval_ms",
+        env = "HELIOS_REMOTE_POLL_INTERVAL",
+        long = "remote-poll-interval",
+        value_name = "ms",
         value_parser = parse_duration,
-        env = "HELIOS_REMOTE_POLL_INTERVAL_MS",
-        requires = "remote_api_endpoint",
-        default_value = "900000"
+        requires = "remote_api_endpoint"
     )]
-    pub remote_poll_interval_ms: Duration,
+    pub remote_poll_interval: Option<Duration>,
 
     /// Remote rate limiting interval in milliseconds
     #[arg(
-        long = "remote-min-interval-ms",
-        value_name = "min_interval_ms",
+        env = "HELIOS_REMOTE_POLL_MIN_INTERVAL",
+        long = "remote-poll-min-interval",
+        value_name = "ms",
         value_parser = parse_duration,
-        env = "HELIOS_REMOTE_MIN_INTERVAL_MS",
-        requires = "remote_api_endpoint",
-        default_value = "10000"
+        requires = "remote_api_endpoint"
     )]
-    pub remote_min_interval_ms: Duration,
+    pub remote_poll_min_interval: Option<Duration>,
 
     /// Remote target state poll max jitter in milliseconds
     #[arg(
-        long = "remote-max-poll-jitter-ms",
-        value_name = "max_poll_jitter_ms",
+        env = "HELIOS_REMOTE_POLL_MAX_JITTER",
+        long = "remote-poll-max-jitter",
+        value_name = "ms",
         value_parser = parse_duration,
-        env = "HELIOS_REMOTE_MAX_POLL_JITTER_MS",
-        requires = "remote_api_endpoint",
-        default_value = "60000"
+        requires = "remote_api_endpoint"
     )]
-    pub remote_max_poll_jitter_ms: Duration,
+    pub remote_poll_max_jitter: Option<Duration>,
 
-    /// Legacy Supervisor API endpoint URI to redirect unsupported API requests
+    /// URI of legacy Supervisor API
     #[arg(
-        long = "legacy-address",
+        env = "HELIOS_LEGACY_API_ENDPOINT",
+        long = "legacy-api-endpoint",
         value_name = "uri",
-        env = "HELIOS_LEGACY_ADDRESS"
+        requires = "legacy_api_key"
     )]
-    pub legacy_address: Option<Uri>,
+    pub legacy_api_endpoint: Option<Uri>,
 
-    /// API key to use for authentication with legacy Supervisor
+    /// API key for authentication with legacy Supervisor API
     #[arg(
+        env = "HELIOS_LEGACY_API_KEY",
         long = "legacy-api-key",
         value_name = "key",
-        env = "HELIOS_LEGACY_API_KEY",
-        requires = "legacy_address"
+        requires = "legacy_api_endpoint"
     )]
-    pub legacy_api_key: Option<String>,
+    pub legacy_api_key: Option<ApiKey>,
+
+    /// Provisioning key to use for authenticating with remote during registration
+    #[arg(
+        env = "HELIOS_PROVISIONING_KEY",
+        long = "provisioning-key",
+        value_name = "key",
+        requires = "remote_api_endpoint",
+        requires = "provisioning_fleet",
+        requires = "provisioning_device_type"
+    )]
+    pub provisioning_key: Option<String>,
+
+    /// ID of the fleet to provision this device into
+    #[arg(
+        env = "HELIOS_PROVISIONING_FLEET",
+        long = "provisioning-fleet",
+        value_name = "int",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_fleet: Option<u32>, // FIXME: should fleet_uuid
+
+    /// Device type
+    #[arg(
+        env = "HELIOS_PROVISIONING_DEVICE_TYPE",
+        long = "provisioning-device-type",
+        value_name = "slug",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_device_type: Option<String>,
+
+    /// Supervisor version
+    #[arg(
+        env = "HELIOS_PROVISIONING_SUPERVISOR_VERSION",
+        long = "provisioning-supervisor-version",
+        value_name = "str",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_supervisor_version: Option<String>,
+
+    /// Host OS name and version, eg. "balenaOS 6.5.39+rev1"
+    #[arg(
+        env = "HELIOS_PROVISIONING_OS_VERSION",
+        long = "provisioning-os-version",
+        value_name = "str",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_os_version: Option<String>,
+
+    /// Host OS variant, eg. "prod", "dev"
+    #[arg(
+        env = "HELIOS_PROVISIONING_OS_VARIANT",
+        long = "provisioning-os-variant",
+        value_name = "str",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_os_variant: Option<String>,
+
+    /// MAC address
+    #[arg(
+        env = "HELIOS_PROVISIONING_MAC_ADDRESS",
+        long = "provisioning-mac-address",
+        value_name = "str",
+        requires = "provisioning_key"
+    )]
+    pub provisioning_mac_address: Option<String>,
 }
 
-#[derive(Clone, Debug, Args)]
-pub struct RegisterArgs {
-    /// Provisioning key
-    #[arg(long = "provisioning-key", value_name = "key")]
-    pub provisioning_key: String,
+impl Cli {
+    // this is currently unused but seems useful and was non-obvious
+    // how to do this, so i'm keeping it around in case we need it.
+    // just make sure to make it `pub` and remove the underscore.
+    fn _exit_with_error(&self, kind: ErrorKind, message: &str) -> ! {
+        let mut cmd = Self::command();
+        cmd.error(kind, message).exit()
+    }
 }
 
-#[derive(Clone, Debug, Subcommand)]
-pub enum Command {
-    /// Start Helios
-    Start(Box<StartArgs>),
-
-    /// Provision device to remote endpoint (TODO!)
-    Register(Box<RegisterArgs>),
-}
-
-pub fn load() -> (Command, GlobalArgs) {
-    let cli = Cli::parse();
-    (cli.command, cli.args)
+pub fn parse() -> Cli {
+    Parser::parse()
 }

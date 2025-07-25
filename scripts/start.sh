@@ -7,12 +7,12 @@ DEBUG=${DEBUG:-0}
 [ "${DEBUG}" = "1" ] && set -x
 
 # Set some limits on service configuration
-if [ -n "$HELIOS_REMOTE_POLL_INTERVAL_MS" ] && [ "$HELIOS_REMOTE_POLL_INTERVAL_MS" -lt 900000 ]; then
+if [ -n "$HELIOS_REMOTE_POLL_INTERVAL" ] && [ "$HELIOS_REMOTE_POLL_INTERVAL" -lt 900000 ]; then
   HELIOS_REMOTE_POLL_INTERVAL=900000
 fi
-unset HELIOS_REMOTE_MAX_POLL_JITTER_MS
+unset HELIOS_REMOTE_POLL_MAX_JITTER
 # Do not allow min interval to be user configurable
-unset HELIOS_REMOTE_MIN_INTERVAL_MS
+unset HELIOS_REMOTE_POLL_MIN_INTERVAL
 
 [ -z "$DOCKER_HOST" ] && (
   echo "DOCKER_HOST is required" >&2
@@ -55,4 +55,4 @@ export XDG_CACHE_HOME=/cache
 rm /tmp/run/helios.sock || true
 
 # Start the new supervisor
-exec helios start --uuid "${HELIOS_DEVICE_UUID}" --local-address /tmp/run/helios.sock
+exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-api-address /tmp/run/helios.sock

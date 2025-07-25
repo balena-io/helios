@@ -1,10 +1,9 @@
-use futures_lite::future;
 use mahler::workflow::Interrupt;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
 use crate::util::uri::make_uri;
@@ -56,10 +55,10 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
         .to_string();
 
     let client_config = RequestConfig {
-        timeout: config.request_timeout,
-        min_interval: config.min_interval,
-        max_backoff: config.poll_interval,
-        api_token: config.api_key.clone(),
+        timeout: config.request.timeout,
+        min_interval: config.request.poll_min_interval,
+        max_backoff: config.request.poll_interval,
+        api_token: Some(config.api_key.to_string()),
     };
 
     Patch::new(endpoint, client_config)
@@ -89,14 +88,9 @@ async fn send_report(
 }
 
 #[instrument(name = "report", skip_all)]
-pub async fn start_report(config: &Option<RemoteConfig>, mut state_rx: Receiver<LocalState>) {
-    let mut report_client = if let Some(config) = config {
-        get_report_client(config)
-    } else {
-        warn!("running in unmanaged mode");
-        // just disable this branch
-        return future::pending::<()>().await;
-    };
+pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalState>) {
+    let mut report_client = get_report_client(&config);
+
     info!("waiting for state changes");
     let mut last_report = LastReport::None;
     loop {

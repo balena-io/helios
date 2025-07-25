@@ -1,11 +1,12 @@
 use axum::http::StatusCode;
 use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::{field, instrument, warn, Span};
+
+use crate::util::crypto::sha256_hex_digest;
 
 /// Internal errors that can occur during HTTP GET requests (including retry logic).
 #[derive(Debug, Error)]
@@ -82,13 +83,7 @@ struct CacheEntry {
 
 /// Generate cache file path based on endpoint
 fn get_cache_path(endpoint: &str) -> PathBuf {
-    let hash = Sha256::digest(endpoint.as_bytes());
-
-    // Use first 16 bytes of hash for filename
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&hash[..16]);
-    let filename = format!("{:032x}.json", u128::from_be_bytes(bytes));
-
+    let filename = sha256_hex_digest(endpoint.as_bytes());
     let cache_dir = if let Some(cache_dir) = dirs::cache_dir() {
         cache_dir.join(env!("CARGO_PKG_NAME"))
     } else {
