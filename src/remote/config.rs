@@ -2,6 +2,7 @@ use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::state::models::Uuid;
 use crate::util::json::{
     deserialize_duration_from_ms, deserialize_uri, serialize_duration_to_ms, serialize_uri,
 };
@@ -13,38 +14,20 @@ pub struct RemoteConfig {
     pub api_endpoint: Uri,
 
     pub api_key: String,
+    pub uuid: Uuid,
 
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    pub request: RequestConfig,
 
-    pub provisioning: ProvisioningConfig,
-}
-
-/// Initial values at the time of provisioning.
-///
-/// These should be updated if the device moves between fleets,
-/// performs Supervisor or OS updates, or networking changes.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ProvisioningConfig {
-    pub fleet: u32, // FIXME: this should be fleet_uuid
-
-    pub device_type: String,
-
-    pub supervisor_version: Option<String>,
-
-    pub os_name: Option<String>,
-    pub os_variant: Option<String>,
-
-    pub mac_address: Option<String>,
+    pub provisioning: Option<ProvisioningConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ConnectionConfig {
+pub struct RequestConfig {
     #[serde(
         deserialize_with = "deserialize_duration_from_ms",
         serialize_with = "serialize_duration_to_ms"
     )]
-    pub request_timeout: Duration,
+    pub timeout: Duration,
 
     #[serde(
         deserialize_with = "deserialize_duration_from_ms",
@@ -56,22 +39,34 @@ pub struct ConnectionConfig {
         deserialize_with = "deserialize_duration_from_ms",
         serialize_with = "serialize_duration_to_ms"
     )]
-    pub min_interval: Duration,
+    pub poll_min_interval: Duration,
 
     #[serde(
         deserialize_with = "deserialize_duration_from_ms",
         serialize_with = "serialize_duration_to_ms"
     )]
-    pub max_poll_jitter: Duration,
+    pub poll_max_jitter: Duration,
 }
 
-impl Default for ConnectionConfig {
+impl Default for RequestConfig {
     fn default() -> Self {
         Self {
-            request_timeout: Duration::from_millis(59_000),
+            timeout: Duration::from_millis(59_000),
             poll_interval: Duration::from_millis(900_000),
-            min_interval: Duration::from_millis(10_000),
-            max_poll_jitter: Duration::from_millis(60_000),
+            poll_min_interval: Duration::from_millis(10_000),
+            poll_max_jitter: Duration::from_millis(60_000),
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProvisioningConfig {
+    pub provisioning_key: String,
+    pub device_type: String,
+    pub fleet: u32, // FIXME: this should be fleet_uuid
+
+    pub supervisor_version: Option<String>,
+    pub os_name: Option<String>,
+    pub os_variant: Option<String>,
+    pub mac_address: Option<String>,
 }

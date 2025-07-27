@@ -21,8 +21,9 @@ mod state;
 mod util;
 
 use api::{ApiConfig, Listener, LocalAddress};
+use cli::Command;
 use legacy::{LegacyConfig, ProxyConfig, ProxyState};
-use remote::{register, ConnectionConfig, ProvisioningConfig, RegisterRequest, RemoteConfig};
+use remote::{register, ProvisioningConfig, RegisterRequest, RemoteConfig, RequestConfig};
 use state::models::{Device, Uuid};
 use state::SeekError;
 use util::crypto::{pseudorandom_string, sha256_hex_digest, ALPHA_NUM};
@@ -55,163 +56,166 @@ fn initialize_tracing() {
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
-    let cli = cli::parse();
+    let command = cli::parse();
 
     // make sure our config directory exists
     _config::ensure_config_dir()?;
 
     let config = _config::load()?;
 
-    // If no device UUID was provided, generate a random one here.
-    let uuid = config
-        .as_ref()
-        .map(|c| c.uuid.clone())
-        .or(cli.uuid)
-        .unwrap_or_default();
+    match command {
+        Command::Register(args) => {
+            let args = *args;
 
-    // Handle provisioning.
-    //
-    // See if we need to register with remote. This is an one-time operation that is
-    // triggered by the presence of a `provisioning_key` argument in the CLI.
-    // Before registration, anything related to a remote backend is unavailable --
-    // we can't do much without an API key anyway.
-    //
-    // Provisioning state is tracked by whether `remote_config` below is nil or not.
-    // If `remote_config` becomes non-nil, then we are registered with a remote.
-    // If `remote_config` remains nil, then we'll run in "unmanaged" mode.
-    let remote_config = match (
-        config.as_ref().and_then(|c| c.remote.clone()),
-        cli.provisioning_key,
-    ) {
-        (None, None) => {
-            // We haven't registered before and aren't being
-            // asked to; nothing to do then
-            None
-        }
+            // If no device UUID was provided, generate a random one here.
+            let uuid = config
+                .as_ref()
+                .map(|c| c.uuid.clone())
+                .or(args.uuid)
+                .unwrap_or_default();
 
-        (Some(remote), None) => {
-            // We have already registered and aren't being
-            // asked to register again; use the config we have
-            Some(remote)
-        }
-
-        (Some(remote), Some(_))
-            if Some(&remote.api_endpoint) == cli.remote_api_endpoint.as_ref() =>
-        {
-            // We have already registered on this remote but are
-            // asked to register again; ignore the request
-            warn!("already registered on {}", remote.api_endpoint);
-            Some(remote)
-        }
-
-        // We are asked to register and either...
-        //  - we haven't registered at all before, or
-        //  - we *may* have already registered but on a different remote
-        // so proceed to register regardless.
-        //
-        // TODO: In the future we may want to backup previous remote configs
-        // as part of a leave/join cycle. This is the place to do it.
-        (_, Some(provisioning_key)) => {
-            // These are safe to unwrap because the CLI ensures that if
-            // provisioning_key is provided, these are as well.
-            let api_endpoint = cli.remote_api_endpoint.unwrap();
-            let fleet = cli.provisioning_fleet.unwrap();
-            let device_type = cli.provisioning_device_type.unwrap();
-
-            // Get defaults
-            let connection_config = ConnectionConfig::default();
-
-            // The remote expects us to send a UUID and API key during registration,
-            // and we comply by assigning random values if they aren't provided as
-            // arguments to the CLI.
+            // Handle provisioning.
             //
-            // This however means that should an error or a crash happen after we
-            // register but before we stored the provisioning config (which completes
-            // provisioning from our perspective), we'd loose these values and try
-            // to register again on restart with new values and so on.
+            // See if we need to register with remote. This is an one-time operation that is
+            // triggered by the presence of a `provisioning_key` argument in the CLI.
+            // Before registration, anything related to a remote backend is unavailable --
+            // we can't do much without an API key anyway.
             //
-            // Before attempting to call remote, save the registration request
-            // locally and try to restore it here.
-            let restore_path = _config::config_dir().join(format!(
-                ".provisioning.{}.json",
-                sha256_hex_digest(&api_endpoint.to_string())
-            ));
-            fn generate_api_key() -> String {
-                pseudorandom_string(ALPHA_NUM, 32)
-            }
-            let register_request = RegisterRequest {
+            // Provisioning state is tracked by whether `remote_config` below is nil or not.
+            // If `remote_config` becomes non-nil, then we are registered with a remote.
+            // If `remote_config` remains nil, then we'll run in "unmanaged" mode.
+            let remote_config = match (
+                config.as_ref().and_then(|c| c.remote.clone()),
+                Some(args.provisioning_key),
+            ) {
+                (None, None) => {
+                    // We haven't registered before and aren't being
+                    // asked to; nothing to do then
+                    None
+                }
+
+                (Some(remote), None) => {
+                    // We have already registered and aren't being
+                    // asked to register again; use the config we have
+                    Some(remote)
+                }
+
+                (Some(remote), Some(_)) if remote.api_endpoint == args.remote_api_endpoint => {
+                    // We have already registered on this remote but are
+                    // asked to register again; ignore the request
+                    warn!("already registered on {}", remote.api_endpoint);
+                    Some(remote)
+                }
+
+                // We are asked to register and either...
+                //  - we haven't registered at all before, or
+                //  - we *may* have already registered but on a different remote
+                // so proceed to register regardless.
+                //
+                // TODO: In the future we may want to backup previous remote configs
+                // as part of a leave/join cycle. This is the place to do it.
+                (_, Some(provisioning_key)) => {
+                    // Get defaults
+                    let request_config = RequestConfig::default();
+
+                    // The remote expects us to send a UUID and API key during registration,
+                    // and we comply by assigning random values if they aren't provided as
+                    // arguments to the CLI.
+                    //
+                    // This however means that should an error or a crash happen after we
+                    // register but before we stored the provisioning config (which completes
+                    // provisioning from our perspective), we'd loose these values and try
+                    // to register again on restart with new values and so on.
+                    //
+                    // Before attempting to call remote, save the registration request
+                    // locally and try to restore it here.
+                    let restore_path = _config::config_dir().join(format!(
+                        ".provisioning.{}.json",
+                        sha256_hex_digest(&args.remote_api_endpoint.to_string())
+                    ));
+                    fn generate_api_key() -> String {
+                        pseudorandom_string(ALPHA_NUM, 32)
+                    }
+                    let register_request = RegisterRequest {
+                        uuid: uuid.clone(),
+                        application: args.provisioning_fleet,
+                        device_type: args.provisioning_device_type.clone(),
+                        api_key: args.remote_api_key.clone().unwrap_or_else(generate_api_key),
+                        supervisor_version: args.provisioning_supervisor_version.clone(),
+                        os_version: args.provisioning_os_version.clone(),
+                        os_variant: args.provisioning_os_variant.clone(),
+                        mac_address: args.provisioning_mac_address.clone(),
+                    };
+                    let register_request = match fs::read_to_string(restore_path) {
+                        Ok(contents) => serde_json::from_str(&contents)?,
+                        Err(_) => register_request,
+                    };
+
+                    let registration = register(
+                        provisioning_key.clone(),
+                        args.remote_api_endpoint.clone(),
+                        args.remote_request_timeout
+                            .unwrap_or(request_config.timeout),
+                        register_request,
+                    )
+                    .await?;
+
+                    let remote = RemoteConfig {
+                        api_endpoint: args.remote_api_endpoint,
+                        api_key: registration.api_key,
+                        uuid: registration.uuid,
+                        request: RequestConfig {
+                            timeout: args
+                                .remote_request_timeout
+                                .unwrap_or(request_config.timeout),
+                            poll_interval: args
+                                .remote_poll_interval
+                                .unwrap_or(request_config.poll_interval),
+                            poll_min_interval: args
+                                .remote_poll_min_interval
+                                .unwrap_or(request_config.poll_min_interval),
+                            poll_max_jitter: args
+                                .remote_poll_max_jitter
+                                .unwrap_or(request_config.poll_max_jitter),
+                        },
+                        provisioning: Some(ProvisioningConfig {
+                            provisioning_key: provisioning_key,
+                            fleet: args.provisioning_fleet,
+                            device_type: args.provisioning_device_type,
+                            supervisor_version: args.provisioning_supervisor_version,
+                            os_name: args.provisioning_os_version,
+                            os_variant: args.provisioning_os_variant,
+                            mac_address: args.provisioning_mac_address,
+                        }),
+                    };
+
+                    Some(remote)
+                }
+            };
+
+            /*_config::save(_config::Config {
                 uuid: uuid.clone(),
-                application: fleet,
-                device_type: device_type.clone(),
-                api_key: cli.remote_api_key.clone().unwrap_or_else(generate_api_key),
-                supervisor_version: cli.provisioning_supervisor_version.clone(),
-                os_version: cli.provisioning_os_version.clone(),
-                os_variant: cli.provisioning_os_variant.clone(),
-                mac_address: cli.provisioning_mac_address.clone(),
-            };
-            let register_request = match fs::read_to_string(restore_path) {
-                Ok(contents) => serde_json::from_str(&contents)?,
-                Err(_) => register_request,
-            };
-
-            let registration = register(
-                provisioning_key.clone(),
-                api_endpoint.clone(),
-                cli.remote_request_timeout_ms
-                    .unwrap_or(connection_config.request_timeout),
-                register_request,
-            )
-            .await?;
-
-            let remote = RemoteConfig {
-                api_endpoint,
-                api_key: registration.api_key,
-                connection: ConnectionConfig {
-                    request_timeout: cli
-                        .remote_request_timeout_ms
-                        .unwrap_or(connection_config.request_timeout),
-                    poll_interval: cli
-                        .remote_poll_interval_ms
-                        .unwrap_or(connection_config.poll_interval),
-                    min_interval: cli
-                        .remote_min_interval_ms
-                        .unwrap_or(connection_config.min_interval),
-                    max_poll_jitter: cli
-                        .remote_max_poll_jitter_ms
-                        .unwrap_or(connection_config.max_poll_jitter),
-                },
-                provisioning: ProvisioningConfig {
-                    fleet,
-                    device_type,
-                    supervisor_version: cli.provisioning_supervisor_version,
-                    os_name: cli.provisioning_os_version,
-                    os_variant: cli.provisioning_os_variant,
-                    mac_address: cli.provisioning_mac_address,
-                },
-            };
-
-            Some(remote)
+                api: api_config.clone(),
+                legacy: legacy_config.clone(),
+                remote: remote_config.clone(),
+            })
+            .await?;*/
         }
-    };
+        Command::Start(args) => {
+            let args = *args;
 
-    let api_config = cli
-        .local_api_address
-        .map(|local_address| ApiConfig { local_address });
+            let api_config = args
+                .local_api_address
+                .map(|local_address| ApiConfig { local_address });
 
-    let legacy_config = cli.legacy_api_endpoint.map(|api_endpoint| LegacyConfig {
-        api_endpoint,
-        api_key: cli.legacy_api_key.unwrap(),
-    });
+            let legacy_config = args.legacy_api_endpoint.map(|api_endpoint| LegacyConfig {
+                api_endpoint,
+                api_key: args.legacy_api_key.unwrap(),
+            });
 
-    _config::save(_config::Config {
-        uuid: uuid.clone(),
-        api: api_config.clone(),
-        legacy: legacy_config.clone(),
-        remote: remote_config.clone(),
-    })
-    .await?;
-
-    start_supervisor(uuid, api_config, remote_config, legacy_config).await?;
+            start_supervisor(uuid, api_config, remote_config, legacy_config).await?;
+        }
+    }
 
     Ok(())
 }

@@ -13,7 +13,7 @@ mod provision;
 mod report;
 mod request;
 
-pub use config::{ConnectionConfig, ProvisioningConfig, RemoteConfig};
+pub use config::{ProvisioningConfig, RemoteConfig, RequestConfig};
 pub use poll::{start_poll, PollRequest};
 pub use provision::{register, RegisterRequest};
 pub use report::start_report;

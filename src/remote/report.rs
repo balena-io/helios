@@ -54,9 +54,9 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
         .to_string();
 
     let client_config = RequestConfig {
-        timeout: config.connection.request_timeout,
-        min_interval: config.connection.min_interval,
-        max_backoff: config.connection.poll_interval,
+        timeout: config.request.timeout,
+        min_interval: config.request.poll_min_interval,
+        max_backoff: config.request.poll_interval,
         api_token: Some(config.api_key.clone()),
     };
 

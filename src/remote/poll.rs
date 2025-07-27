@@ -25,9 +25,9 @@ async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Val
         .to_string();
 
     let client_config = RequestConfig {
-        timeout: config.connection.request_timeout,
-        min_interval: config.connection.min_interval,
-        max_backoff: config.connection.poll_interval,
+        timeout: config.request.timeout,
+        min_interval: config.request.poll_min_interval,
+        max_backoff: config.request.poll_interval,
         api_token: Some(config.api_key.clone()),
     };
 
@@ -38,10 +38,10 @@ async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Val
 }
 
 fn next_poll(config: &RemoteConfig) -> Duration {
-    let max_jitter = &config.connection.max_poll_jitter;
+    let max_jitter = &config.request.poll_max_jitter;
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
     let jitter = Duration::from_millis(jitter_ms);
-    config.connection.poll_interval + jitter
+    config.request.poll_interval + jitter
 }
 
 // Return type from poll_remote with metadata
@@ -129,7 +129,7 @@ pub async fn start_poll(
             (
                 Some(target_state),
                 UpdateOpts::default(),
-                Instant::now() + config.connection.min_interval,
+                Instant::now() + config.request.poll_min_interval,
             )
         });
     } else {

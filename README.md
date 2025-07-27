@@ -31,11 +31,11 @@ This project is an experimental replacement for the current [balenaSupervisor](h
 - With that, you can start Helios with:
 
 ```
-cargo run -- \
+cargo run -- register \
     --remote-api-endpoint https://api.balena-cloud.com \
-    --provisioning-fleet=2279545 \
-    --provisioning-device-type=generic-aarch64 \
-    --provisioning-key=aqP2b0SYkSqAN5rUmEHgU5aX75Cg3n0D
+    --provisioning-fleet 2279545 \
+    --provisioning-device-type generic-aarch64 \
+    --provisioning-key aqP2b0SYkSqAN5rUmEHgU5aX75Cg3n0D
 ```
 
 For the full list of command line arguments use `cargo run -- --help`
