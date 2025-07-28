@@ -18,7 +18,7 @@ type LegacyTarget = serde_json::Value;
 
 #[derive(Clone)]
 pub struct ProxyConfig {
-    pub uuid: Uuid,
+    pub legacy_uuid: Uuid,
     pub legacy_uri: Uri,
     pub remote_uri: Option<Uri>,
 
@@ -26,9 +26,9 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn new(uuid: Uuid, legacy_uri: Uri, remote_uri: Option<Uri>) -> Self {
+    pub fn new(legacy_uuid: Uuid, legacy_uri: Uri, remote_uri: Option<Uri>) -> Self {
         Self {
-            uuid,
+            legacy_uuid,
             legacy_uri,
             remote_uri,
             https_client: reqwest::Client::new(),
@@ -120,7 +120,7 @@ pub async fn proxy(
     // Check if this is a request to the target state endpoint
     if is_supervisor_ua {
         let path = request.uri().path();
-        let expected_path = format!("/device/v3/{}/state", config.uuid);
+        let expected_path = format!("/device/v3/{}/state", config.legacy_uuid);
 
         if path == expected_path {
             // Try to serve from local cache
