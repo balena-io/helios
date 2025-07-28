@@ -261,7 +261,6 @@ async fn set_app_tgt_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::legacy::ProxyConfig;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -287,16 +286,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let proxy_config = ProxyConfig::new("test-device".to_string().into(), None, None);
-        let proxy_state = ProxyState::new(None);
-
         tokio::spawn(start(
             Listener::Tcp(listener),
             seek_request_tx,
             poll_request_tx,
             state_rx,
-            Some(proxy_config),
-            Some(proxy_state),
+            None,
+            None,
         ));
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

@@ -19,18 +19,18 @@ type LegacyTarget = serde_json::Value;
 #[derive(Clone)]
 pub struct ProxyConfig {
     pub uuid: Uuid,
+    pub legacy_uri: Uri,
     pub remote_uri: Option<Uri>,
-    pub legacy_uri: Option<Uri>,
 
     https_client: reqwest::Client,
 }
 
 impl ProxyConfig {
-    pub fn new(uuid: Uuid, remote_uri: Option<Uri>, legacy_uri: Option<Uri>) -> Self {
+    pub fn new(uuid: Uuid, legacy_uri: Uri, remote_uri: Option<Uri>) -> Self {
         Self {
             uuid,
-            remote_uri,
             legacy_uri,
+            remote_uri,
             https_client: reqwest::Client::new(),
         }
     }
@@ -160,11 +160,8 @@ pub async fn proxy(
             headers.insert("retry-after", HeaderValue::from_static("600"));
             return Ok((StatusCode::SERVICE_UNAVAILABLE, headers).into_response());
         }
-    } else if let Some(ref legacy_uri) = config.legacy_uri {
-        legacy_uri
     } else {
-        // No legacy Supervisor configured, return 404
-        return Ok((StatusCode::NOT_FOUND).into_response());
+        &config.legacy_uri
     };
 
     // Record the target address for the request
@@ -215,22 +212,22 @@ mod tests {
     type LegacyTarget = serde_json::Value;
 
     async fn create_test_state(
-        remote_uri: Uri,
         legacy_uri: Uri,
+        remote_uri: Uri,
         target: Option<LegacyTarget>,
     ) -> (ProxyConfig, ProxyState) {
-        create_test_state_with_none_uris(Some(remote_uri), Some(legacy_uri), target).await
+        create_test_state_with_none_uris(legacy_uri, Some(remote_uri), target).await
     }
 
     async fn create_test_state_with_none_uris(
+        legacy_uri: Uri,
         remote_uri: Option<Uri>,
-        legacy_uri: Option<Uri>,
         target: Option<LegacyTarget>,
     ) -> (ProxyConfig, ProxyState) {
         let config = ProxyConfig::new(
             "test-device-uuid".to_string().into(),
-            remote_uri,
             legacy_uri,
+            remote_uri,
         );
         let state = ProxyState::new(target);
         (config, state)
@@ -258,7 +255,7 @@ mod tests {
 
         let remote_uri: Uri = server.url().parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
@@ -279,7 +276,7 @@ mod tests {
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let legacy_uri: Uri = server.url().parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", Some("CustomClient/1.0"));
 
@@ -300,7 +297,7 @@ mod tests {
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let legacy_uri: Uri = server.url().parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", None);
 
@@ -321,7 +318,7 @@ mod tests {
 
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let legacy_uri: Uri = server.url().parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", Some("MySupervisor/1.0"));
 
@@ -342,7 +339,7 @@ mod tests {
 
         let remote_uri: Uri = server.url().parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/api/v1/test?param=value", Some("Supervisor/1.0.0"));
 
@@ -363,7 +360,7 @@ mod tests {
 
         let remote_uri: Uri = server.url().parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
@@ -377,7 +374,7 @@ mod tests {
     async fn test_connection_error_handling() {
         let remote_uri: Uri = "http://localhost:1".parse().unwrap(); // Invalid port
         let legacy_uri: Uri = "http://localhost:2".parse().unwrap(); // Invalid port
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
@@ -408,7 +405,7 @@ mod tests {
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
         let (config, state) =
-            create_test_state(remote_uri, legacy_uri, Some(target_state.clone())).await;
+            create_test_state(legacy_uri, remote_uri, Some(target_state.clone())).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
@@ -427,7 +424,7 @@ mod tests {
     async fn test_target_state_interception_without_cached_state() {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state(remote_uri, legacy_uri, None).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, None).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
@@ -452,7 +449,7 @@ mod tests {
         let remote_uri: Uri = server.url().parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let (config, state) = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, Some(target_state)).await;
 
         let request = create_test_request("/device/v3/wrong-uuid/state", Some("Supervisor/1.0.0"));
 
@@ -474,7 +471,7 @@ mod tests {
         let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
         let legacy_uri: Uri = server.url().parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let (config, state) = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, Some(target_state)).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
@@ -499,7 +496,7 @@ mod tests {
         let remote_uri: Uri = server.url().parse().unwrap();
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
         let target_state = json!({"apps": {"test-app": {"status": "running"}}});
-        let (config, state) = create_test_state(remote_uri, legacy_uri, Some(target_state)).await;
+        let (config, state) = create_test_state(legacy_uri, remote_uri, Some(target_state)).await;
 
         let request =
             create_test_request("/device/v3/test-device-uuid/logs", Some("Supervisor/1.0.0"));
@@ -512,7 +509,7 @@ mod tests {
     #[tokio::test]
     async fn test_supervisor_request_with_no_remote_uri() {
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state_with_none_uris(None, Some(legacy_uri), None).await;
+        let (config, state) = create_test_state_with_none_uris(legacy_uri, None, None).await;
 
         let request = create_test_request("/test", Some("Supervisor/1.0.0"));
 
@@ -522,20 +519,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_non_supervisor_request_with_no_legacy_uri() {
-        let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
-        let (config, state) = create_test_state_with_none_uris(Some(remote_uri), None, None).await;
-
-        let request = create_test_request("/test", Some("CustomClient/1.0"));
-
-        let response = proxy(config, state, request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
     async fn test_target_state_interception_with_no_remote_uri() {
         let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
-        let (config, state) = create_test_state_with_none_uris(None, Some(legacy_uri), None).await;
+        let (config, state) = create_test_state_with_none_uris(legacy_uri, None, None).await;
 
         let request = create_test_request(
             "/device/v3/test-device-uuid/state",
@@ -545,21 +531,5 @@ mod tests {
         let response = proxy(config, state, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("retry-after").unwrap(), "15");
-    }
-
-    #[tokio::test]
-    async fn test_both_remote_and_legacy_uris_none() {
-        let (config, state) = create_test_state_with_none_uris(None, None, None).await;
-
-        let supervisor_request = create_test_request("/test", Some("Supervisor/1.0.0"));
-        let response = proxy(config.clone(), state.clone(), supervisor_request)
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(response.headers().get("retry-after").unwrap(), "600");
-
-        let non_supervisor_request = create_test_request("/test", Some("CustomClient/1.0"));
-        let response = proxy(config, state, non_supervisor_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

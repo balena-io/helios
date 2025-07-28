@@ -131,8 +131,8 @@ async fn start_supervisor(
     let (proxy_config, proxy_state) = if let Some(legacy_config) = &legacy_config {
         let proxy_config = ProxyConfig::new(
             uuid.clone(),
+            legacy_config.api_endpoint.clone(),
             remote_config.as_ref().map(|c| c.api_endpoint.clone()),
-            Some(legacy_config.api_endpoint.clone()),
         );
         let proxy_state = ProxyState::new(None);
 
