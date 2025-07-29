@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use tracing::{field, trace};
 
 use crate::types::Uuid;
-use crate::util::http::Uri;
+use crate::util::http::{Client, Uri};
 
 use super::error::UpstreamError;
 
@@ -22,7 +22,7 @@ pub struct ProxyConfig {
     pub legacy_uri: Uri,
     pub remote_uri: Option<Uri>,
 
-    https_client: reqwest::Client,
+    https_client: Client,
 }
 
 impl ProxyConfig {
@@ -31,7 +31,7 @@ impl ProxyConfig {
             legacy_uuid,
             legacy_uri,
             remote_uri,
-            https_client: reqwest::Client::new(),
+            https_client: Client::default(),
         }
     }
 }
@@ -186,10 +186,11 @@ pub async fn proxy(
     // Send the request
     let res = config
         .https_client
-        .request(parts.method, parts.uri.to_string())
-        .headers(parts.headers)
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
-        .send()
+        .request(parts.method, &parts.uri.into(), |req| {
+            Ok(req
+                .headers(parts.headers)
+                .body(reqwest::Body::wrap_stream(body.into_data_stream())))
+        })
         .await
         .map_err(ProxyError::from_upstream)?;
 
@@ -197,7 +198,7 @@ pub async fn proxy(
     let mut response = Response::builder().status(res.status());
     *response.headers_mut().unwrap() = res.headers().clone();
     response
-        .body(Body::from_stream(res.bytes_stream()))
+        .body(Body::from_stream(res.stream()))
         .map_err(ProxyError::Http)
 }
 

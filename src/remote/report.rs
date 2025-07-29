@@ -69,8 +69,7 @@ impl From<LocalState> for Report {
 fn get_report_client(config: &RemoteConfig) -> Patch {
     let uri = config.api_endpoint.clone();
     let endpoint = Uri::from_parts(uri, "/device/v3/state", None)
-        .expect("remote API endpoint must be a valid URI")
-        .to_string();
+        .expect("remote API endpoint must be a valid URI");
 
     let client_config = RequestConfig {
         timeout: config.request.timeout,

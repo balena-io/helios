@@ -49,6 +49,7 @@ mahler = { version = "0.18.0" }
 bollard = "0.19.1"
 sha2 = { version = "0.10.9", default-features = false }
 fastrand = "2.3.0"
+futures-core = "0.3.31"
 futures-lite = { version = "2.6.0", default-features = false }
 regex = "1.10"
 

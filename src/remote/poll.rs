@@ -18,8 +18,7 @@ use super::request::{Get, RequestConfig as GetConfig};
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
     let endpoint = Uri::from_parts(uri, format!("/device/v3/{uuid}/state").as_str(), None)
-        .expect("remote API endpoint must be a valid URI")
-        .to_string();
+        .expect("remote API endpoint must be a valid URI");
 
     let client_config = GetConfig {
         timeout: remote.request.timeout,

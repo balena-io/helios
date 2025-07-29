@@ -708,6 +708,7 @@ dependencies = [
  "clap",
  "dirs",
  "fastrand",
+ "futures-core",
  "futures-lite",
  "mahler",
  "mockito",

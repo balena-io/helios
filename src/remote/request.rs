@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -7,13 +6,14 @@ use thiserror::Error;
 use tracing::{field, instrument, warn, Span};
 
 use crate::util::crypto::sha256_hex_digest;
+use crate::util::http::{Client, ClientError, Method, Response, StatusCode, Uri};
 
 /// Internal errors that can occur during HTTP GET requests (including retry logic).
 #[derive(Debug, Error)]
 enum TryGetError {
     /// Could not serialize the response into JSON
     #[error("failed to serialize response: {0}")]
-    Serialization(#[from] reqwest::Error),
+    Serialization(#[from] ClientError),
 
     /// HTTP request failed with permanent client error that will not be retried.
     #[error("server replied: {0}")]
@@ -29,7 +29,7 @@ enum TryGetError {
 pub enum GetError {
     /// Could not serialize the response into JSON
     #[error("failed to serialize response: {0}")]
-    Serialization(#[from] reqwest::Error),
+    Serialization(#[from] ClientError),
 
     /// Authentication failed due to an invalid or expired token.
     #[error("unauthorized")]
@@ -175,8 +175,8 @@ impl RequestMetrics {
 
 #[derive(Clone)]
 struct RequestState {
-    client: reqwest::Client,
-    endpoint: String,
+    client: Client,
+    endpoint: Uri,
     config: RequestConfig,
     next_retry: Option<Instant>,
     current_backoff: Duration,
@@ -185,12 +185,12 @@ struct RequestState {
 }
 
 impl RequestState {
-    fn new(endpoint: String, config: RequestConfig) -> Self {
+    fn new(endpoint: Uri, config: RequestConfig) -> Self {
         // Use the min configured interval as initial backoff
         let current_backoff = config.min_interval;
         Self {
             // TODO: we need to add a DNS resolver to support MDNS
-            client: reqwest::Client::new(),
+            client: Client::new(Some(config.timeout)),
             endpoint,
             config,
             next_retry: None,
@@ -226,7 +226,7 @@ impl RequestState {
         self.next_retry = Some(Instant::now() + backoff_duration);
     }
 
-    fn parse_retry_after(response: &reqwest::Response) -> Option<Duration> {
+    fn parse_retry_after(response: &Response) -> Option<Duration> {
         response
             .headers()
             .get("retry-after")
@@ -288,9 +288,9 @@ impl Get {
     ///
     /// let client = Get::new("https://public-api.example.com/status", config);
     /// ```
-    pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
-        let endpoint: String = endpoint.into();
-        let cache_path = get_cache_path(&endpoint);
+    pub fn new(endpoint: impl Into<Uri>, config: RequestConfig) -> Self {
+        let endpoint: Uri = endpoint.into();
+        let cache_path = get_cache_path(&endpoint.to_string());
         Self {
             state: RequestState::new(endpoint, config),
             cached: None,
@@ -364,31 +364,27 @@ impl Get {
         // is received
         self.state.reset_interval();
 
-        let mut request = self
+        let response = self
             .state
             .client
-            .get(&self.state.endpoint)
-            .timeout(self.state.config.timeout)
-            .header("Accept-Encoding", "br, gzip, deflate");
+            .request(Method::GET, &self.state.endpoint, |request| {
+                let mut request = request.header("Accept-Encoding", "br, gzip, deflate");
 
-        if let Some(api_token) = &self.state.config.api_token {
-            request = request.header("Authorization", format!("Bearer {api_token}"));
-        }
+                if let Some(api_token) = &self.state.config.api_token {
+                    request = request.header("Authorization", format!("Bearer {api_token}"));
+                }
 
-        if let Some(etag) = &self.etag {
-            request = request.header("If-None-Match", etag);
-        }
-
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(e) => {
+                if let Some(etag) = &self.etag {
+                    request = request.header("If-None-Match", etag);
+                }
+                Ok(request)
+            })
+            .await
+            .map_err(|e| {
                 self.state.record_failure(None);
-                return Err(TryGetError::WillRetry(
-                    e.to_string(),
-                    self.state.current_backoff,
-                ));
-            }
-        };
+                TryGetError::WillRetry(e.to_string(), self.state.current_backoff)
+            })?;
+
         let status = response.status();
 
         Span::current().record("response", field::display(status));
@@ -546,7 +542,7 @@ impl Patch {
     ///
     /// let client = Patch::new("https://api.example.com/device/state", config);
     /// ```
-    pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
+    pub fn new(endpoint: impl Into<Uri>, config: RequestConfig) -> Self {
         Self {
             state: RequestState::new(endpoint.into(), config),
         }
@@ -619,29 +615,27 @@ impl Patch {
         // is received
         state.reset_interval();
 
-        let mut request = state
+        let response = state
             .client
-            .patch(&state.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Accept-Encoding", "br, gzip, deflate")
-            .timeout(state.config.timeout)
-            .json(&state_to_send);
+            .request(Method::PATCH, &state.endpoint, |request| {
+                let mut request = request
+                    .header("Content-Type", "application/json")
+                    .header("Accept-Encoding", "br, gzip, deflate")
+                    .json(&state_to_send);
 
-        if let Some(api_token) = &state.config.api_token {
-            request = request.header("Authorization", format!("Bearer {api_token}"));
-        }
+                if let Some(api_token) = &state.config.api_token {
+                    request = request.header("Authorization", format!("Bearer {api_token}"));
+                }
 
-        let response = match request.send().await {
-            Ok(value) => value,
-            Err(e) => {
+                Ok(request)
+            })
+            .await
+            .map_err(|e| {
                 // Re-try network errors
                 state.record_failure(None);
-                return Err(TryPatchError::WillRetry(
-                    e.to_string(),
-                    state.current_backoff,
-                ));
-            }
-        };
+                TryPatchError::WillRetry(e.to_string(), state.current_backoff)
+            })?;
+
         let status = response.status();
 
         Span::current().record("response", field::display(status));
@@ -714,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_request_basic() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock = server
             .mock("GET", "/")
@@ -739,7 +733,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_request_etag_caching() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request returns data with ETag
         let mock1 = server
@@ -753,7 +747,7 @@ mod tests {
 
         let mut client_config = test_config();
         client_config.api_token = Some("test-token".to_string());
-        let mut client = Get::new(endpoint.clone(), client_config);
+        let mut client = Get::new(endpoint, client_config);
         let response1 = client.get(None).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
@@ -780,7 +774,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_request_rate_limiting() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock = server
             .mock("GET", "/")
@@ -813,7 +807,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_request_basic() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock = server
             .mock("PATCH", "/")
@@ -840,7 +834,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_request_sequential() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock1 = server
             .mock("PATCH", "/")
@@ -888,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_request_metrics() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock = server
             .mock("PATCH", "/")
@@ -916,7 +910,7 @@ mod tests {
     #[tokio::test]
     async fn test_authentication_error() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         let mock = server
             .mock("GET", "/")
@@ -937,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn test_request_error() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // Request returns invalid JSON - should now return error immediately
         let mock = server
@@ -967,7 +961,7 @@ mod tests {
     #[tokio::test]
     async fn test_do_not_fallback_on_error() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request succeeds and caches data
         let mock1 = server
@@ -985,7 +979,7 @@ mod tests {
             api_token: Some("test-token".to_string()),
         };
 
-        let mut client = Get::new(endpoint.clone(), config);
+        let mut client = Get::new(endpoint, config);
         let response1 = client.get(None).await.unwrap();
 
         assert_eq!(response1.value, Some(json!({"status": "running"})));
@@ -1021,7 +1015,7 @@ mod tests {
     #[tokio::test]
     async fn test_retry_after_header() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request gets rate limited with retry-after
         let mock1 = server
@@ -1069,7 +1063,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_error_handling() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request returns 400 Bad Request
         let mock1 = server
@@ -1108,7 +1102,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_authentication_error() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request returns 401 Unauthorized
         let mock1 = server
@@ -1149,7 +1143,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_rate_limited_retries_with_backoff() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request returns 429 Rate Limited
         let mock1 = server
@@ -1198,7 +1192,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_network_error_retries_with_backoff() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request will fail with server error
         let mock1 = server
@@ -1238,7 +1232,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_4xx_vs_5xx_error_handling() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // Test 409 Conflict (4xx) - should be permanent, no retry
         let mock_409 = server
@@ -1291,7 +1285,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_request_backoff_reset_on_drop() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request fails with 500 to trigger backoff
         let mock1 = server
@@ -1353,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_request_backoff_reset_on_drop() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // First request fails with 500 to trigger backoff
         let mock1 = server
@@ -1451,7 +1445,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cancellation() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // Set up a normal response
         let _mock = server
@@ -1485,7 +1479,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_cancellation() {
         let mut server = Server::new_async().await;
-        let endpoint = server.url();
+        let endpoint: Uri = server.url().try_into().unwrap();
 
         // Set up a normal response
         let _mock = server
