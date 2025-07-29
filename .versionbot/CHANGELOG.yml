@@ -1,4 +1,19 @@
 - commits:
+    - subject: Add some worker tests
+      hash: eb18f9aa8776d7842420d15b55ce0aeda58350f8
+      body: |
+        Adds some basic tests to validate how the worker is calculating the
+        sequence of operations. This also updates mahler to use the latest
+        changes in balena-io-modules/mahler-rs#44
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.6.2
+  title: ""
+  date: 2025-07-29T21:43:57.483Z
+- commits:
     - subject: Make get/patch interrupt an Option
       hash: a4731712c7eec7a08b60e0a4a17629534a3fae6a
       body: |
