@@ -11,8 +11,9 @@ use tokio::sync::watch::{Receiver, Sender};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::state::models::{TargetDevice, Uuid};
+use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
+use crate::types::Uuid;
 use crate::util::uri::make_uri;
 
 use super::config::RemoteConfig;
@@ -28,7 +29,7 @@ async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Val
         timeout: config.request_timeout,
         min_interval: config.min_interval,
         max_backoff: config.poll_interval,
-        api_token: config.api_key.clone(),
+        api_token: config.api_key.as_ref().map(|k| k.to_string()),
     };
 
     let mut client = Get::new(endpoint, client_config);

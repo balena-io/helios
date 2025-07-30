@@ -14,13 +14,15 @@ mod cli;
 mod legacy;
 mod remote;
 mod state;
+mod types;
 mod util;
 
 use api::Listener;
 use cli::{Command, LocalAddress};
 use legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use remote::{register, RemoteConfig};
-use state::models::{Device, Uuid};
+use state::models::Device;
+use types::Uuid;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs

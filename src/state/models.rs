@@ -1,42 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::ops::Deref;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Uuid(String);
-
-impl Deref for Uuid {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Default for Uuid {
-    fn default() -> Self {
-        Self(uuid::Uuid::new_v4().simple().to_string())
-    }
-}
-
-impl Display for Uuid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<String> for Uuid {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Uuid> for String {
-    fn from(value: Uuid) -> Self {
-        value.0
-    }
-}
+use crate::types::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Image {

@@ -18,7 +18,7 @@ use tracing::{error, info, instrument, trace};
 use crate::legacy::{
     trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
-use crate::state::models::Uuid;
+use crate::types::Uuid;
 
 use super::models::{Device, TargetDevice};
 use super::worker::{create, CreateError as WorkerCreateError};

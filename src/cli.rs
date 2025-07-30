@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::state::models::Uuid;
+use crate::types::{ApiKey, Uuid};
 
 /// Local API listen address
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -106,7 +106,7 @@ pub struct StartArgs {
         env = "HELIOS_REMOTE_API_KEY",
         requires = "remote_api_endpoint"
     )]
-    pub remote_api_key: Option<String>,
+    pub remote_api_key: Option<ApiKey>,
 
     /// Remote request timeout in milliseconds
     #[arg(
@@ -167,7 +167,7 @@ pub struct StartArgs {
         env = "HELIOS_LEGACY_API_KEY",
         requires = "legacy_address"
     )]
-    pub legacy_api_key: Option<String>,
+    pub legacy_api_key: Option<ApiKey>,
 }
 
 #[derive(Clone, Debug, Args)]

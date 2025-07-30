@@ -6,6 +6,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, field, instrument, trace, warn};
 
+use crate::types::ApiKey;
 use crate::util::uri::make_uri;
 
 use super::error::UpstreamError;
@@ -36,7 +37,7 @@ struct StateStatusResponse {
 
 pub async fn wait_for_state_settle(
     legacy_uri: Uri,
-    legacy_api_key: Option<String>,
+    legacy_api_key: Option<ApiKey>,
     interrupt: Interrupt,
 ) -> Result<(), StateUpdateError> {
     let client = reqwest::Client::new();
@@ -83,7 +84,7 @@ pub async fn wait_for_state_settle(
 #[instrument(skip_all, err)]
 pub async fn trigger_update(
     legacy_uri: Uri,
-    legacy_api_key: Option<String>,
+    legacy_api_key: Option<ApiKey>,
     force: bool,
     cancel: bool,
     interrupt: Interrupt,

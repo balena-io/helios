@@ -20,8 +20,9 @@ use tracing::{
 
 use crate::legacy::{proxy, ProxyConfig, ProxyState};
 use crate::remote::PollRequest;
-use crate::state::models::{App, Device, TargetApp, TargetDevice, Uuid};
+use crate::state::models::{App, Device, TargetApp, TargetDevice};
 use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
+use crate::types::Uuid;
 
 pub enum Listener {
     Tcp(TcpListener),
