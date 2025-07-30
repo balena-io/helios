@@ -1,4 +1,51 @@
 - commits:
+    - subject: Make clear that proxy’s configured UUID is legacy’s UUID
+      hash: ab9db675c47aabf70d4dd362ba215ea0db5d26ac
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Make proxy config legacy URI non-optional
+      hash: cc09c3c1574fe9790aae2bcf11b148a1bbde9528
+      body: >
+        Proxy won’t be configured and run at all unless legacy_uri is non-nil,
+        so paths that handled the nil case were dead code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Implement device provisioning
+      hash: 577c6ec2588d5c0e91e11e0cfe18d0b15c4f20ae
+      body: |
+        This partly reverts #39 and #35 in terms of how the CLI looks like.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Akis Kesoglou
+      nested: []
+    - subject: Make API keys a new type
+      hash: 298ca5d1bca53b034789f914208a3f06cac85b3f
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Make utility digest function
+      hash: 8ede87702d783750cd3eff21507fe0de0b602c95
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.7.0
+  title: ""
+  date: 2025-07-30T18:16:34.667Z
+- commits:
     - subject: Add some worker tests
       hash: eb18f9aa8776d7842420d15b55ce0aeda58350f8
       body: |
