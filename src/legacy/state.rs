@@ -1,4 +1,3 @@
-use axum::http::Uri;
 use mahler::workflow::Interrupt;
 use serde::Deserialize;
 use serde_json::json;
@@ -7,7 +6,7 @@ use thiserror::Error;
 use tracing::{debug, field, instrument, trace, warn};
 
 use crate::types::ApiKey;
-use crate::util::uri::make_uri;
+use crate::util::http::Uri;
 
 use super::error::UpstreamError;
 
@@ -42,7 +41,7 @@ pub async fn wait_for_state_settle(
 ) -> Result<(), StateUpdateError> {
     let client = reqwest::Client::new();
     // Build the status check URI
-    let status_url = make_uri(
+    let status_url = Uri::from_parts(
         legacy_api_endpoint,
         "/v2/state/status",
         Some(&format!("apikey={legacy_api_key}")),
@@ -88,7 +87,7 @@ pub async fn trigger_update(
     let client = reqwest::Client::new();
 
     // Build the URI from the address parts
-    let update_url = make_uri(
+    let update_url = Uri::from_parts(
         legacy_api_endpoint.clone(),
         "/v1/update",
         Some(format!("apikey={legacy_api_key}").as_str()),

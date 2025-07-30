@@ -1,11 +1,11 @@
 use thiserror::Error;
 
-use crate::util::uri::UriError;
+use crate::util::http::InvalidUriError;
 
 #[derive(Debug, Error)]
 pub enum UpstreamError {
     #[error("Invalid target URI: {0}")]
-    Uri(#[from] UriError),
+    Uri(#[from] InvalidUriError),
 
     #[error("Target connection failed: {0}")]
     Connection(#[from] reqwest::Error),

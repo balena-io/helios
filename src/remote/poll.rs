@@ -10,14 +10,14 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::types::Uuid;
-use crate::util::uri::make_uri;
+use crate::util::http::Uri;
 
 use super::config::{RemoteConfig, RequestConfig};
 use super::request::{Get, RequestConfig as GetConfig};
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
-    let endpoint = make_uri(uri, format!("/device/v3/{uuid}/state").as_str(), None)
+    let endpoint = Uri::from_parts(uri, format!("/device/v3/{uuid}/state").as_str(), None)
         .expect("remote API endpoint must be a valid URI")
         .to_string();
 

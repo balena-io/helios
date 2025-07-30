@@ -1,10 +1,10 @@
-use axum::http::Uri;
 use clap::Parser;
 use std::num::ParseIntError;
 use std::time::Duration;
 
 use crate::api::LocalAddress;
 use crate::types::{ApiKey, Uuid};
+use crate::util::http::Uri;
 
 fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     let millis: u64 = s.parse()?;

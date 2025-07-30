@@ -1,12 +1,10 @@
-use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::config::StoredConfig;
 use crate::types::{ApiKey, Uuid};
-use crate::util::json::{
-    deserialize_duration_from_ms, deserialize_uri, serialize_duration_to_ms, serialize_uri,
-};
+use crate::util::http::Uri;
+use crate::util::json::{deserialize_duration_from_ms, serialize_duration_to_ms};
 
 // IMPORTANT: be VERY careful making changes to these structs,
 // namely ProvisioningConfig, RemoteConfig and RequestConfig.
@@ -19,7 +17,6 @@ use crate::util::json::{
 /// Remote API configuration
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RemoteConfig {
-    #[serde(deserialize_with = "deserialize_uri", serialize_with = "serialize_uri")]
     pub api_endpoint: Uri,
     pub api_key: ApiKey,
     pub request: RequestConfig,
