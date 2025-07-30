@@ -2,33 +2,30 @@ use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use std::{
-    collections::HashMap,
-    future::{self, Future},
-    pin::Pin,
-};
+use std::{collections::HashMap, future::Future, pin::Pin};
 use tokio::sync::watch::{Receiver, Sender};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::state::models::{TargetDevice, Uuid};
+use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
+use crate::types::Uuid;
 use crate::util::uri::make_uri;
 
-use super::config::RemoteConfig;
-use super::request::{Get, RequestConfig};
+use super::config::{RemoteConfig, RequestConfig};
+use super::request::{Get, RequestConfig as GetConfig};
 
-async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Value>) {
-    let uri = config.api_endpoint.clone();
+async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
+    let uri = remote.api_endpoint.clone();
     let endpoint = make_uri(uri, format!("/device/v3/{uuid}/state").as_str(), None)
         .expect("remote API endpoint must be a valid URI")
         .to_string();
 
-    let client_config = RequestConfig {
-        timeout: config.request_timeout,
-        min_interval: config.min_interval,
-        max_backoff: config.poll_interval,
-        api_token: config.api_key.clone(),
+    let client_config = GetConfig {
+        timeout: remote.request.timeout,
+        min_interval: remote.request.poll_min_interval,
+        max_backoff: remote.request.poll_interval,
+        api_token: Some(remote.api_key.to_string()),
     };
 
     let mut client = Get::new(endpoint, client_config);
@@ -37,8 +34,8 @@ async fn get_poll_client(uuid: &Uuid, config: &RemoteConfig) -> (Get, Option<Val
     (client, cached)
 }
 
-fn next_poll(config: &RemoteConfig) -> Duration {
-    let max_jitter = &config.max_poll_jitter;
+fn next_poll(config: &RequestConfig) -> Duration {
+    let max_jitter = &config.poll_max_jitter;
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
     let jitter = Duration::from_millis(jitter_ms);
     config.poll_interval + jitter
@@ -50,7 +47,7 @@ type PollResult = (Option<Value>, UpdateOpts, Instant);
 /// Poll the remote target returning the metadata back
 /// to the caller after the request succeeds
 async fn poll_remote(
-    config: &RemoteConfig,
+    config: &RequestConfig,
     poll_client: &mut Get,
     req: PollRequest,
     interrupt: Interrupt,
@@ -104,23 +101,17 @@ enum PollAction {
 
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
-    uuid: &Uuid,
-    config: &Option<RemoteConfig>,
+    uuid: Uuid,
+    remote: RemoteConfig,
     mut poll_rx: Receiver<PollRequest>,
     seek_tx: Sender<SeekRequest>,
 ) {
-    let (mut poll_client, initial_target, config) = if let Some(remote) = config {
-        let (client, cached) = get_poll_client(uuid, remote).await;
-        (client, cached, remote)
-    } else {
-        warn!("running in unmanaged mode");
-        // just disable this branch
-        return future::pending::<()>().await;
-    };
     info!("starting");
 
+    let (mut poll_client, initial_target) = get_poll_client(&uuid, &remote).await;
+
     // Poll trigger variables
-    let mut next_poll_time = Instant::now() + next_poll(config);
+    let mut next_poll_time = Instant::now() + next_poll(&remote.request);
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>>;
     let mut interrupt = Interrupt::new();
 
@@ -130,12 +121,12 @@ pub async fn start_poll(
             (
                 Some(target_state),
                 UpdateOpts::default(),
-                Instant::now() + config.min_interval,
+                Instant::now() + remote.request.poll_min_interval,
             )
         });
     } else {
         poll_future = Box::pin(poll_remote(
-            config,
+            &remote.request,
             &mut poll_client,
             PollRequest {
                 opts: UpdateOpts::default(),
@@ -193,14 +184,14 @@ pub async fn start_poll(
                 // Trigger a new poll cancelling any pending apply if a new poll is received
                 interrupt = Interrupt::new();
                 poll_future = Box::pin(poll_remote(
-                    config,
+                    &remote.request,
                     &mut poll_client,
                     update_req,
                     interrupt.clone(),
                 ));
 
                 // Reset the poll interval to avoid busy waiting
-                next_poll_time = Instant::now() + next_poll(config);
+                next_poll_time = Instant::now() + next_poll(&remote.request);
             }
 
             PollAction::Complete {
@@ -225,14 +216,14 @@ pub async fn start_poll(
                     // put the poll back on the channel
                     match serde_json::from_value::<TargetState>(target_state.clone()) {
                         Ok(TargetState(mut map)) => {
-                            if let Some(target) = map.remove(uuid) {
+                            if let Some(target) = map.remove(&uuid) {
                                 let _ = seek_tx.send(SeekRequest {
                                     target,
                                     raw_target: Some(target_state),
                                     opts,
                                 });
                             } else {
-                                error!("no target for uuid {} found on target state", uuid);
+                                error!("no target for uuid {uuid} found on target state");
                             }
                         }
                         Err(e) => {

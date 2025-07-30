@@ -18,7 +18,7 @@ use tracing::{error, info, instrument, trace};
 use crate::legacy::{
     trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
-use crate::state::models::Uuid;
+use crate::types::Uuid;
 
 use super::models::{Device, TargetDevice};
 use super::worker::{create, CreateError as WorkerCreateError};
@@ -174,10 +174,10 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
-    uuid: &Uuid,
+    uuid: Uuid,
     initial_state: Device,
-    proxy_state: ProxyState,
-    legacy_config: &Option<LegacyConfig>,
+    proxy_state: Option<ProxyState>,
+    legacy_config: Option<LegacyConfig>,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
 ) -> Result<(), SeekError> {
@@ -294,6 +294,7 @@ pub async fn start_seek(
                     let proxy_state = &proxy_state;
                     let worker = &mut worker;
                     let prev_seek_state = prev_seek_state.clone();
+                    let legacy_config = legacy_config.clone();
 
                     // If this is the case we already know the target won't be processed by the
                     // apply block so, we just put it back on the pending queue.
@@ -308,7 +309,9 @@ pub async fn start_seek(
                         if !matches!(prev_seek_state, SeekState::Legacy) {
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
-                            proxy_state.clear().await;
+                            if let Some(proxy_state) = &proxy_state {
+                                proxy_state.clear().await;
+                            }
 
                             // Apply the target
                             status = tokio::select! {
@@ -324,9 +327,11 @@ pub async fn start_seek(
                         {
                             // Set as the target state the raw target accepted by
                             // the fallback
-                            proxy_state.set(target_state).await;
+                            if let Some(proxy_state) = &proxy_state {
+                                proxy_state.set(target_state).await;
+                            }
                             return match trigger_update(
-                                config.address,
+                                config.api_endpoint,
                                 config.api_key,
                                 update_req.opts.force,
                                 update_req.opts.cancel,
@@ -346,7 +351,7 @@ pub async fn start_seek(
                         {
                             // if we get here it means there is no raw target, so we need to keep waiting
                             return match wait_for_state_settle(
-                                config.address,
+                                config.api_endpoint,
                                 config.api_key,
                                 interrupt,
                             )

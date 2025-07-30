@@ -6,6 +6,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, field, instrument, trace, warn};
 
+use crate::types::ApiKey;
 use crate::util::uri::make_uri;
 
 use super::error::UpstreamError;
@@ -35,21 +36,17 @@ struct StateStatusResponse {
 }
 
 pub async fn wait_for_state_settle(
-    legacy_uri: Uri,
-    legacy_api_key: Option<String>,
+    legacy_api_endpoint: Uri,
+    legacy_api_key: ApiKey,
     interrupt: Interrupt,
 ) -> Result<(), StateUpdateError> {
     let client = reqwest::Client::new();
     // Build the status check URI
-    let status_url = if let Some(apikey) = &legacy_api_key {
-        make_uri(
-            legacy_uri,
-            "/v2/state/status",
-            Some(&format!("apikey={apikey}")),
-        )
-    } else {
-        make_uri(legacy_uri, "/v2/state/status", None)
-    };
+    let status_url = make_uri(
+        legacy_api_endpoint,
+        "/v2/state/status",
+        Some(&format!("apikey={legacy_api_key}")),
+    );
     let status_url = status_url
         .map_err(StateUpdateError::from_upstream)?
         .to_string();
@@ -82,8 +79,8 @@ pub async fn wait_for_state_settle(
 /// Trigger an update on the legacy supervisor
 #[instrument(skip_all, err)]
 pub async fn trigger_update(
-    legacy_uri: Uri,
-    legacy_api_key: Option<String>,
+    legacy_api_endpoint: Uri,
+    legacy_api_key: ApiKey,
     force: bool,
     cancel: bool,
     interrupt: Interrupt,
@@ -91,15 +88,11 @@ pub async fn trigger_update(
     let client = reqwest::Client::new();
 
     // Build the URI from the address parts
-    let update_url = if let Some(apikey) = &legacy_api_key {
-        make_uri(
-            legacy_uri.clone(),
-            "/v1/update",
-            Some(format!("apikey={apikey}").as_str()),
-        )
-    } else {
-        make_uri(legacy_uri.clone(), "/v1/update", None)
-    };
+    let update_url = make_uri(
+        legacy_api_endpoint.clone(),
+        "/v1/update",
+        Some(format!("apikey={legacy_api_key}").as_str()),
+    );
     let update_url = update_url
         .map_err(StateUpdateError::from_upstream)?
         .to_string();
@@ -126,7 +119,12 @@ pub async fn trigger_update(
     debug!(response = field::display(response.status()), "success");
 
     // Wait for the state to settle
-    wait_for_state_settle(legacy_uri.clone(), legacy_api_key.clone(), interrupt).await?;
+    wait_for_state_settle(
+        legacy_api_endpoint.clone(),
+        legacy_api_key.clone(),
+        interrupt,
+    )
+    .await?;
 
     Ok(())
 }

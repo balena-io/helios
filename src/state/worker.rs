@@ -8,7 +8,9 @@ use mahler::{
     worker::{Ready, Worker},
 };
 
-use super::models::{App, Device, DeviceConfig, TargetApp, TargetDevice, Uuid};
+use crate::types::Uuid;
+
+use super::models::{App, Device, DeviceConfig, TargetApp, TargetDevice};
 
 /// Store configuration in memory
 fn store_config(
