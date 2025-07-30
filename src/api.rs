@@ -5,6 +5,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display};
+use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
+use std::path;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch::Sender;
 use tokio::{
@@ -29,6 +34,47 @@ pub enum Listener {
     Unix(UnixListener),
 }
 
+/// Local API listen address
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum LocalAddress {
+    Tcp(SocketAddr),
+    Unix(path::PathBuf),
+}
+
+/// Helios API configuration
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ApiConfig {
+    pub local_address: LocalAddress,
+}
+
+impl Display for LocalAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocalAddress::Tcp(socket_addr) => socket_addr.fmt(f),
+            LocalAddress::Unix(path) => path.as_path().display().fmt(f),
+        }
+    }
+}
+
+impl FromStr for LocalAddress {
+    type Err = AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<SocketAddr>()
+            .map(LocalAddress::Tcp)
+            .or_else(|_| Ok(LocalAddress::Unix(path::Path::new(s).to_path_buf())))
+    }
+}
+
+impl Default for LocalAddress {
+    fn default() -> Self {
+        LocalAddress::Tcp(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            48484,
+        ))
+    }
+}
+
 type LocalStateRx = Receiver<LocalState>;
 
 /// Start the API
@@ -41,8 +87,8 @@ pub async fn start(
     seek_request_tx: Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
     state_rx: LocalStateRx,
-    proxy_config: ProxyConfig,
-    proxy_state: ProxyState,
+    proxy_config: Option<ProxyConfig>,
+    proxy_state: Option<ProxyState>,
 ) {
     let api_span = Span::current();
     let target_device_tx = seek_request_tx.clone();
@@ -66,25 +112,34 @@ pub async fn start(
         .route(
             "/v1/update",
             post(move |body| trigger_poll(poll_request_tx, body)),
-        )
-        // Default to proxying requests if there is no handler
-        .fallback(move |request| proxy(proxy_config, proxy_state, request))
-        // Enable tracing
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(move |request: &Request<Body>| {
-                    debug_span!(parent: &api_span, "request",
-                        method = %request.method(),
-                        uri = %request.uri().path(),
-                        version = ?request.version(),
-                        status = Empty,
-                    )
-                })
-                .on_response(|response: &Response<Body>, _: Duration, span: &Span| {
-                    span.record("status", display(response.status()));
-                }),
-        )
-        .with_state(state_rx);
+        );
+
+    // Default to proxying requests if there is no handler
+    let app = match (proxy_config, proxy_state) {
+        (Some(proxy_config), Some(proxy_state)) => {
+            app.fallback(move |request| proxy(proxy_config, proxy_state, request))
+        }
+        _ => app,
+    };
+
+    // Enable tracing
+    let app = app.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(move |request: &Request<Body>| {
+                debug_span!(parent: &api_span, "request",
+                    method = %request.method(),
+                    uri = %request.uri().path(),
+                    version = ?request.version(),
+                    status = Empty,
+                )
+            })
+            .on_response(|response: &Response<Body>, _: Duration, span: &Span| {
+                span.record("status", display(response.status()));
+            }),
+    );
+
+    // Assign state
+    let app = app.with_state(state_rx);
 
     info!("ready");
 
@@ -232,7 +287,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let proxy_config = ProxyConfig::new("test-device".to_string(), None, None);
+        let proxy_config = ProxyConfig::new("test-device".to_string().into(), None, None);
         let proxy_state = ProxyState::new(None);
 
         tokio::spawn(start(
@@ -240,8 +295,8 @@ mod tests {
             seek_request_tx,
             poll_request_tx,
             state_rx,
-            proxy_config,
-            proxy_state,
+            Some(proxy_config),
+            Some(proxy_state),
         ));
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

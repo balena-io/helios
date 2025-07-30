@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{field, trace};
 
+use crate::types::Uuid;
 use crate::util::uri::make_uri;
 
 use super::error::UpstreamError;
@@ -17,7 +18,7 @@ type LegacyTarget = serde_json::Value;
 
 #[derive(Clone)]
 pub struct ProxyConfig {
-    pub uuid: String,
+    pub uuid: Uuid,
     pub remote_uri: Option<Uri>,
     pub legacy_uri: Option<Uri>,
 
@@ -25,7 +26,7 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn new(uuid: String, remote_uri: Option<Uri>, legacy_uri: Option<Uri>) -> Self {
+    pub fn new(uuid: Uuid, remote_uri: Option<Uri>, legacy_uri: Option<Uri>) -> Self {
         Self {
             uuid,
             remote_uri,
@@ -226,7 +227,11 @@ mod tests {
         legacy_uri: Option<Uri>,
         target: Option<LegacyTarget>,
     ) -> (ProxyConfig, ProxyState) {
-        let config = ProxyConfig::new("test-device-uuid".to_string(), remote_uri, legacy_uri);
+        let config = ProxyConfig::new(
+            "test-device-uuid".to_string().into(),
+            remote_uri,
+            legacy_uri,
+        );
         let state = ProxyState::new(target);
         (config, state)
     }
