@@ -1,4 +1,16 @@
 - commits:
+    - subject: Make Uri a new serializable type
+      hash: fd04113a2c4ce36f1682e3db7541229bb52f052f
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.7.1
+  title: ""
+  date: 2025-07-31T18:35:07.203Z
+- commits:
     - subject: Make clear that proxy’s configured UUID is legacy’s UUID
       hash: ab9db675c47aabf70d4dd362ba215ea0db5d26ac
       body: ""
