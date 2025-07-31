@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use axum::http::Uri;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -10,12 +9,12 @@ use crate::config;
 use crate::remote::{ProvisioningConfig, RemoteConfig};
 use crate::types::{ApiKey, Uuid};
 use crate::util::crypto::sha256_hex_digest;
-use crate::util::uri::{make_uri, UriError};
+use crate::util::http::{InvalidUriError, Uri};
 
 #[derive(Debug, Error)]
 pub enum ProvisioningError {
     #[error("Invalid remote endpoint URI: {0}")]
-    InvalidRemote(#[from] UriError),
+    InvalidRemote(#[from] InvalidUriError),
 
     #[error("Request encoding failed: {0}")]
     RequestEncoding(#[from] serde_json::Error),
@@ -141,7 +140,7 @@ async fn register(
     request: &RegisterRequest,
 ) -> Result<(), ProvisioningError> {
     let client = Client::new();
-    let endpoint = make_uri(api_endpoint.clone(), "/device/register", None)?;
+    let endpoint = Uri::from_parts(api_endpoint.clone(), "/device/register", None)?;
 
     debug!("calling remote");
     let response = client

@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::Request,
-    http::{HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use tracing::{field, trace};
 
 use crate::types::Uuid;
-use crate::util::uri::make_uri;
+use crate::util::http::Uri;
 
 use super::error::UpstreamError;
 
@@ -171,7 +171,7 @@ pub async fn proxy(
     );
 
     // Build target URI
-    let target_uri = make_uri(
+    let target_uri = Uri::from_parts(
         target_endpoint.clone(),
         request.uri().path(),
         request.uri().query(),
@@ -180,7 +180,7 @@ pub async fn proxy(
 
     // Use the request as-is, replacing the target uri and removing the host header
     let (mut parts, body) = request.into_parts();
-    parts.uri = target_uri;
+    parts.uri = target_uri.into();
     parts.headers.remove("host");
 
     // Send the request
@@ -203,7 +203,7 @@ pub async fn proxy(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{Method, Uri};
+    use axum::http;
     use mockito::Server;
     use serde_json::json;
 
@@ -234,7 +234,7 @@ mod tests {
     }
 
     fn create_test_request(path: &str, user_agent: Option<&str>) -> Request {
-        let mut builder = Request::builder().method(Method::GET).uri(path);
+        let mut builder = Request::builder().method(http::Method::GET).uri(path);
 
         if let Some(ua) = user_agent {
             builder = builder.header("user-agent", ua);
@@ -388,13 +388,12 @@ mod tests {
 
     #[test]
     fn test_proxy_error_into_response_invalid_uri() {
-        let mut parts = Uri::builder().build().unwrap().into_parts();
+        let mut parts = http::Uri::builder().build().unwrap().into_parts();
         parts.scheme = Some("invalid-scheme".parse().unwrap());
         parts.authority = Some("invalid-authority".parse().unwrap());
+        let err = http::Uri::from_parts(parts).unwrap_err();
 
-        let uri_error = ProxyError::Upstream(UpstreamError::Uri(
-            Uri::from_parts(parts).unwrap_err().into(),
-        ));
+        let uri_error = ProxyError::Upstream(UpstreamError::Uri(err.into()));
         let response = uri_error.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }

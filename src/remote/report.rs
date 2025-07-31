@@ -6,7 +6,7 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
-use crate::util::uri::make_uri;
+use crate::util::http::Uri;
 
 use super::config::RemoteConfig;
 use super::request::{Patch, PatchError, RequestConfig};
@@ -50,7 +50,7 @@ impl From<LocalState> for Report {
 
 fn get_report_client(config: &RemoteConfig) -> Patch {
     let uri = config.api_endpoint.clone();
-    let endpoint = make_uri(uri, "/device/v3/state", None)
+    let endpoint = Uri::from_parts(uri, "/device/v3/state", None)
         .expect("remote API endpoint must be a valid URI")
         .to_string();
 
