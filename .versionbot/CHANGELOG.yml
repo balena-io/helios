@@ -1,4 +1,16 @@
 - commits:
+    - subject: Set-up docker volume for configuration data
+      hash: 0a0e5edb9fabffe63899dd682b51e47dc77f0608
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.7.2
+  title: ""
+  date: 2025-08-01T15:28:55.825Z
+- commits:
     - subject: Make Uri a new serializable type
       hash: fd04113a2c4ce36f1682e3db7541229bb52f052f
       body: ""
