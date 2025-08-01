@@ -61,13 +61,12 @@ type LocalWorker = Worker<Device, Ready, TargetDevice>;
 /// Create and initialize the worker
 pub fn create(initial: Device) -> Result<LocalWorker, CreateError> {
     // Initialize the connection
-    let docker = Docker::connect_with_defaults().map_err(CreateError::DockerConnection)?;
+    let docker = Docker::connect_with_defaults()?;
 
     // Create the worker and set-up resources
-    worker()
-        .resource(docker)
-        .initial_state(initial)
-        .map_err(CreateError::StateSerialization)
+    let worker = worker().resource(docker).initial_state(initial)?;
+
+    Ok(worker)
 }
 
 #[cfg(test)]

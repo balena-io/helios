@@ -4,3 +4,4 @@ mod image;
 
 pub use app::*;
 pub use device::*;
+pub use image::*;

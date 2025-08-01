@@ -276,7 +276,7 @@ mod tests {
             raw_target: None,
         });
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
-        let device = Device::initial_for(Uuid::default());
+        let device = Device::new(Uuid::default());
         let local_state = LocalState {
             device,
             status: UpdateStatus::default(),

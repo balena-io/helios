@@ -26,7 +26,6 @@ use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use crate::remote::{
     provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
 };
-use crate::state::models::Device;
 use crate::types::Uuid;
 
 fn initialize_tracing() {
@@ -103,7 +102,7 @@ async fn start_supervisor(
     );
 
     // Load the initial state
-    let initial_state = Device::initial_for(uuid.clone());
+    let initial_state = state::read(uuid.clone()).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());

@@ -29,9 +29,7 @@ pub struct Device {
 }
 
 impl Device {
-    /// Read the host and apps state from the underlying system
-    pub fn initial_for(uuid: Uuid) -> Self {
-        // TODO: read initial state from the engine
+    pub fn new(uuid: Uuid) -> Self {
         Self {
             uuid,
             images: HashMap::new(),

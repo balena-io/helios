@@ -101,6 +101,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(app, json!({"name": "my-app"}))
+        assert_eq!(app, json!({"id": 0, "name": "my-app"}))
     }
 }

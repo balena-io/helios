@@ -6,16 +6,26 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
+use crate::types::Uuid;
 use crate::util::http::Uri;
 
 use super::config::RemoteConfig;
 use super::request::{Patch, PatchError, RequestConfig};
 
-#[derive(Serialize, Debug, Clone)]
-struct DeviceReport {}
+#[derive(Serialize, Debug)]
+struct AppReport {
+    release_uuid: Option<Uuid>,
+}
+
+#[derive(Serialize, Debug)]
+struct DeviceReport {
+    // the apps object should not be present if the
+    // previous report apps match the current report
+    apps: Option<HashMap<Uuid, AppReport>>,
+}
 
 // The state for report
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug)]
 struct Report(HashMap<String, DeviceReport>);
 
 impl Report {
@@ -33,9 +43,17 @@ impl From<Report> for Value {
 }
 
 impl From<LocalState> for DeviceReport {
-    fn from(_: LocalState) -> Self {
-        // TODO
-        DeviceReport {}
+    fn from(local_state: LocalState) -> Self {
+        let LocalState { device, .. } = local_state;
+        DeviceReport {
+            apps: Some(
+                device
+                    .apps
+                    .into_keys()
+                    .map(|uuid| (uuid, AppReport { release_uuid: None }))
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -153,6 +171,11 @@ mod tests {
         });
 
         let value: Value = report.into();
-        assert_eq!(value, json!({"test-uuid": {}}))
+        assert_eq!(
+            value,
+            json!({"test-uuid": {
+                "apps": {}
+            }})
+        )
     }
 }

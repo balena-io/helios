@@ -21,6 +21,7 @@ use crate::legacy::{
 use crate::types::Uuid;
 
 use super::models::{Device, TargetDevice};
+use super::read::{read as read_state, ReadStateError};
 use super::worker::{create, CreateError as WorkerCreateError};
 
 /// Represents the service update status according to
@@ -101,13 +102,16 @@ pub struct SeekRequest {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SeekError {
-    #[error("Failed to create worker: {0}")]
+    #[error("failed to read state: {0}")]
+    ReadState(#[from] ReadStateError),
+
+    #[error("failed to create worker: {0}")]
     CreateWorker(#[from] WorkerCreateError),
 
-    #[error("Failed to reach target state: {0}")]
+    #[error("failed to reach target state: {0}")]
     SeekTargetState(#[from] WorkerSeekError),
 
-    #[error("Failed to update state on legacy Supervisor: {0}")]
+    #[error("failed to update state on legacy Supervisor: {0}")]
     LegacyUpdate(#[from] StateUpdateError),
 }
 
@@ -382,7 +386,7 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state = Device::initial_for(uuid.clone());
+                    let initial_state = read_state(uuid.clone()).await?;
 
                     worker = create(initial_state)?;
                     worker_stream = worker.follow();
