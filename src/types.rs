@@ -33,8 +33,8 @@ impl From<String> for Uuid {
     }
 }
 
-impl From<&'static str> for Uuid {
-    fn from(value: &'static str) -> Self {
+impl From<&str> for Uuid {
+    fn from(value: &str) -> Self {
         Self(value.to_owned())
     }
 }
