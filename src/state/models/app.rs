@@ -7,74 +7,43 @@ use std::{
 
 use crate::types::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Image {
-    pub docker_id: Option<String>,
-}
-
+/// The internal state of the app
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct App {
+    pub id: u32,
     pub name: String,
 }
 
-pub type DeviceConfig = HashMap<String, String>;
-
-/// Current state of a device
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Device {
-    /// The device UUID
-    pub uuid: Uuid,
-
-    /// List of docker images on the device
-    #[serde(default)]
-    pub images: HashMap<String, Image>,
-
-    /// Apps on the device
-    #[serde(default)]
-    pub apps: HashMap<Uuid, App>,
-
-    /// Config vars
-    #[serde(default)]
-    pub config: DeviceConfig,
-}
-
-impl Device {
-    /// Read the host and apps state from the underlying system
-    pub fn initial_for(uuid: Uuid) -> Self {
-        // TODO: read initial state from the engine
-        Self {
-            uuid,
-            images: HashMap::new(),
-            apps: HashMap::new(),
-            config: HashMap::new(),
-        }
-    }
-}
-
-// Alias the App for now, the target app will have
-// its own structure eventually
+// Target app definition, the
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetApp {
+    /// app id on the remote backend. This only exists for legacy reasons
+    /// and should be removed at some point.
+    ///
+    /// We use 0 as the default to not make the id required
+    #[serde(default)]
+    pub id: u32,
+
     pub name: String,
 }
 
 #[derive(Debug, Serialize, Default, Clone)]
-pub struct TargetApps(HashMap<Uuid, TargetApp>);
+pub struct TargetAppMap(HashMap<Uuid, TargetApp>);
 
-impl Deref for TargetApps {
+impl Deref for TargetAppMap {
     type Target = HashMap<Uuid, TargetApp>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for TargetApps {
+impl DerefMut for TargetAppMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'de> Deserialize<'de> for TargetApps {
+impl<'de> Deserialize<'de> for TargetAppMap {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -96,41 +65,20 @@ impl<'de> Deserialize<'de> for TargetApps {
             }
         }
 
-        Ok(TargetApps(target_apps))
+        Ok(TargetAppMap(target_apps))
     }
 }
 
-impl FromIterator<(Uuid, TargetApp)> for TargetApps {
+impl FromIterator<(Uuid, TargetApp)> for TargetAppMap {
     fn from_iter<T: IntoIterator<Item = (Uuid, TargetApp)>>(iter: T) -> Self {
         Self(HashMap::from_iter(iter))
     }
 }
 
-/// Target state of a device
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct TargetDevice {
-    pub apps: TargetApps,
-    #[serde(default)]
-    pub config: DeviceConfig,
-}
-
 impl From<App> for TargetApp {
     fn from(app: App) -> Self {
-        let App { name } = app;
-        Self { name }
-    }
-}
-
-impl From<Device> for TargetDevice {
-    fn from(device: Device) -> Self {
-        let Device { apps, config, .. } = device;
-        Self {
-            apps: apps
-                .into_iter()
-                .map(|(uuid, app)| (uuid, app.into()))
-                .collect(),
-            config,
-        }
+        let App { id, name } = app;
+        Self { id, name }
     }
 }
 
@@ -146,8 +94,8 @@ mod tests {
         let another_user_uuid = Uuid::from("other-app-uuid");
 
         let json = json!({
-            "apps": {
                 "user-uuid": {
+                    "id": 123,
                     "name": "user-app"
                 },
                 "hostapp-uuid": {
@@ -155,23 +103,23 @@ mod tests {
                     "is_host": true
                 },
                 "other-app-uuid": {
+                    "id": 456,
                     "name": "another-user-app",
                     "is_host": false
                 }
-            }
         });
 
-        let target_device: TargetDevice = serde_json::from_value(json).unwrap();
+        let target_apps: TargetAppMap = serde_json::from_value(json).unwrap();
 
-        assert_eq!(target_device.apps.len(), 2);
-        assert!(target_device.apps.contains_key(&user_uuid));
-        assert!(target_device.apps.contains_key(&another_user_uuid));
-        assert!(!target_device.apps.contains_key(&host_uuid));
+        assert_eq!(target_apps.len(), 2);
+        assert!(target_apps.contains_key(&user_uuid));
+        assert!(target_apps.contains_key(&another_user_uuid));
+        assert!(!target_apps.contains_key(&host_uuid));
 
-        let user_app = target_device.apps.get(&user_uuid).unwrap();
+        let user_app = target_apps.get(&user_uuid).unwrap();
         assert_eq!(user_app.name, "user-app");
 
-        let another_user_app = target_device.apps.get(&another_user_uuid).unwrap();
+        let another_user_app = target_apps.get(&another_user_uuid).unwrap();
         assert_eq!(another_user_app.name, "another-user-app");
     }
 
@@ -181,27 +129,24 @@ mod tests {
         let app2_uuid = Uuid::from("hostapp-uuid".to_string());
 
         let json = json!({
-            "apps": {
                 "user-uuid": {
-                    "name": "app-1"
+                    "name": "app-1",
                 },
                 "hostapp-uuid": {
                     "name": "app-2"
                 }
-            }
         });
 
-        let target_device: TargetDevice = serde_json::from_value(json).unwrap();
+        let target_apps: TargetAppMap = serde_json::from_value(json).unwrap();
 
-        assert_eq!(target_device.apps.len(), 2);
-        assert!(target_device.apps.contains_key(&app1_uuid));
-        assert!(target_device.apps.contains_key(&app2_uuid));
+        assert_eq!(target_apps.len(), 2);
+        assert!(target_apps.contains_key(&app1_uuid));
+        assert!(target_apps.contains_key(&app2_uuid));
     }
 
     #[test]
     fn test_deserialize_target_apps_all_host_apps() {
         let json = json!({
-            "apps": {
                 "user-uuid": {
                     "name": "host-1",
                     "is_host": true
@@ -210,22 +155,19 @@ mod tests {
                     "name": "host-2",
                     "is_host": true
                 }
-            }
         });
 
-        let target_device: TargetDevice = serde_json::from_value(json).unwrap();
+        let target_apps: TargetAppMap = serde_json::from_value(json).unwrap();
 
-        assert_eq!(target_device.apps.len(), 0);
+        assert_eq!(target_apps.len(), 0);
     }
 
     #[test]
     fn test_deserialize_target_apps_empty() {
-        let json = json!({
-            "apps": {}
-        });
+        let json = json!({});
 
-        let target_device: TargetDevice = serde_json::from_value(json).unwrap();
+        let target_apps: TargetAppMap = serde_json::from_value(json).unwrap();
 
-        assert_eq!(target_device.apps.len(), 0);
+        assert_eq!(target_apps.len(), 0);
     }
 }

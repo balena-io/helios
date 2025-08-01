@@ -25,8 +25,8 @@ fn store_config(
 
 /// Initialize the app in memory
 fn new_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
-    let TargetApp { name, .. } = tgt_app;
-    app.assign(App { name });
+    let TargetApp { id, name, .. } = tgt_app;
+    app.assign(App { id, name });
     app
 }
 
