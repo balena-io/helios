@@ -38,8 +38,11 @@ services:
       - runtime:/tmp/run
       # Service cache
       - cache:/cache/helios
+      # Configurations and local data
+      - local:/local/helios
 
 volumes:
+  local:
   cache:
   runtime:
     driver: local
