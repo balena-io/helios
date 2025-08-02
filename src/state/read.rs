@@ -39,7 +39,7 @@ fn parse_engine_arch(arch: String) -> Option<String> {
 
 /// Read the state of system
 #[instrument(name = "read_state", skip_all)]
-pub async fn read(uuid: Uuid) -> Result<Device, ReadStateError> {
+pub async fn read(uuid: Uuid, device_type: Option<String>) -> Result<Device, ReadStateError> {
     let docker = Docker::connect_with_defaults()?;
 
     let SystemInfo {
@@ -58,7 +58,7 @@ pub async fn read(uuid: Uuid) -> Result<Device, ReadStateError> {
             .unwrap_or(default_host.arch),
     };
 
-    let mut device = Device::new(uuid, host);
+    let mut device = Device::new(uuid, device_type, host);
 
     let installed_images = docker
         .list_images(Some(ListImagesOptions {

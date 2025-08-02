@@ -10,6 +10,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     EnvFilter,
 };
+use types::DeviceType;
 
 mod api;
 mod cli;
@@ -79,9 +80,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .expect("not nil because legacy_api_endpoint isn't nil"),
         });
 
-    let (uuid, remote_config) = maybe_provision(&cli).await?;
+    let (uuid, remote_config, device_type) = maybe_provision(&cli).await?;
 
-    start_supervisor(uuid, api_config, remote_config, legacy_config).await?;
+    start_supervisor(uuid, device_type, api_config, remote_config, legacy_config).await?;
 
     Ok(())
 }
@@ -89,6 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[instrument(name = "helios", skip_all, err)]
 async fn start_supervisor(
     uuid: Uuid,
+    device_type: Option<DeviceType>,
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
@@ -102,7 +104,7 @@ async fn start_supervisor(
     );
 
     // Load the initial state
-    let initial_state = state::read(uuid.clone()).await?;
+    let initial_state = state::read(uuid.clone(), device_type.clone()).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
@@ -179,6 +181,7 @@ async fn start_supervisor(
         // Start state seeking
         res = state::start_seek(
             uuid.clone(),
+            device_type,
             initial_state,
             proxy_state.clone(),
             legacy_config,
@@ -219,7 +222,9 @@ where
 /// If `remote_config` is not nil, then we are registered with a remote.
 /// If `remote_config` is nil, then we aren't registered and need to provision.
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
-async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
+async fn maybe_provision(
+    cli: &Cli,
+) -> Result<(Uuid, Option<RemoteConfig>, Option<DeviceType>), ProvisioningError> {
     // Load our provisioning config, if one exists
     let provisioning_config = config::get::<ProvisioningConfig>()?;
 
@@ -256,7 +261,7 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
             );
         }
 
-        Ok((uuid.clone(), Some(remote)))
+        Ok((uuid.clone(), Some(remote), None))
     }
     // Otherwise use an existing provisioning config, if available
     else if let Some(ref provisioning_config) = &provisioning_config {
@@ -281,6 +286,7 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
         }
 
         let uuid = &provisioning_config.uuid;
+        let device_type = provisioning_config.device_type.clone();
         let request_defaults = &provisioning_config.remote.request;
         let remote = RemoteConfig {
             request: RequestConfig {
@@ -300,7 +306,7 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
             ..provisioning_config.remote.clone()
         };
 
-        Ok((uuid.clone(), Some(remote)))
+        Ok((uuid.clone(), Some(remote), Some(device_type)))
     }
     // We have a provisioning key
     else if let Some(provisioning_key) = &cli.provisioning_key {
@@ -344,13 +350,13 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
             },
         };
 
-        let (uuid, remote) = provision(provisioning_key, &provisioning_config).await?;
+        let (uuid, remote, device_type) = provision(provisioning_key, &provisioning_config).await?;
 
-        Ok((uuid, Some(remote)))
+        Ok((uuid, Some(remote), Some(device_type)))
     }
     // We don't have a remote at all; run in "unmanaged" mode
     else {
         // Generate a UUID if none provided
-        Ok((cli.uuid.clone().unwrap_or_default(), None))
+        Ok((cli.uuid.clone().unwrap_or_default(), None, None))
     }
 }

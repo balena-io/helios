@@ -4,6 +4,9 @@ use std::ops::Deref;
 
 use crate::util::crypto::{pseudorandom_string, ALPHA_NUM};
 
+// Just an alias for more descriptive code
+pub type DeviceType = String;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Uuid(String);
 

@@ -280,6 +280,7 @@ mod tests {
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
         let device = Device::new(
             Uuid::default(),
+            Some("generic-aarch64".into()),
             Host {
                 os: "balenaOS 6.3.1".into(),
                 arch: "aarch64".into(),

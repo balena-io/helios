@@ -160,6 +160,7 @@ mod tests {
     fn it_creates_a_device_report_from_a_device() {
         let device = Device::new(
             "test-uuid".into(),
+            Some("generic-aarch64".into()),
             Host {
                 os: "balenaOS 5.3.1".into(),
                 arch: "aarch64".into(),

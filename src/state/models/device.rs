@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::types::Uuid;
+use crate::types::{DeviceType, Uuid};
 
 use super::app::{App, TargetAppMap};
 use super::image::Image;
@@ -40,6 +40,10 @@ pub struct Device {
     /// The device UUID
     pub uuid: Uuid,
 
+    /// The device type accepted by the backend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_type: Option<String>,
+
     /// Host system info
     #[serde(default)]
     pub host: Host,
@@ -58,9 +62,10 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(uuid: Uuid, host: Host) -> Self {
+    pub fn new(uuid: Uuid, device_type: Option<DeviceType>, host: Host) -> Self {
         Self {
             uuid,
+            device_type,
             host,
             images: HashMap::new(),
             apps: HashMap::new(),
