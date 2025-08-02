@@ -8,12 +8,41 @@ use super::image::Image;
 
 pub type DeviceConfig = HashMap<String, String>;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Host {
+    pub os: String,
+    pub arch: String,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        // See list in https://doc.rust-lang.org/std/env/consts/constant.ARCH.html
+        let arch: String = match std::env::consts::ARCH {
+            "x86" => "i386",
+            "x86_64" => "amd64",
+            "arm" => "armv7hf",
+            "aarch64" => "aarch64",
+            other => other,
+        }
+        .into();
+
+        // See list in https://doc.rust-lang.org/std/env/consts/constant.OS.html
+        let os: String = std::env::consts::OS.into();
+
+        Self { os, arch }
+    }
+}
+
 /// The current state of a device that will be stored
 /// by the worker
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Device {
     /// The device UUID
     pub uuid: Uuid,
+
+    /// Host system info
+    #[serde(default)]
+    pub host: Host,
 
     /// List of docker images on the device
     #[serde(default)]
@@ -29,9 +58,10 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(uuid: Uuid) -> Self {
+    pub fn new(uuid: Uuid, host: Host) -> Self {
         Self {
             uuid,
+            host,
             images: HashMap::new(),
             apps: HashMap::new(),
             config: HashMap::new(),
@@ -46,7 +76,9 @@ impl Device {
 /// If they don't, planning will fail
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetDevice {
+    #[serde(default)]
     pub apps: TargetAppMap,
+
     #[serde(default)]
     pub config: DeviceConfig,
 }
@@ -73,6 +105,10 @@ mod tests {
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
             "uuid": "device-uuid",
+            "host": {
+                "os": "balenaOS 6.3.1",
+                "arch": "aarch64"
+            },
             "apps": {
                 "aaa": {
                     "name": "my-app",

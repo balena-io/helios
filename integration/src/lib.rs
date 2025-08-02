@@ -47,10 +47,10 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(
-            body,
-            json!({"uuid": "test-uuid", "images": {}, "apps": {}, "config": {}})
-        )
+        assert_eq!(body.get("uuid"), Some(&json!("test-uuid")));
+        assert_eq!(body.get("apps"), Some(&json!({})));
+        assert_eq!(body.get("config"), Some(&json!({})));
+        assert_eq!(body.get("images"), Some(&json!({})));
     }
 
     #[tokio::test]
