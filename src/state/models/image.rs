@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Image {
     /// Container engine id
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
 
     /// Image labels
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<HashMap<String, String>>,
 }
 

@@ -40,6 +40,9 @@ pub struct Device {
     /// The device UUID
     pub uuid: Uuid,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// The device type accepted by the backend
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_type: Option<String>,
@@ -65,6 +68,7 @@ impl Device {
     pub fn new(uuid: Uuid, device_type: Option<DeviceType>, host: Host) -> Self {
         Self {
             uuid,
+            name: None,
             device_type,
             host,
             images: HashMap::new(),
@@ -81,6 +85,9 @@ impl Device {
 /// If they don't, planning will fail
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetDevice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     #[serde(default)]
     pub apps: TargetAppMap,
 
@@ -90,8 +97,11 @@ pub struct TargetDevice {
 
 impl From<Device> for TargetDevice {
     fn from(device: Device) -> Self {
-        let Device { apps, config, .. } = device;
+        let Device {
+            name, apps, config, ..
+        } = device;
         Self {
+            name,
             apps: apps
                 .into_iter()
                 .map(|(uuid, app)| (uuid, app.into()))

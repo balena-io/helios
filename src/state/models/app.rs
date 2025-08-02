@@ -11,7 +11,9 @@ use crate::types::Uuid;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct App {
     pub id: u32,
-    pub name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 // Target app definition, the
@@ -24,7 +26,12 @@ pub struct TargetApp {
     #[serde(default)]
     pub id: u32,
 
-    pub name: String,
+    /// the target app name
+    ///
+    /// while this value is technically never null, we need to be able to
+    /// convert from App into TargetApp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Default, Clone)]
@@ -117,10 +124,10 @@ mod tests {
         assert!(!target_apps.contains_key(&host_uuid));
 
         let user_app = target_apps.get(&user_uuid).unwrap();
-        assert_eq!(user_app.name, "user-app");
+        assert_eq!(user_app.name, Some("user-app".into()));
 
         let another_user_app = target_apps.get(&another_user_uuid).unwrap();
-        assert_eq!(another_user_app.name, "another-user-app");
+        assert_eq!(another_user_app.name, Some("another-user-app".into()));
     }
 
     #[test]
