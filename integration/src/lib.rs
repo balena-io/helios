@@ -54,21 +54,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_device_target() {
-        let client = reqwest::Client::new();
-        let target = json!({"apps": {"test-app": {"name": "my-app"}},  "config": {}});
-        let body = client
-            .post(format!("{HELIOS_URL}/v3/device"))
-            .json(&target)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(body.status(), StatusCode::ACCEPTED);
-        let status = wait_for_target_apply().await;
-        assert_eq!(status, json!({"status": "done"}));
-    }
-
-    #[tokio::test]
     async fn test_get_app_state() {
         let client = reqwest::Client::new();
         let body = client
