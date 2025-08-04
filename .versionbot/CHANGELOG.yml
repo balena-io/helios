@@ -1,4 +1,39 @@
 - commits:
+    - subject: Remove POST /v3/device API endpoint
+      hash: 3011edff6643f3f1026165375d5b6c739a096c35
+      body: |
+        This endpoint is a potential footgun that would allow to change the
+        whole device state (including hostapps at some point). Is better to
+        remove it for now as the `/v3/device/apps` endpoint already allows
+        configuring/creating individual apps.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read device state from docker engine
+      hash: b84b6cd9645700c9edf5a3aaa8ae97ee7c5e9f83
+      body: |
+        This migrates some utility functions from the supervisor for managing
+        image names
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Ignore hostapps when deserializing target state
+      hash: c5997139995bfc1c19627968715fca70aa2c255b
+      body: |
+        Host apps will be added in a future change.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.8.0
+  title: ""
+  date: 2025-08-04T07:08:48.860Z
+- commits:
     - subject: Set-up docker volume for configuration data
       hash: 0a0e5edb9fabffe63899dd682b51e47dc77f0608
       body: ""
