@@ -47,25 +47,10 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(
-            body,
-            json!({"uuid": "test-uuid", "images": {}, "apps": {}, "config": {}})
-        )
-    }
-
-    #[tokio::test]
-    async fn test_set_device_target() {
-        let client = reqwest::Client::new();
-        let target = json!({"apps": {"test-app": {"name": "my-app"}},  "config": {}});
-        let body = client
-            .post(format!("{HELIOS_URL}/v3/device"))
-            .json(&target)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(body.status(), StatusCode::ACCEPTED);
-        let status = wait_for_target_apply().await;
-        assert_eq!(status, json!({"status": "done"}));
+        assert_eq!(body.get("uuid"), Some(&json!("test-uuid")));
+        assert_eq!(body.get("apps"), Some(&json!({})));
+        assert_eq!(body.get("config"), Some(&json!({})));
+        assert_eq!(body.get("images"), Some(&json!({})));
     }
 
     #[tokio::test]
@@ -101,6 +86,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(app, json!({"name": "my-app"}))
+        assert_eq!(app, json!({"id": 0, "name": "my-app"}))
     }
 }

@@ -713,6 +713,7 @@ dependencies = [
  "mockito",
  "pretty_assertions",
  "rand",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

@@ -23,9 +23,11 @@ services:
   helios:
     # Set-up required variables
     environment:
+      DOCKER_HOST: 'unix:///var/run/docker.sock'
       BALENA_DEVICE_UUID: 'test-uuid'
       BALENA_SUPERVISOR_PORT: 48484
-      DOCKER_HOST: 'tcp://docker:2375'
+    volumes:
+      - dind:/var/run
     depends_on:
       docker:
         condition: service_healthy
@@ -33,9 +35,8 @@ services:
   docker:
     image: docker:dind
     privileged: true
-    environment:
-      DOCKER_TLS_CERTDIR: ''
-    command: --tls=false
+    volumes:
+      - dind:/var/run
     healthcheck:
       test: ['CMD', 'docker', 'ps']
       interval: 10s
@@ -43,6 +44,11 @@ services:
       timeout: 5s
 
 volumes:
+  dind:
+    driver_opts:
+      # Use tmpfs to avoid files remaining between runs
+      type: tmpfs
+      device: tmpfs
   runtime:
     driver_opts:
       type: tmpfs

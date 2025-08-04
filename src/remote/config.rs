@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::config::StoredConfig;
-use crate::types::{ApiKey, Uuid};
+use crate::types::{ApiKey, DeviceType, Uuid};
 use crate::util::http::Uri;
 use crate::util::json::{deserialize_duration_from_ms, serialize_duration_to_ms};
 
@@ -68,7 +68,7 @@ pub struct ProvisioningConfig {
     // inferred by provisioning key on remote
     pub fleet: u32,
 
-    pub device_type: String,
+    pub device_type: DeviceType,
 
     pub remote: RemoteConfig,
 }

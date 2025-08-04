@@ -4,6 +4,9 @@ use std::ops::Deref;
 
 use crate::util::crypto::{pseudorandom_string, ALPHA_NUM};
 
+// Just an alias for more descriptive code
+pub type DeviceType = String;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Uuid(String);
 
@@ -30,6 +33,12 @@ impl Display for Uuid {
 impl From<String> for Uuid {
     fn from(value: String) -> Self {
         Self(value)
+    }
+}
+
+impl From<&str> for Uuid {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }
 

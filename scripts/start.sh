@@ -54,7 +54,7 @@ export XDG_CONFIG_HOME=/local
 export XDG_STATE_HOME=/local
 
 # Remove the socket if it exists (we will need some proper handover at some point)
-rm /tmp/run/helios.sock || true
+rm /tmp/run/helios.sock 2>/dev/null || true
 
 # Start the new supervisor
 exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-api-address /tmp/run/helios.sock

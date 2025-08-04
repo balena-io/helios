@@ -7,7 +7,7 @@ use tracing::{debug, field, instrument, Span};
 
 use crate::config;
 use crate::remote::{ProvisioningConfig, RemoteConfig};
-use crate::types::{ApiKey, Uuid};
+use crate::types::{ApiKey, DeviceType, Uuid};
 use crate::util::crypto::sha256_hex_digest;
 use crate::util::http::{InvalidUriError, Uri};
 
@@ -35,7 +35,7 @@ pub enum ProvisioningError {
 pub async fn provision(
     provisioning_key: &String,
     provisioning_config: &ProvisioningConfig,
-) -> Result<(Uuid, RemoteConfig), ProvisioningError> {
+) -> Result<(Uuid, RemoteConfig, DeviceType), ProvisioningError> {
     // Remote expects us to provide a UUID and API key during registration,
     // and we comply by auto-generating random values if they aren't provided
     // as arguments to the CLI.
@@ -77,7 +77,11 @@ pub async fn provision(
                 // remove recovery config ignoring any errors
                 _ = config::remove_with_name::<ProvisioningConfig>(&recovery_filename);
             })?;
-            Ok((config.uuid.clone(), config.remote.clone()))
+            Ok((
+                config.uuid.clone(),
+                config.remote.clone(),
+                config.device_type.clone(),
+            ))
         }
         Err(err) => Err(err),
     }

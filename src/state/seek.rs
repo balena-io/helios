@@ -15,12 +15,14 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::legacy::{
-    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
-};
 use crate::types::Uuid;
+use crate::{
+    legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
+    types::DeviceType,
+};
 
 use super::models::{Device, TargetDevice};
+use super::read::{read as read_state, ReadStateError};
 use super::worker::{create, CreateError as WorkerCreateError};
 
 /// Represents the service update status according to
@@ -101,13 +103,16 @@ pub struct SeekRequest {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SeekError {
-    #[error("Failed to create worker: {0}")]
+    #[error("failed to read state: {0}")]
+    ReadState(#[from] ReadStateError),
+
+    #[error("failed to create worker: {0}")]
     CreateWorker(#[from] WorkerCreateError),
 
-    #[error("Failed to reach target state: {0}")]
+    #[error("failed to reach target state: {0}")]
     SeekTargetState(#[from] WorkerSeekError),
 
-    #[error("Failed to update state on legacy Supervisor: {0}")]
+    #[error("failed to update state on legacy Supervisor: {0}")]
     LegacyUpdate(#[from] StateUpdateError),
 }
 
@@ -175,6 +180,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     uuid: Uuid,
+    device_type: Option<DeviceType>,
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
@@ -382,7 +388,7 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state = Device::initial_for(uuid.clone());
+                    let initial_state = read_state(uuid.clone(), device_type.clone()).await?;
 
                     worker = create(initial_state)?;
                     worker_stream = worker.follow();

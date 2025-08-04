@@ -6,16 +6,26 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
+use crate::types::Uuid;
 use crate::util::http::Uri;
 
 use super::config::RemoteConfig;
 use super::request::{Patch, PatchError, RequestConfig};
 
-#[derive(Serialize, Debug, Clone)]
-struct DeviceReport {}
+#[derive(Serialize, Debug)]
+struct AppReport {
+    release_uuid: Option<Uuid>,
+}
+
+#[derive(Serialize, Debug)]
+struct DeviceReport {
+    // the apps object should not be present if the
+    // previous report apps match the current report
+    apps: Option<HashMap<Uuid, AppReport>>,
+}
 
 // The state for report
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug)]
 struct Report(HashMap<String, DeviceReport>);
 
 impl Report {
@@ -33,9 +43,17 @@ impl From<Report> for Value {
 }
 
 impl From<LocalState> for DeviceReport {
-    fn from(_: LocalState) -> Self {
-        // TODO
-        DeviceReport {}
+    fn from(local_state: LocalState) -> Self {
+        let LocalState { device, .. } = local_state;
+        DeviceReport {
+            apps: Some(
+                device
+                    .apps
+                    .into_keys()
+                    .map(|uuid| (uuid, AppReport { release_uuid: None }))
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -134,18 +152,20 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
 mod tests {
     use serde_json::json;
 
-    use crate::state::models::Device;
+    use crate::state::models::{Device, Host};
 
     use super::*;
 
     #[test]
     fn it_creates_a_device_report_from_a_device() {
-        let device = Device {
-            uuid: "test-uuid".to_string().into(),
-            images: HashMap::new(),
-            apps: HashMap::new(),
-            config: HashMap::new(),
-        };
+        let device = Device::new(
+            "test-uuid".into(),
+            Some("generic-aarch64".into()),
+            Host {
+                os: "balenaOS 5.3.1".into(),
+                arch: "aarch64".into(),
+            },
+        );
 
         let report = Report::from(LocalState {
             status: crate::state::UpdateStatus::Done,
@@ -153,6 +173,11 @@ mod tests {
         });
 
         let value: Value = report.into();
-        assert_eq!(value, json!({"test-uuid": {}}))
+        assert_eq!(
+            value,
+            json!({"test-uuid": {
+                "apps": {}
+            }})
+        )
     }
 }

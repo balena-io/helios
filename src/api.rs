@@ -91,16 +91,11 @@ pub async fn start(
     proxy_state: Option<ProxyState>,
 ) {
     let api_span = Span::current();
-    let target_device_tx = seek_request_tx.clone();
     let target_app_tx = seek_request_tx.clone();
     let app = Router::new()
         .route("/v3/ping", get(|| async { "OK" }))
         .route("/v3/status", get(update_status))
         .route("/v3/device", get(get_device_cur_state))
-        .route(
-            "/v3/device",
-            post(move |query, apps| set_device_tgt_state(target_device_tx, query, apps)),
-        )
         .route("/v3/device/apps/{uuid}", get(get_app_cur_state))
         .route(
             "/v3/device/apps/{uuid}",
@@ -190,26 +185,6 @@ async fn get_device_cur_state(State(state_rx): State<LocalStateRx>) -> Json<Devi
     Json(state.device.clone())
 }
 
-/// Handle `POST /v3/device` request
-async fn set_device_tgt_state(
-    seek_request_tx: Sender<SeekRequest>,
-    Query(opts): Query<UpdateOpts>,
-    Json(target): Json<TargetDevice>,
-) -> StatusCode {
-    if seek_request_tx
-        .send(SeekRequest {
-            target,
-            opts,
-            raw_target: None,
-        })
-        .is_err()
-    {
-        return StatusCode::SERVICE_UNAVAILABLE;
-    }
-
-    StatusCode::ACCEPTED
-}
-
 /// Handle `GET /v3/device/apps/{uuid}`
 async fn get_app_cur_state(
     State(state_rx): State<LocalStateRx>,
@@ -260,6 +235,8 @@ async fn set_app_tgt_state(
 
 #[cfg(test)]
 mod tests {
+    use crate::state::models::Host;
+
     use super::*;
     use serde_json::json;
     use tokio::net::TcpListener;
@@ -276,7 +253,14 @@ mod tests {
             raw_target: None,
         });
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
-        let device = Device::initial_for(Uuid::default());
+        let device = Device::new(
+            Uuid::default(),
+            Some("generic-aarch64".into()),
+            Host {
+                os: "balenaOS 6.3.1".into(),
+                arch: "aarch64".into(),
+            },
+        );
         let local_state = LocalState {
             device,
             status: UpdateStatus::default(),

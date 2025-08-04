@@ -1,0 +1,152 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use crate::types::{DeviceType, Uuid};
+
+use super::app::{App, TargetAppMap};
+use super::image::Image;
+
+pub type DeviceConfig = HashMap<String, String>;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Host {
+    pub os: String,
+    pub arch: String,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        // See list in https://doc.rust-lang.org/std/env/consts/constant.ARCH.html
+        let arch: String = match std::env::consts::ARCH {
+            "x86" => "i386",
+            "x86_64" => "amd64",
+            "arm" => "armv7hf",
+            "aarch64" => "aarch64",
+            other => other,
+        }
+        .into();
+
+        // See list in https://doc.rust-lang.org/std/env/consts/constant.OS.html
+        let os: String = std::env::consts::OS.into();
+
+        Self { os, arch }
+    }
+}
+
+/// The current state of a device that will be stored
+/// by the worker
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Device {
+    /// The device UUID
+    pub uuid: Uuid,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// The device type accepted by the backend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_type: Option<String>,
+
+    /// Host system info
+    #[serde(default)]
+    pub host: Host,
+
+    /// List of docker images on the device
+    #[serde(default)]
+    pub images: HashMap<String, Image>,
+
+    /// Apps on the device
+    #[serde(default)]
+    pub apps: HashMap<Uuid, App>,
+
+    /// Config vars
+    #[serde(default)]
+    pub config: DeviceConfig,
+}
+
+impl Device {
+    pub fn new(uuid: Uuid, device_type: Option<DeviceType>, host: Host) -> Self {
+        Self {
+            uuid,
+            name: None,
+            device_type,
+            host,
+            images: HashMap::new(),
+            apps: HashMap::new(),
+            config: HashMap::new(),
+        }
+    }
+}
+
+/// Target state of a device
+///
+/// For Mahler, the target must be a structural subtype of the internal
+/// state, meaning the state should be serializable into the target.
+/// If they don't, planning will fail
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct TargetDevice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    #[serde(default)]
+    pub apps: TargetAppMap,
+
+    #[serde(default)]
+    pub config: DeviceConfig,
+}
+
+impl From<Device> for TargetDevice {
+    fn from(device: Device) -> Self {
+        let Device {
+            name, apps, config, ..
+        } = device;
+        Self {
+            name,
+            apps: apps
+                .into_iter()
+                .map(|(uuid, app)| (uuid, app.into()))
+                .collect(),
+            config,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    #[test]
+    fn device_state_should_be_serializable_into_target() {
+        let json = json!({
+            "uuid": "device-uuid",
+            "host": {
+                "os": "balenaOS 6.3.1",
+                "arch": "aarch64"
+            },
+            "apps": {
+                "aaa": {
+                    "name": "my-app",
+                    "id": 123
+                },
+                "bbb": {
+                    "name": "other-app",
+                    "id": 123
+                }
+            },
+
+            "images": {
+                "ubuntu": {
+                    "engine_id": "ccc"
+                }
+
+            }
+        });
+
+        let device: Device = serde_json::from_value(json).unwrap();
+
+        // this should not panic
+        let _target: TargetDevice =
+            serde_json::from_value(serde_json::to_value(device).unwrap()).unwrap();
+    }
+}
