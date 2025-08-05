@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::future::{self, Future};
 
+use bollard::Docker;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::{debug, instrument, trace, warn};
@@ -104,7 +105,8 @@ async fn start_supervisor(
     );
 
     // Load the initial state
-    let initial_state = state::read(uuid.clone(), device_type.clone()).await?;
+    let docker = Docker::connect_with_defaults()?;
+    let initial_state = state::read(&docker, uuid.clone(), device_type).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
@@ -180,8 +182,7 @@ async fn start_supervisor(
 
         // Start state seeking
         res = state::start_seek(
-            uuid.clone(),
-            device_type,
+            &docker,
             initial_state,
             proxy_state.clone(),
             legacy_config,

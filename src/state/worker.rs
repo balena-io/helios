@@ -84,10 +84,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
 type LocalWorker = Worker<Device, Ready, TargetDevice>;
 
 /// Create and initialize the worker
-pub fn create(initial: Device) -> Result<LocalWorker, CreateError> {
-    // Initialize the connection
-    let docker = Docker::connect_with_defaults()?;
-
+pub fn create(docker: Docker, initial: Device) -> Result<LocalWorker, CreateError> {
     // Create the worker and set-up resources
     let worker = worker().resource(docker).initial_state(initial)?;
 

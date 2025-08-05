@@ -39,9 +39,11 @@ fn parse_engine_arch(arch: String) -> Option<String> {
 
 /// Read the state of system
 #[instrument(name = "read_state", skip_all)]
-pub async fn read(uuid: Uuid, device_type: Option<String>) -> Result<Device, ReadStateError> {
-    let docker = Docker::connect_with_defaults()?;
-
+pub async fn read(
+    docker: &Docker,
+    uuid: Uuid,
+    device_type: Option<String>,
+) -> Result<Device, ReadStateError> {
     let SystemInfo {
         operating_system,
         architecture,

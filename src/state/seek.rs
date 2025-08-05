@@ -1,3 +1,4 @@
+use bollard::Docker;
 use futures_lite::StreamExt;
 use mahler::{
     worker::{SeekError as WorkerSeekError, SeekStatus},
@@ -15,10 +16,8 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::types::Uuid;
-use crate::{
-    legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
-    types::DeviceType,
+use crate::legacy::{
+    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
 
 use super::models::{Device, TargetDevice};
@@ -179,8 +178,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
-    uuid: Uuid,
-    device_type: Option<DeviceType>,
+    docker: &Docker,
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
@@ -190,11 +188,13 @@ pub async fn start_seek(
     info!("waiting for target");
 
     // Keep track of the current state and update status
+    let uuid = initial_state.uuid.clone();
+    let device_type = initial_state.device_type.clone();
     let mut current_state = initial_state.clone();
     let mut update_status = UpdateStatus::default();
 
     // Create a mahler worker and start following changes
-    let mut worker = create(initial_state.clone())?;
+    let mut worker = create(docker.clone(), initial_state.clone())?;
     let mut worker_stream = worker.follow();
 
     // Seek target state
@@ -388,9 +388,10 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state = read_state(uuid.clone(), device_type.clone()).await?;
+                    let initial_state =
+                        read_state(docker, uuid.clone(), device_type.clone()).await?;
 
-                    worker = create(initial_state)?;
+                    worker = create(docker.clone(), initial_state)?;
                     worker_stream = worker.follow();
 
                     UpdateStatus::Done
