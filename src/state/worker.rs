@@ -10,7 +10,7 @@ use mahler::{
 
 use crate::types::Uuid;
 
-use super::models::{App, Device, DeviceConfig, TargetApp, TargetDevice};
+use super::models::{App, Device, DeviceConfig, Release, TargetApp, TargetDevice};
 
 /// Update the in-memory device name
 fn set_device_name(
@@ -33,9 +33,13 @@ fn store_config(
 }
 
 /// Initialize the app in memory
-fn new_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
+fn prepare_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
     let TargetApp { id, name, .. } = tgt_app;
-    app.assign(App { id, name });
+    app.replace(App {
+        id,
+        name,
+        ..Default::default()
+    });
     app
 }
 
@@ -43,6 +47,12 @@ fn new_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer
 fn set_app_name(mut name: Pointer<String>, Target(tgt): Target<Option<String>>) -> Pointer<String> {
     *name = tgt;
     name
+}
+
+/// Initialize an empty release
+fn prepare_release(mut release: Pointer<Release>) -> Pointer<Release> {
+    release.replace(Release::default());
+    release
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,7 +75,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
         .job(
             "/apps/{app_uuid}",
-            task::create(new_app).with_description(|Args(uuid): Args<Uuid>| {
+            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
@@ -74,6 +84,14 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             task::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
                 format!("update name for app with uuid '{uuid}'")
             }),
+        )
+        .job(
+            "/apps/{app_uuid}/releases/{commit}",
+            task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}")
+                },
+            ),
         )
         .job(
             "/config",

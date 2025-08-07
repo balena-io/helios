@@ -13,13 +13,13 @@ where
     Ok(img)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Service {
     pub id: u32,
     pub image: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TargetService {
     /// Service ID on the remote backend
     #[serde(default)]

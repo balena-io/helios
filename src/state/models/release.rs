@@ -9,15 +9,18 @@ use crate::types::Uuid;
 
 use super::service::{ServiceMap, TargetServiceMap};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Release {
-    services: ServiceMap,
+    #[serde(default)]
+    pub services: ServiceMap,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+pub type ReleaseMap = HashMap<Uuid, Release>;
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetRelease {
     #[serde(default)]
-    services: TargetServiceMap,
+    pub services: TargetServiceMap,
 }
 
 impl From<Release> for TargetRelease {
@@ -33,7 +36,7 @@ impl From<Release> for TargetRelease {
     }
 }
 
-#[derive(Serialize, Debug, Default)]
+#[derive(Serialize, Debug, Default, Clone)]
 pub struct TargetReleaseMap(HashMap<Uuid, TargetRelease>);
 
 impl Deref for TargetReleaseMap {

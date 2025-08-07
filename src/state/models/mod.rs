@@ -7,3 +7,4 @@ mod service;
 pub use app::*;
 pub use device::*;
 pub use image::*;
+pub use release::*;

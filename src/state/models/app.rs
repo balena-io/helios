@@ -7,33 +7,45 @@ use std::{
 
 use crate::types::Uuid;
 
+use super::{ReleaseMap, TargetReleaseMap};
+
 /// The internal state of the app
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct App {
     pub id: u32,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    #[serde(default)]
+    pub releases: ReleaseMap,
 }
 
-// Target app definition, the
+// Target app definition, used as input to the worker
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct TargetApp {
-    /// app id on the remote backend. This only exists for legacy reasons
+    /// App id on the remote backend. This only exists for legacy reasons
     /// and should be removed at some point.
     ///
     /// We use 0 as the default to not make the id required
     #[serde(default)]
     pub id: u32,
 
-    /// the target app name
+    /// The target app name
     ///
     /// while this value is technically never null, we need to be able to
     /// convert from App into TargetApp
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// Target app releases
+    #[serde(default)]
+    pub releases: TargetReleaseMap,
 }
 
+/// Target apps model
+///
+/// This type exists for controlling/validating deserialization of target apps
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct TargetAppMap(HashMap<Uuid, TargetApp>);
 
@@ -84,8 +96,15 @@ impl FromIterator<(Uuid, TargetApp)> for TargetAppMap {
 
 impl From<App> for TargetApp {
     fn from(app: App) -> Self {
-        let App { id, name } = app;
-        Self { id, name }
+        let App { id, name, releases } = app;
+        Self {
+            id,
+            name,
+            releases: releases
+                .into_iter()
+                .map(|(commit, rel)| (commit, rel.into()))
+                .collect(),
+        }
     }
 }
 
