@@ -7,15 +7,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Uuid;
 
+use super::service::{ServiceMap, TargetServiceMap};
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Release {}
+pub struct Release {
+    services: ServiceMap,
+}
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct TargetRelease {}
+pub struct TargetRelease {
+    #[serde(default)]
+    services: TargetServiceMap,
+}
 
 impl From<Release> for TargetRelease {
-    fn from(_: Release) -> Self {
-        Self {}
+    fn from(r: Release) -> Self {
+        let Release { services } = r;
+
+        Self {
+            services: services
+                .into_iter()
+                .map(|(name, svc)| (name, svc.into()))
+                .collect(),
+        }
     }
 }
 

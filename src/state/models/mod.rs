@@ -2,6 +2,7 @@ mod app;
 mod device;
 mod image;
 mod release;
+mod service;
 
 pub use app::*;
 pub use device::*;
