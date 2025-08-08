@@ -1,10 +1,10 @@
-use bollard::query_parameters::RemoveImageOptions;
-use bollard::{query_parameters::CreateImageOptions, Docker};
+use bollard::query_parameters::{CreateImageOptions, RemoveImageOptions, TagImageOptions};
+use bollard::Docker;
 use futures_lite::StreamExt;
 use thiserror::Error;
 
 use mahler::extract::{Pointer, Res, System, Target, View};
-use mahler::task::{with_io, Create, Delete};
+use mahler::task::prelude::*;
 use mahler::worker::Uninitialized;
 use mahler::{
     extract::Args,
@@ -13,7 +13,7 @@ use mahler::{
 };
 
 use crate::types::Uuid;
-use crate::util::docker::ImageUri;
+use crate::util::docker::{ImageUri, InvalidImageUriError};
 
 use super::models::{App, Device, DeviceConfig, Image, Release, TargetApp, TargetDevice};
 
@@ -22,6 +22,15 @@ use super::models::{App, Device, DeviceConfig, Image, Release, TargetApp, Target
 pub struct DockerError {
     context: String,
     source: bollard::errors::Error,
+}
+
+#[derive(Error, Debug)]
+pub enum TaskError {
+    #[error(transparent)]
+    Docker(#[from] DockerError),
+
+    #[error(transparent)]
+    InvalidImageUri(#[from] InvalidImageUriError),
 }
 
 /// Update the in-memory device name
@@ -67,6 +76,49 @@ fn prepare_release(mut release: Pointer<Release>) -> Pointer<Release> {
     release
 }
 
+/// Tag an existing image with a new name
+fn tag_image(
+    image: Pointer<Image>,
+    Target(tgt): Target<Image>,
+    Args(image_name): Args<ImageUri>,
+    docker: Res<Docker>,
+) -> Create<Image, TaskError> {
+    let tgt_engine_id = tgt.engine_id.clone();
+
+    with_io(image, |image| async move {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        let repo = image_name.repo();
+        let tag = image_name.tag().clone();
+
+        // catch any inconsistencies when using the task within a method. If this
+        // happens there is a bug
+        let engine_id = tgt_engine_id.expect("target image should include an engine id");
+        docker
+            .tag_image(
+                &engine_id,
+                Some(TagImageOptions {
+                    repo: Some(repo),
+                    tag,
+                }),
+            )
+            .await
+            .map_err(|source| DockerError {
+                context: format!("failed to tag image {engine_id} with {image_name}"),
+                source,
+            })?;
+
+        Ok(image)
+    })
+    // set the to the target
+    .map(|mut image| {
+        image.replace(tgt);
+        image
+    })
+}
+
 /// Pull an image from the registry, this task is applicable to
 /// the creation of a new image
 ///
@@ -87,6 +139,7 @@ fn pull_image(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+
         // Check if the image exists first, we do this because
         // we don't know if the initial state is correct
         match docker.inspect_image(image_name.as_str()).await {
@@ -211,15 +264,28 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             "/name",
             task::any(set_device_name).with_description(|| "update device name"),
         )
+        .job(
+            "/config",
+            task::update(store_config).with_description(|| "store device configuration"),
+        )
         .jobs(
             "/images/{image_name}",
             [
-                task::create(pull_image).with_description(|Args(image_name): Args<String>| {
+                task::none(pull_image).with_description(|Args(image_name): Args<String>| {
                     format!("pull image '{image_name}'")
                 }),
-                task::delete(remove_image).with_description(|Args(image_name): Args<String>| {
+                task::none(remove_image).with_description(|Args(image_name): Args<String>| {
                     format!("delete image '{image_name}'")
                 }),
+                task::none(tag_image).with_description(
+                    |Args(image_name): Args<String>, tgt: Target<Image>| {
+                        if let Some(engine_id) = &tgt.engine_id {
+                            format!("tag image {engine_id} with '{image_name}'")
+                        } else {
+                            format!("tag image '{image_name}'")
+                        }
+                    },
+                ),
             ],
         )
         .job(
@@ -241,10 +307,6 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                     format!("initialize release '{commit}' for app with uuid '{uuid}")
                 },
             ),
-        )
-        .job(
-            "/config",
-            task::update(store_config).with_description(|| "store device configuration"),
         )
 }
 

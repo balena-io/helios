@@ -8,3 +8,4 @@ pub use app::*;
 pub use device::*;
 pub use image::*;
 pub use release::*;
+pub use service::*;
