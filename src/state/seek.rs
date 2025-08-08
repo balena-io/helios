@@ -1,4 +1,4 @@
-use bollard::Docker;
+use bollard::{auth::DockerCredentials, Docker};
 use futures_lite::StreamExt;
 use mahler::{
     worker::{SeekError as WorkerSeekError, SeekStatus},
@@ -16,8 +16,9 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::legacy::{
-    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
+use crate::{
+    legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
+    remote::{RegistryAuth, RegistryAuthClient},
 };
 
 use super::models::{Device, TargetDevice};
@@ -125,6 +126,7 @@ enum SeekState {
 type SeekResult = Result<SeekState, SeekError>;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum SeekAction {
     Terminate,
     Apply(SeekRequest),
@@ -179,6 +181,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     docker: &Docker,
+    registry_auth_client: &Option<RegistryAuthClient>,
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
@@ -194,7 +197,11 @@ pub async fn start_seek(
     let mut update_status = UpdateStatus::default();
 
     // Create a mahler worker and start following changes
-    let mut worker = create(docker.clone(), initial_state.clone())?;
+    let mut worker = create(
+        docker.clone(),
+        registry_auth_client.clone(),
+        initial_state.clone(),
+    )?;
     let mut worker_stream = worker.follow();
 
     // Seek target state
@@ -391,7 +398,7 @@ pub async fn start_seek(
                     let initial_state =
                         read_state(docker, uuid.clone(), device_type.clone()).await?;
 
-                    worker = create(docker.clone(), initial_state)?;
+                    worker = create(docker.clone(), registry_auth_client.clone(), initial_state)?;
                     worker_stream = worker.follow();
 
                     UpdateStatus::Done

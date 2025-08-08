@@ -1,9 +1,10 @@
+use bollard::auth::DockerCredentials;
 use bollard::query_parameters::{CreateImageOptions, RemoveImageOptions, TagImageOptions};
 use bollard::Docker;
 use futures_lite::StreamExt;
 use thiserror::Error;
 
-use mahler::extract::{Pointer, Res, System, Target, View};
+use mahler::extract::{Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::Uninitialized;
 use mahler::{
@@ -11,33 +12,41 @@ use mahler::{
     task,
     worker::{Ready, Worker},
 };
+use tokio::sync::RwLock;
+use tracing::debug;
 
+use crate::remote::RegistryAuthClient;
 use crate::types::Uuid;
 use crate::util::docker::{ImageUri, InvalidImageUriError};
 
-use super::models::{App, Device, DeviceConfig, Image, Release, TargetApp, TargetDevice};
+use super::models::{
+    App, Device, DeviceConfig, Image, Release, Service, TargetApp, TargetDevice, TargetService,
+};
 
 #[derive(Error, Debug)]
 #[error("{context}: {source}")]
-pub struct DockerError {
+struct DockerError {
     context: String,
     source: bollard::errors::Error,
 }
 
 #[derive(Error, Debug)]
-pub enum TaskError {
+enum TaskError {
     #[error(transparent)]
     Docker(#[from] DockerError),
 
     #[error(transparent)]
     InvalidImageUri(#[from] InvalidImageUriError),
+
+    #[error("tar operation failed: {0}")]
+    Tar(#[from] std::io::Error),
 }
 
 /// Update the in-memory device name
 fn set_device_name(
-    mut name: Pointer<String>,
+    mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> Pointer<String> {
+) -> View<Option<String>> {
     *name = tgt;
     name
 }
@@ -54,7 +63,10 @@ fn store_config(
 }
 
 /// Initialize the app in memory
-fn prepare_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Pointer<App> {
+fn prepare_app(
+    mut app: View<Option<App>>,
+    Target(tgt_app): Target<TargetApp>,
+) -> View<Option<App>> {
     let TargetApp { id, name, .. } = tgt_app;
     app.replace(App {
         id,
@@ -65,24 +77,27 @@ fn prepare_app(mut app: Pointer<App>, Target(tgt_app): Target<TargetApp>) -> Poi
 }
 
 /// Update the in-memory app name
-fn set_app_name(mut name: Pointer<String>, Target(tgt): Target<Option<String>>) -> Pointer<String> {
+fn set_app_name(
+    mut name: View<Option<String>>,
+    Target(tgt): Target<Option<String>>,
+) -> View<Option<String>> {
     *name = tgt;
     name
 }
 
 /// Initialize an empty release
-fn prepare_release(mut release: Pointer<Release>) -> Pointer<Release> {
+fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release.replace(Release::default());
     release
 }
 
 /// Tag an existing image with a new name
 fn tag_image(
-    image: Pointer<Image>,
+    image: View<Option<Image>>,
     Target(tgt): Target<Image>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-) -> Create<Image, TaskError> {
+) -> IO<Option<Image>, DockerError> {
     let tgt_engine_id = tgt.engine_id.clone();
 
     with_io(image, |image| async move {
@@ -126,10 +141,11 @@ fn tag_image(
 /// Effect: add the image to the list of images
 /// Action: pull the image from the registry and add it to the images local registry
 fn pull_image(
-    mut image: Pointer<Image>,
+    mut image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-) -> Create<Image, DockerError> {
+    docker_credentials: Res<DockerCredentials>,
+) -> IO<Option<Image>, DockerError> {
     // Initialize the image if it doesn't exist
     if image.is_none() {
         image.get_or_insert_default();
@@ -141,12 +157,13 @@ fn pull_image(
             .expect("docker resource should be available");
 
         // Check if the image exists first, we do this because
-        // we don't know if the initial state is correct
+        // the state may have changed from under the worker
         match docker.inspect_image(image_name.as_str()).await {
             Ok(img_info) => {
                 if img_info.id.is_some() {
                     // If the image exists and has an id, skip
                     // download
+                    debug!("image already exists, skipping");
                     image.replace(img_info.into());
                     return Ok(image);
                 }
@@ -174,8 +191,14 @@ fn pull_image(
             ..Default::default()
         });
 
+        let credentials = docker_credentials
+            .as_ref()
+            .cloned()
+            // Only use the credentials if they match the image registry
+            .take_if(|c| c.serveraddress.is_some() && &c.serveraddress == image_name.registry());
+
         // Try to create the image
-        let mut stream = docker.create_image(options, None, None);
+        let mut stream = docker.create_image(options, None, credentials);
         while let Some(progress) = stream.next().await {
             // TODO: report progress. This requires https://github.com/balena-io-modules/mahler-rs/issues/43
             let _ = progress.map_err(|e| DockerError {
@@ -184,19 +207,93 @@ fn pull_image(
             })?;
         }
 
-        // Check that the image
-        let img_info = docker
+        // Check that the image exists
+        let new_img: Image = docker
             .inspect_image(image_name.as_str())
             .await
             .map_err(|e| DockerError {
                 context: format!("failed to read information for image {image_name}"),
                 source: e,
-            })?;
+            })?
+            .into();
 
-        image.replace(img_info.into());
+        image.replace(new_img);
 
         Ok(image)
     })
+}
+
+/// Creates a new image with the given name.
+///
+/// Depending on whether the image has a digest or there is another matching image, a different
+/// operation will be chosen
+fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>) -> Task {
+    if let Some(digest) = image_name.digest() {
+        let existing = device
+            .images
+            .iter()
+            .find(|(name, _)| name.digest().as_ref().is_some_and(|d| d == digest));
+
+        if let Some((_, image)) = existing {
+            // If an image with the same digest exists, we just need to tag it
+            return tag_image.with_target(image.clone());
+        }
+    }
+
+    // If the target image doesn't have a digest, just pull it
+    pull_image.into_task()
+}
+
+/// Do the initial pull for a new service
+fn fetch_service_image(
+    System(device): System<Device>,
+    Target(tgt): Target<TargetService>,
+    Args((uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    if device.images.keys().any(|img| img == &tgt.image) {
+        // tell the planner to skip this task if the image already exists
+        return None;
+    }
+
+    // If there is a service with the same name in any other releases of the service
+    // then skip the direct fetch as that pull will need deltas and needs to
+    // be handled by another task
+    if device
+        .apps
+        .get(&uuid)
+        .map(|app| {
+            app.releases
+                .iter()
+                .filter(|(c, _)| c != &&commit)
+                .any(|(_, r)| r.services.keys().any(|k| k == &service_name))
+        })
+        .unwrap_or_default()
+    {
+        return None;
+    }
+
+    // Create the image if it doesn't exist already
+    Some(create_image.with_arg("image_name", tgt.image))
+}
+
+/// Install the service
+///
+/// FIXME: this only creates the service in memory for now, as we add features, this will also
+/// create the service container
+fn install_service(
+    mut svc: View<Option<Service>>,
+    System(device): System<Device>,
+    Target(tgt): Target<TargetService>,
+) -> View<Option<Service>> {
+    // Skip the task if the image for the service doesn't exist yet
+    if device.images.keys().all(|img| img != &tgt.image) {
+        return svc;
+    }
+
+    let TargetService { id, image, .. } = tgt;
+
+    svc.replace(Service { id, image });
+    svc
 }
 
 /// Remove an image
@@ -205,11 +302,11 @@ fn pull_image(
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
 fn remove_image(
-    img_ptr: Pointer<Image>,
+    img_ptr: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,
     docker: Res<Docker>,
-) -> Delete<Image, DockerError> {
+) -> IO<Option<Image>, DockerError> {
     // only remove the image if it not being used by any service
     if device.apps.values().any(|app| {
         app.releases.values().any(|release| {
@@ -286,6 +383,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                         }
                     },
                 ),
+                task::none(create_image),
             ],
         )
         .job(
@@ -304,18 +402,39 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             "/apps/{app_uuid}/releases/{commit}",
             task::create(prepare_release).with_description(
                 |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                    format!("initialize release '{commit}' for app with uuid '{uuid}")
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
                 },
             ),
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
+            [
+                task::create(fetch_service_image),
+                task::create(install_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+            ],
         )
 }
 
 type LocalWorker = Worker<Device, Ready, TargetDevice>;
 
 /// Create and initialize the worker
-pub fn create(docker: Docker, initial: Device) -> Result<LocalWorker, CreateError> {
+pub fn create(
+    docker: Docker,
+    registry_auth_client: Option<RegistryAuthClient>,
+    initial: Device,
+) -> Result<LocalWorker, CreateError> {
     // Create the worker and set-up resources
-    let worker = worker().resource(docker).initial_state(initial)?;
+    let mut worker = worker().resource(docker).initial_state(initial)?;
+
+    if let Some(auth_client) = registry_auth_client {
+        // Add a registry auth client behind a RwLock to allow
+        // tasks to modify it
+        worker.use_resource(RwLock::new(auth_client));
+    }
 
     Ok(worker)
 }
@@ -324,7 +443,7 @@ pub fn create(docker: Docker, initial: Device) -> Result<LocalWorker, CreateErro
 mod tests {
     use super::*;
 
-    use mahler::{par, seq, Dag};
+    use mahler::{dag, par, seq, Dag};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -392,9 +511,9 @@ mod tests {
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = par!(
-            "initialize app with uuid 'my-app-uuid'",
             "store device configuration",
-            "update device name"
+            "update device name",
+            "initialize app with uuid 'my-app-uuid'",
         );
         assert_eq!(workflow.to_string(), expected.to_string());
     }
@@ -428,6 +547,60 @@ mod tests {
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("update name for app with uuid 'my-app-uuid'",);
+        assert_eq!(workflow.to_string(), expected.to_string());
+    }
+
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_fetch_and_install_services() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "services": {
+                                "service-one": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest"
+                                },
+                                "service-two": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/0e3f629e6eb2905b75aae244eb316291@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = dag!(
+            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "pull image 'ubuntu:latest'", 
+                    "pull image 'registry2.balena-cloud.com/v2/0e3f629e6eb2905b75aae244eb316291@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'"
+                )
+                + seq!(
+                    "initialize service 'service-one' for release 'my-release-uuid'",
+                    "initialize service 'service-two' for release 'my-release-uuid'"
+                )
+        );
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 }

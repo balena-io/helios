@@ -71,21 +71,23 @@ pub async fn read(
 
     // Read the state of images
     for img_summary in installed_images {
+        let repo_tags = img_summary.repo_tags;
         let img: Image = docker.inspect_image(&img_summary.id).await?.into();
 
-        // we'll store the image digest as a label on the image
-        let digest = img
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get("io.balena.private.image.digest"));
-        for tag in img_summary.repo_tags {
-            let img_name: ImageUri = if let Some(dig) = digest {
-                // if a digest is present, include the digest in the image name to match
-                // the expected format for the target state
-                format!("{tag}@{dig}").parse()?
-            } else {
-                tag.parse()?
-            };
+        for img_tag in repo_tags {
+            let mut img_name: ImageUri = img_tag.parse()?;
+
+            // If the image name has a tag starting with 'sha256-' use that as the digest.
+            //
+            // This is needed because the digest doesn't survive when pulling with deltas
+            // https://github.com/balena-os/balena-engine/issues/283
+            if let Some(tag) = img_name.tag() {
+                if tag.starts_with("sha256-") {
+                    img_name = format!("{}@{}", img_name.repo(), tag.replace("sha256-", "sha256:"))
+                        .parse()?;
+                }
+            }
+
             device.images.insert(img_name, img.clone());
         }
     }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::remote::RegistryAuth;
 use crate::types::{DeviceType, Uuid};
 use crate::util::docker::ImageUri;
 
@@ -52,6 +53,9 @@ pub struct Device {
     #[serde(default)]
     pub host: Host,
 
+    #[serde(default)]
+    pub registry_auths: Vec<RegistryAuth>,
+
     /// List of docker images on the device
     #[serde(default)]
     pub images: HashMap<ImageUri, Image>,
@@ -72,6 +76,7 @@ impl Device {
             name: None,
             device_type,
             host,
+            registry_auths: Vec::new(),
             images: HashMap::new(),
             apps: HashMap::new(),
             config: HashMap::new(),

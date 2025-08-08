@@ -2,6 +2,7 @@ use std::error::Error;
 use std::future::{self, Future};
 
 use bollard::Docker;
+use remote::RegistryAuthClient;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::{debug, instrument, trace, warn};
@@ -108,6 +109,8 @@ async fn start_supervisor(
     let docker = Docker::connect_with_defaults()?;
     let initial_state = state::read(&docker, uuid.clone(), device_type).await?;
 
+    let registry_auth = remote_config.clone().map(RegistryAuthClient::new);
+
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
     let (poll_request_tx, poll_request_rx) = watch::channel(remote::PollRequest::default());
@@ -183,6 +186,7 @@ async fn start_supervisor(
         // Start state seeking
         res = state::start_seek(
             &docker,
+            &registry_auth,
             initial_state,
             proxy_state.clone(),
             legacy_config,
