@@ -13,7 +13,7 @@ use crate::types::Uuid;
 use crate::util::http::Uri;
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::request::{Get, RequestConfig as GetConfig};
+use super::request::{Get, GetConfig};
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
@@ -26,6 +26,7 @@ async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Val
         min_interval: remote.request.poll_min_interval,
         max_backoff: remote.request.poll_interval,
         api_token: Some(remote.api_key.to_string()),
+        persist_cache: true,
     };
 
     let mut client = Get::new(endpoint, client_config);

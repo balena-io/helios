@@ -255,6 +255,22 @@ pub struct Get {
     cached: Option<serde_json::Value>,
     etag: Option<String>,
     cache_path: PathBuf,
+    persist_cache: bool,
+}
+
+/// Configuration for HTTP GET request behavior including timeouts, rate limiting, and backoff.
+#[derive(Clone)]
+pub struct GetConfig {
+    /// Maximum time to wait for a single HTTP request to complete.
+    pub timeout: Duration,
+    /// Minimum time to wait between consecutive requests (rate limiting).
+    pub min_interval: Duration,
+    /// Maximum time to wait during exponential backoff after errors.
+    pub max_backoff: Duration,
+    /// Optional API token for authentication (will be sent as "Bearer {token}").
+    pub api_token: Option<String>,
+    /// Set to true to persist the request cache on disk
+    pub persist_cache: bool,
 }
 
 impl Get {
@@ -288,14 +304,30 @@ impl Get {
     ///
     /// let client = Get::new("https://public-api.example.com/status", config);
     /// ```
-    pub fn new(endpoint: impl Into<String>, config: RequestConfig) -> Self {
+    pub fn new(endpoint: impl Into<String>, config: impl Into<GetConfig>) -> Self {
+        let GetConfig {
+            timeout,
+            min_interval,
+            max_backoff,
+            api_token,
+            persist_cache,
+        } = config.into();
         let endpoint: String = endpoint.into();
         let cache_path = get_cache_path(&endpoint);
         Self {
-            state: RequestState::new(endpoint, config),
+            state: RequestState::new(
+                endpoint,
+                RequestConfig {
+                    timeout,
+                    min_interval,
+                    max_backoff,
+                    api_token,
+                },
+            ),
             cached: None,
             etag: None,
             cache_path,
+            persist_cache,
         }
     }
 
@@ -409,7 +441,7 @@ impl Get {
 
                 self.cached = Some(json.clone());
                 self.etag = new_etag;
-                if self.etag.is_some() {
+                if self.etag.is_some() && self.persist_cache {
                     self.save_cache().await;
                 }
                 self.state.record_success();
@@ -701,6 +733,26 @@ mod tests {
     use mockito::{Matcher, Server};
     use serde_json::json;
     use std::time::Duration;
+
+    // Utility trait to make it easy to test
+    impl From<RequestConfig> for GetConfig {
+        fn from(conf: RequestConfig) -> Self {
+            let RequestConfig {
+                timeout,
+                min_interval,
+                max_backoff,
+                api_token,
+            } = conf;
+
+            Self {
+                timeout,
+                min_interval,
+                max_backoff,
+                api_token,
+                persist_cache: false,
+            }
+        }
+    }
 
     fn test_config() -> RequestConfig {
         RequestConfig {
