@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::types::{DeviceType, Uuid};
+use crate::util::docker::ImageUri;
 
 use super::app::{App, TargetAppMap};
 use super::image::Image;
@@ -53,7 +54,7 @@ pub struct Device {
 
     /// List of docker images on the device
     #[serde(default)]
-    pub images: HashMap<String, Image>,
+    pub images: HashMap<ImageUri, Image>,
 
     /// Apps on the device
     #[serde(default)]

@@ -1,22 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::util::docker::normalise_image_name;
-
-/// Deserializes and normalizes the image name
-fn deserialize_image_name_from_str<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let img: &str = serde::Deserialize::deserialize(deserializer)?;
-    let img = normalise_image_name(img).map_err(serde::de::Error::custom)?;
-    Ok(img)
-}
+use crate::util::docker::ImageUri;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Service {
     pub id: u32,
-    pub image: String,
+    pub image: ImageUri,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -26,8 +16,7 @@ pub struct TargetService {
     pub id: u32,
 
     /// Service image URI
-    #[serde(deserialize_with = "deserialize_image_name_from_str")]
-    pub image: String,
+    pub image: ImageUri,
 }
 
 impl From<Service> for TargetService {

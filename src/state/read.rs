@@ -3,8 +3,8 @@ use bollard::{query_parameters::ListImagesOptions, Docker};
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::util::docker::normalise_image_name;
-use crate::{types::Uuid, util::docker::ImageNameError};
+use crate::types::Uuid;
+use crate::util::docker::{ImageUri, InvalidImageUriError};
 
 use super::models::{Device, Host, Image};
 
@@ -14,7 +14,7 @@ pub enum ReadStateError {
     DockerError(#[from] bollard::errors::Error),
 
     #[error(transparent)]
-    ImageName(#[from] ImageNameError),
+    InvalidRegistryUri(#[from] InvalidImageUriError),
 }
 
 // Convert an architecture from the string returned by he engine
@@ -79,12 +79,12 @@ pub async fn read(
             .as_ref()
             .and_then(|labels| labels.get("io.balena.private.image.digest"));
         for tag in img_summary.repo_tags {
-            let img_name = if let Some(dig) = digest {
+            let img_name: ImageUri = if let Some(dig) = digest {
                 // if a digest is present, include the digest in the image name to match
                 // the expected format for the target state
-                normalise_image_name(&format!("{tag}@{dig}"))?
+                format!("{tag}@{dig}").parse()?
             } else {
-                tag
+                tag.parse()?
             };
             device.images.insert(img_name, img.clone());
         }
