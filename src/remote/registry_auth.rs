@@ -42,6 +42,10 @@ impl RegistryAuth {
         }
         self.scope.iter().any(|scope| scope == image_uri)
     }
+
+    pub fn is_super_scope(&self, other: &RegistryAuth) -> bool {
+        self.service == other.service && other.scope.is_subset(&self.scope)
+    }
 }
 
 #[derive(Error, Debug)]
@@ -89,7 +93,7 @@ struct ResponseToken {
     pub token: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RegistryToken {
     expires: Instant,
     value: String,
@@ -113,7 +117,7 @@ impl AsRef<str> for RegistryToken {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RegistryAuthClient {
     config: RemoteConfig,
     cached: HashMap<RegistryAuth, RegistryToken>,

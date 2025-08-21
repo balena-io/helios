@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bollard::auth::DockerCredentials;
 use bollard::query_parameters::{CreateImageOptions, RemoveImageOptions, TagImageOptions};
 use bollard::Docker;
@@ -15,12 +17,13 @@ use mahler::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::remote::RegistryAuthClient;
+use crate::remote::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::types::Uuid;
-use crate::util::docker::{ImageUri, InvalidImageUriError};
+use crate::util::docker::ImageUri;
 
 use super::models::{
-    App, Device, DeviceConfig, Image, Release, Service, TargetApp, TargetDevice, TargetService,
+    App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,
+    TargetDevice, TargetRelease, TargetService,
 };
 
 #[derive(Error, Debug)]
@@ -28,18 +31,6 @@ use super::models::{
 struct DockerError {
     context: String,
     source: bollard::errors::Error,
-}
-
-#[derive(Error, Debug)]
-enum TaskError {
-    #[error(transparent)]
-    Docker(#[from] DockerError),
-
-    #[error(transparent)]
-    InvalidImageUri(#[from] InvalidImageUriError),
-
-    #[error("tar operation failed: {0}")]
-    Tar(#[from] std::io::Error),
 }
 
 /// Update the in-memory device name
@@ -83,6 +74,153 @@ fn set_app_name(
 ) -> View<Option<String>> {
     *name = tgt;
     name
+}
+
+/// Find an installed service for a different commit
+fn find_installed_service(
+    device: &Device,
+    app_uuid: Uuid,
+    commit: Uuid,
+    service_name: String,
+) -> Option<&Service> {
+    device.apps.get(&app_uuid).and_then(|app| {
+        app.releases
+            .iter()
+            .filter(|(c, _)| c != &&commit)
+            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &&service_name))
+            .map(|(_, s)| s)
+            .next()
+    })
+}
+
+// Request registry tokens
+fn request_registry_credentials(
+    mut auths: View<RegistryAuthSet>,
+    Target(tgt_auths): Target<RegistryAuthSet>,
+    auth_client_res: Res<RwLock<RegistryAuthClient>>,
+) -> IO<RegistryAuthSet, RegistryAuthError> {
+    // Update the device authorization list
+    for auth in tgt_auths.into_iter() {
+        auths.insert(auth);
+    }
+
+    with_io(auths, |auths| async move {
+        if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
+            // Wait for write authorization
+            let mut auth_client = auth_client_rwlock.write().await;
+
+            for auth in auths.iter() {
+                auth_client.request(auth).await?;
+            }
+        }
+
+        Ok(auths)
+    })
+}
+
+/// Request authorization for new image installs
+fn request_registry_token_for_new_images(
+    System(device): System<Device>,
+    Target(tgt_apps): Target<TargetAppMap>,
+) -> Option<Task> {
+    // Find all images for new services in the target state
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release
+                    .services
+                    .iter()
+                    .filter(|(service_name, svc)| {
+                        // if the service image has not been downloaded
+                        !device.images.contains_key(&svc.image) &&
+                        // and there is no service from a different release
+                        find_installed_service(
+                            &device,
+                            app_uuid.clone(),
+                            commit.clone(),
+                            (*service_name).clone(),
+                        )
+                        // or there is a service and the digest doesn't match the target digest
+                        .is_none_or(|s| {
+                            s.image.digest().is_none() || s.image.digest() != svc.image.digest()
+                        })
+                    })
+                    // then select the image
+                    .map(|(_, svc)| &svc.image)
+            })
+        })
+        .collect();
+
+    // Group images to install by registry
+    let tgt_auths: RegistryAuthSet = images_to_install
+        .iter()
+        .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
+            if let Some(service) = img.registry().clone() {
+                if let Some(scope) = acc.get_mut(&service) {
+                    scope.push((*img).clone());
+                } else {
+                    acc.insert(service, vec![(*img).clone()]);
+                }
+            }
+            acc
+        })
+        .into_values()
+        .map(|scope| RegistryAuth::try_from(scope).expect("auth creation should not fail"))
+        // if the i
+        .filter(|scope| device.auths.iter().all(|s| !s.is_super_scope(scope)))
+        .collect();
+
+    if tgt_auths.is_empty() {
+        return None;
+    }
+
+    Some(request_registry_credentials.with_target(tgt_auths))
+}
+
+/// Install all new images for a release
+fn fetch_release_images(
+    System(device): System<Device>,
+    Target(tgt_release): Target<TargetRelease>,
+    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+) -> Vec<Task> {
+    // Find all images for new services in the target state
+    let images_to_install: Vec<ImageUri> = tgt_release
+        .services
+        .into_iter()
+        .filter(|(service_name, svc)| {
+            // if the service image has not been downloaded
+            !device.images.contains_key(&svc.image) &&
+            // and there is no service from a different release
+            find_installed_service(
+                    &device,
+                    app_uuid.clone(),
+                    commit.clone(),
+                    (*service_name).clone(),
+                )
+                // or if there is a service, then only chose it if it has the same digest 
+                // as the target service
+                .is_none_or(|s| {
+                    s.image.digest().is_some() && svc.image.digest() == s.image.digest()
+                })
+        })
+        // remove duplicate digests
+        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc)| {
+            if acc
+                .iter()
+                .all(|img| img.digest().is_none() || img.digest() != svc.image.digest())
+            {
+                acc.push(svc.image);
+            }
+            acc
+        });
+
+    // only download at most 3 images at the time
+    let mut tasks: Vec<Task> = Vec::new();
+    for image in images_to_install.into_iter().take(3) {
+        tasks.push(create_image.with_arg("image_name", image))
+    }
+    tasks
 }
 
 /// Initialize an empty release
@@ -144,7 +282,7 @@ fn pull_image(
     mut image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-    docker_credentials: Res<DockerCredentials>,
+    auth_client: Res<RwLock<RegistryAuthClient>>,
 ) -> IO<Option<Image>, DockerError> {
     // Initialize the image if it doesn't exist
     if image.is_none() {
@@ -191,11 +329,18 @@ fn pull_image(
             ..Default::default()
         });
 
-        let credentials = docker_credentials
-            .as_ref()
-            .cloned()
-            // Only use the credentials if they match the image registry
-            .take_if(|c| c.serveraddress.is_some() && &c.serveraddress == image_name.registry());
+        let credentials = if let Some(auth_client_rwlock) = auth_client.as_ref() {
+            auth_client_rwlock
+                .read()
+                .await
+                .token(&image_name)
+                .map(|token| DockerCredentials {
+                    registrytoken: Some(token.to_string()),
+                    ..Default::default()
+                })
+        } else {
+            None
+        };
 
         // Try to create the image
         let mut stream = docker.create_image(options, None, credentials);
@@ -227,7 +372,7 @@ fn pull_image(
 ///
 /// Depending on whether the image has a digest or there is another matching image, a different
 /// operation will be chosen
-fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>) -> Task {
+fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>) -> Option<Task> {
     if let Some(digest) = image_name.digest() {
         let existing = device
             .images
@@ -236,44 +381,43 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
 
         if let Some((_, image)) = existing {
             // If an image with the same digest exists, we just need to tag it
-            return tag_image.with_target(image.clone());
+            return Some(tag_image.with_target(image.clone()));
         }
     }
 
+    // If the image requires auth, make sure there is an auth with this image
+    // in scope before pulling the image
+    if RegistryAuth::needs_auth(&image_name)
+        && device.auths.iter().all(|auth| !auth.in_scope(&image_name))
+    {
+        return None;
+    }
+
     // If the target image doesn't have a digest, just pull it
-    pull_image.into_task()
+    Some(pull_image.into_task())
 }
 
 /// Do the initial pull for a new service
 fn fetch_service_image(
     System(device): System<Device>,
     Target(tgt): Target<TargetService>,
-    Args((uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
-    if device.images.keys().any(|img| img == &tgt.image) {
-        // tell the planner to skip this task if the image already exists
+    // tell the planner to skip this task if the image already exists
+    if device.images.contains_key(&tgt.image) {
         return None;
     }
 
     // If there is a service with the same name in any other releases of the service
-    // then skip the direct fetch as that pull will need deltas and needs to
-    // be handled by another task
-    if device
-        .apps
-        .get(&uuid)
-        .map(|app| {
-            app.releases
-                .iter()
-                .filter(|(c, _)| c != &&commit)
-                .any(|(_, r)| r.services.keys().any(|k| k == &service_name))
-        })
-        .unwrap_or_default()
+    // and the service image has as different digest then we skip the fetch as
+    // that pull will need deltas and needs to be handled by another task
+    if find_installed_service(&device, app_uuid, commit, service_name)
+        .is_none_or(|svc| svc.image.digest().is_some() && tgt.image.digest() == svc.image.digest())
     {
-        return None;
+        return Some(create_image.with_arg("image_name", tgt.image));
     }
 
-    // Create the image if it doesn't exist already
-    Some(create_image.with_arg("image_name", tgt.image))
+    None
 }
 
 /// Install the service
@@ -362,6 +506,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             task::any(set_device_name).with_description(|| "update device name"),
         )
         .job(
+            "/auths",
+            task::none(request_registry_credentials)
+                .with_description(|| "request registry credentials"),
+        )
+        .job(
             "/config",
             task::update(store_config).with_description(|| "store device configuration"),
         )
@@ -386,6 +535,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::none(create_image),
             ],
         )
+        .job("/apps", task::update(request_registry_token_for_new_images))
         .job(
             "/apps/{app_uuid}",
             task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
@@ -398,13 +548,16 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 format!("update name for app with uuid '{uuid}'")
             }),
         )
-        .job(
+        .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            task::create(prepare_release).with_description(
-                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                },
-            ),
+            [
+                task::create(fetch_release_images),
+                task::create(prepare_release).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+            ],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
@@ -579,8 +732,22 @@ mod tests {
                                 },
                                 "service-two": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/0e3f629e6eb2905b75aae244eb316291@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
-                                }
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                },
+                                "service-three": {
+                                    "id": 3,
+                                    // different image same digest
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                },
+                                // additional images to test download batching
+                                "service-four": {
+                                    "id": 4,
+                                    "image": "alpine:latest"
+                                },
+                                "service-five": {
+                                    "id": 5,
+                                    "image": "alpine:3.20"
+                                },
                             }
                         }
                     }
@@ -591,14 +758,23 @@ mod tests {
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = dag!(
-            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            seq!("request registry credentials")
                 + par!(
-                    "pull image 'ubuntu:latest'", 
-                    "pull image 'registry2.balena-cloud.com/v2/0e3f629e6eb2905b75aae244eb316291@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'"
+                    "pull image 'ubuntu:latest'",
+                    "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                    "pull image 'alpine:latest'",
+                )
+                + par!(
+                    "pull image 'alpine:3.20'",
+                    "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
                 )
                 + seq!(
+                    "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
                     "initialize service 'service-one' for release 'my-release-uuid'",
-                    "initialize service 'service-two' for release 'my-release-uuid'"
+                    "initialize service 'service-two' for release 'my-release-uuid'",
+                    "initialize service 'service-three' for release 'my-release-uuid'",
+                    "initialize service 'service-four' for release 'my-release-uuid'",
+                    "initialize service 'service-five' for release 'my-release-uuid'",
                 )
         );
         assert_eq!(workflow.to_string(), expected.to_string());

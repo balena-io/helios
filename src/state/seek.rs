@@ -1,4 +1,4 @@
-use bollard::{auth::DockerCredentials, Docker};
+use bollard::Docker;
 use futures_lite::StreamExt;
 use mahler::{
     worker::{SeekError as WorkerSeekError, SeekStatus},
@@ -18,7 +18,7 @@ use tracing::{error, info, instrument, trace};
 
 use crate::{
     legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
-    remote::{RegistryAuth, RegistryAuthClient},
+    remote::RegistryAuthClient,
 };
 
 use super::models::{Device, TargetDevice};

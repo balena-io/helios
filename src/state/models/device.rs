@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::remote::RegistryAuth;
 use crate::types::{DeviceType, Uuid};
@@ -35,6 +35,8 @@ impl Default for Host {
     }
 }
 
+pub type RegistryAuthSet = HashSet<RegistryAuth>;
+
 /// The current state of a device that will be stored
 /// by the worker
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -54,7 +56,7 @@ pub struct Device {
     pub host: Host,
 
     #[serde(default)]
-    pub registry_auths: Vec<RegistryAuth>,
+    pub auths: RegistryAuthSet,
 
     /// List of docker images on the device
     #[serde(default)]
@@ -76,7 +78,7 @@ impl Device {
             name: None,
             device_type,
             host,
-            registry_auths: Vec::new(),
+            auths: RegistryAuthSet::new(),
             images: HashMap::new(),
             apps: HashMap::new(),
             config: HashMap::new(),
