@@ -17,7 +17,7 @@ pub struct Release {
 
 pub type ReleaseMap = HashMap<Uuid, Release>;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetRelease {
     #[serde(default)]
     pub services: TargetServiceMap,
@@ -36,7 +36,7 @@ impl From<Release> for TargetRelease {
     }
 }
 
-#[derive(Serialize, Debug, Default, Clone)]
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetReleaseMap(HashMap<Uuid, TargetRelease>);
 
 impl Deref for TargetReleaseMap {

@@ -9,7 +9,7 @@ pub struct Service {
     pub image: ImageUri,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TargetService {
     /// Service ID on the remote backend
     #[serde(default)]

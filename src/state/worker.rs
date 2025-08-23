@@ -33,6 +33,51 @@ struct DockerError {
     source: bollard::errors::Error,
 }
 
+/// Make sure a cleanup happens after all tasks have been performed
+///
+/// This should be the first task for every workflow
+fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
+    device.needs_cleanup = true;
+    device
+}
+
+/// Clean up the device state after the target has been reached
+///
+/// This should be the final task for every workflow
+fn perform_cleanup(
+    device: View<Device>,
+    Target(tgt_device): Target<TargetDevice>,
+    auth_client_res: Res<RwLock<RegistryAuthClient>>,
+) -> IO<Device> {
+    // skip the task if we have not reached the target state
+    // (outside the needs_cleanup property)
+    if TargetDevice::from(Device {
+        needs_cleanup: false,
+        ..device.clone()
+    }) != tgt_device
+        || !device.needs_cleanup
+    {
+        return device.into();
+    }
+
+    with_io(device, |device| async move {
+        // Clean up authorizations
+        if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
+            debug!("clean up registry credentials");
+            // Wait for write authorization
+            let mut auth_client = auth_client_rwlock.write().await;
+            auth_client.clear();
+        }
+
+        Ok(device)
+    })
+    .map(|mut device| {
+        device.auths.clear();
+        device.needs_cleanup = false;
+        device
+    })
+}
+
 /// Update the in-memory device name
 fn set_device_name(
     mut name: View<Option<String>>,
@@ -505,6 +550,15 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             "/name",
             task::any(set_device_name).with_description(|| "update device name"),
         )
+        // XXX: this is not added first because of
+        // https://github.com/balena-io-modules/mahler-rs/pull/50
+        .jobs(
+            "",
+            [
+                task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
+                task::update(perform_cleanup).with_description(|| "perform clean-up"),
+            ],
+        )
         .job(
             "/auths",
             task::none(request_registry_credentials)
@@ -596,7 +650,7 @@ pub fn create(
 mod tests {
     use super::*;
 
-    use mahler::{dag, par, seq, Dag};
+    use mahler::{par, seq, Dag};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -635,7 +689,11 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!("initialize app with uuid 'my-app-uuid'",);
+        let expected: Dag<&str> = seq!(
+            "ensure clean-up",
+            "initialize app with uuid 'my-app-uuid'",
+            "perform clean-up"
+        );
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
@@ -663,11 +721,13 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = par!(
-            "store device configuration",
-            "update device name",
-            "initialize app with uuid 'my-app-uuid'",
-        );
+        let expected: Dag<&str> = seq!("ensure clean-up")
+            + par!(
+                "store device configuration",
+                "update device name",
+                "initialize app with uuid 'my-app-uuid'",
+            )
+            + seq!("perform clean-up");
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
@@ -699,7 +759,11 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!("update name for app with uuid 'my-app-uuid'",);
+        let expected: Dag<&str> = seq!(
+            "ensure clean-up",
+            "update name for app with uuid 'my-app-uuid'",
+            "perform clean-up"
+        );
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
@@ -757,26 +821,26 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = dag!(
-            seq!("request registry credentials")
-                + par!(
-                    "pull image 'ubuntu:latest'",
-                    "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
-                    "pull image 'alpine:latest'",
-                )
-                + par!(
-                    "pull image 'alpine:3.20'",
-                    "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
-                )
-                + seq!(
-                    "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                    "initialize service 'service-one' for release 'my-release-uuid'",
-                    "initialize service 'service-two' for release 'my-release-uuid'",
-                    "initialize service 'service-three' for release 'my-release-uuid'",
-                    "initialize service 'service-four' for release 'my-release-uuid'",
-                    "initialize service 'service-five' for release 'my-release-uuid'",
-                )
-        );
+        let expected: Dag<&str> = seq!("ensure clean-up", "request registry credentials")
+            + par!(
+                "pull image 'ubuntu:latest'",
+                "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                "pull image 'alpine:latest'",
+            )
+            + par!(
+                "pull image 'alpine:3.20'",
+                "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+            )
+            + seq!(
+                "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                "initialize service 'service-one' for release 'my-release-uuid'",
+                "initialize service 'service-two' for release 'my-release-uuid'",
+                "initialize service 'service-three' for release 'my-release-uuid'",
+                "initialize service 'service-four' for release 'my-release-uuid'",
+                "initialize service 'service-five' for release 'my-release-uuid'",
+                "perform clean-up"
+            );
+
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 }

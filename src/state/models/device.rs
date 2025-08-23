@@ -69,6 +69,9 @@ pub struct Device {
     /// Config vars
     #[serde(default)]
     pub config: DeviceConfig,
+
+    #[serde(default)]
+    pub needs_cleanup: bool,
 }
 
 impl Device {
@@ -82,6 +85,7 @@ impl Device {
             images: HashMap::new(),
             apps: HashMap::new(),
             config: HashMap::new(),
+            needs_cleanup: false,
         }
     }
 }
@@ -91,7 +95,7 @@ impl Device {
 /// For Mahler, the target must be a structural subtype of the internal
 /// state, meaning the state should be serializable into the target.
 /// If they don't, planning will fail
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetDevice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -101,12 +105,19 @@ pub struct TargetDevice {
 
     #[serde(default)]
     pub config: DeviceConfig,
+
+    #[serde(default)]
+    pub needs_cleanup: bool,
 }
 
 impl From<Device> for TargetDevice {
     fn from(device: Device) -> Self {
         let Device {
-            name, apps, config, ..
+            name,
+            apps,
+            config,
+            needs_cleanup,
+            ..
         } = device;
         Self {
             name,
@@ -115,6 +126,7 @@ impl From<Device> for TargetDevice {
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
             config,
+            needs_cleanup,
         }
     }
 }

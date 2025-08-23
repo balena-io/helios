@@ -22,7 +22,7 @@ pub struct App {
 }
 
 // Target app definition, used as input to the worker
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetApp {
     /// App id on the remote backend. This only exists for legacy reasons
     /// and should be removed at some point.
@@ -46,7 +46,7 @@ pub struct TargetApp {
 /// Target apps model
 ///
 /// This type exists for controlling/validating deserialization of target apps
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, PartialEq, Eq)]
 pub struct TargetAppMap(HashMap<Uuid, TargetApp>);
 
 impl Deref for TargetAppMap {
