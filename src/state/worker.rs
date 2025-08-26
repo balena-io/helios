@@ -732,6 +732,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn it_finds_a_workflow_to_update_an_app_and_configs() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "my-device-name",
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-old-name"
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app"
+                }
+            },
+            "config": {
+                "SOME_VAR": "one",
+                "OTHER_VAR": "two"
+            }
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = seq!("ensure clean-up")
+            + par!(
+                "store device configuration",
+                "update device name",
+                "update name for app with uuid 'my-app-uuid'",
+            )
+            + seq!("perform clean-up");
+        assert_eq!(workflow.to_string(), expected.to_string());
+    }
+
+    #[tokio::test]
     async fn it_finds_a_workflow_to_change_an_app_name() {
         before();
 
@@ -790,25 +832,25 @@ mod tests {
                     "releases": {
                         "my-release-uuid": {
                             "services": {
-                                "service-one": {
+                                "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest"
                                 },
-                                "service-two": {
+                                "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
                                 },
-                                "service-three": {
+                                "service3": {
                                     "id": 3,
                                     // different image same digest
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
                                 },
                                 // additional images to test download batching
-                                "service-four": {
+                                "service4": {
                                     "id": 4,
                                     "image": "alpine:latest"
                                 },
-                                "service-five": {
+                                "service5": {
                                     "id": 5,
                                     "image": "alpine:3.20"
                                 },
@@ -828,19 +870,23 @@ mod tests {
                 "pull image 'alpine:latest'",
             )
             + par!(
-                "pull image 'alpine:3.20'",
                 "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                "pull image 'alpine:3.20'",
             )
             + seq!(
                 "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                "initialize service 'service-one' for release 'my-release-uuid'",
-                "initialize service 'service-two' for release 'my-release-uuid'",
-                "initialize service 'service-three' for release 'my-release-uuid'",
-                "initialize service 'service-four' for release 'my-release-uuid'",
-                "initialize service 'service-five' for release 'my-release-uuid'",
+                "initialize service 'service1' for release 'my-release-uuid'",
+                "initialize service 'service2' for release 'my-release-uuid'",
+                "initialize service 'service3' for release 'my-release-uuid'",
+                "initialize service 'service4' for release 'my-release-uuid'",
+                "initialize service 'service5' for release 'my-release-uuid'",
                 "perform clean-up"
             );
 
-        assert_eq!(workflow.to_string(), expected.to_string());
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
     }
 }

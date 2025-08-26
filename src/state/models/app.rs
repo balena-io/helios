@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     ops::{Deref, DerefMut},
 };
 
@@ -47,10 +47,10 @@ pub struct TargetApp {
 ///
 /// This type exists for controlling/validating deserialization of target apps
 #[derive(Debug, Serialize, Default, Clone, PartialEq, Eq)]
-pub struct TargetAppMap(HashMap<Uuid, TargetApp>);
+pub struct TargetAppMap(BTreeMap<Uuid, TargetApp>);
 
 impl Deref for TargetAppMap {
-    type Target = HashMap<Uuid, TargetApp>;
+    type Target = BTreeMap<Uuid, TargetApp>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -67,9 +67,9 @@ impl<'de> Deserialize<'de> for TargetAppMap {
     where
         D: serde::Deserializer<'de>,
     {
-        let apps_value: HashMap<Uuid, Value> = HashMap::deserialize(deserializer)?;
+        let apps_value: BTreeMap<Uuid, Value> = BTreeMap::deserialize(deserializer)?;
 
-        let mut target_apps = HashMap::new();
+        let mut target_apps = BTreeMap::new();
 
         for (uuid, app_value) in apps_value {
             let is_host = app_value
@@ -90,7 +90,7 @@ impl<'de> Deserialize<'de> for TargetAppMap {
 
 impl FromIterator<(Uuid, TargetApp)> for TargetAppMap {
     fn from_iter<T: IntoIterator<Item = (Uuid, TargetApp)>>(iter: T) -> Self {
-        Self(HashMap::from_iter(iter))
+        Self(BTreeMap::from_iter(iter))
     }
 }
 

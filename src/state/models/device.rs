@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::remote::RegistryAuth;
 use crate::types::{DeviceType, Uuid};
@@ -8,7 +8,7 @@ use crate::util::docker::ImageUri;
 use super::app::{App, TargetAppMap};
 use super::image::Image;
 
-pub type DeviceConfig = HashMap<String, String>;
+pub type DeviceConfig = BTreeMap<String, String>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Host {
@@ -60,11 +60,11 @@ pub struct Device {
 
     /// List of docker images on the device
     #[serde(default)]
-    pub images: HashMap<ImageUri, Image>,
+    pub images: BTreeMap<ImageUri, Image>,
 
     /// Apps on the device
     #[serde(default)]
-    pub apps: HashMap<Uuid, App>,
+    pub apps: BTreeMap<Uuid, App>,
 
     /// Config vars
     #[serde(default)]
@@ -82,9 +82,9 @@ impl Device {
             device_type,
             host,
             auths: RegistryAuthSet::new(),
-            images: HashMap::new(),
-            apps: HashMap::new(),
-            config: HashMap::new(),
+            images: BTreeMap::new(),
+            apps: BTreeMap::new(),
+            config: BTreeMap::new(),
             needs_cleanup: false,
         }
     }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::util::docker::ImageUri;
 
@@ -26,5 +26,5 @@ impl From<Service> for TargetService {
     }
 }
 
-pub type ServiceMap = HashMap<String, Service>;
-pub type TargetServiceMap = HashMap<String, TargetService>;
+pub type ServiceMap = BTreeMap<String, Service>;
+pub type TargetServiceMap = BTreeMap<String, TargetService>;

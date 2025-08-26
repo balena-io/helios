@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     ops::{Deref, DerefMut},
 };
 
@@ -15,7 +15,7 @@ pub struct Release {
     pub services: ServiceMap,
 }
 
-pub type ReleaseMap = HashMap<Uuid, Release>;
+pub type ReleaseMap = BTreeMap<Uuid, Release>;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetRelease {
@@ -37,10 +37,10 @@ impl From<Release> for TargetRelease {
 }
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
-pub struct TargetReleaseMap(HashMap<Uuid, TargetRelease>);
+pub struct TargetReleaseMap(BTreeMap<Uuid, TargetRelease>);
 
 impl Deref for TargetReleaseMap {
-    type Target = HashMap<Uuid, TargetRelease>;
+    type Target = BTreeMap<Uuid, TargetRelease>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -54,7 +54,7 @@ impl DerefMut for TargetReleaseMap {
 
 impl FromIterator<(Uuid, TargetRelease)> for TargetReleaseMap {
     fn from_iter<T: IntoIterator<Item = (Uuid, TargetRelease)>>(iter: T) -> Self {
-        Self(HashMap::from_iter(iter))
+        Self(BTreeMap::from_iter(iter))
     }
 }
 
@@ -63,7 +63,7 @@ impl<'de> Deserialize<'de> for TargetReleaseMap {
     where
         D: serde::Deserializer<'de>,
     {
-        let releases: HashMap<Uuid, TargetRelease> = HashMap::deserialize(deserializer)?;
+        let releases: BTreeMap<Uuid, TargetRelease> = BTreeMap::deserialize(deserializer)?;
 
         if releases.len() > 1 {
             return Err(serde::de::Error::custom(
