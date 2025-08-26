@@ -3,7 +3,13 @@ version: '2.4'
 services:
   sut:
     build: ./integration
+    environment:
+      DOCKER_HOST: 'unix:///var/run/docker.sock'
+    volumes:
+      - dind:/var/run
     depends_on:
+      docker:
+        condition: service_healthy
       helios-api:
         condition: service_started
 
