@@ -22,7 +22,7 @@ FROM alpine:3.21
 WORKDIR /opt/helios
 
 # Image metadata
-LABEL org.opencontainers.image.source="https://github.com/balena-io-experimental/helios"
+LABEL org.opencontainers.image.source="https://github.com/balena-io/helios"
 LABEL org.opencontainers.image.description="Balena's on device agent"
 LABEL org.opencontainers.image.licenses=APACHE-2.0
 
