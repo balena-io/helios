@@ -1,3 +1,4 @@
+pub mod ack_watch;
 pub mod crypto;
 pub mod docker;
 pub mod fs;

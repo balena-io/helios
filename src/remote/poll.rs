@@ -3,13 +3,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 use std::{collections::HashMap, future::Future, pin::Pin};
-use tokio::sync::watch::{Receiver, Sender};
+use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
 use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::types::Uuid;
+use crate::util::ack_watch;
 use crate::util::http::Uri;
 
 use super::config::{RemoteConfig, RequestConfig};
@@ -104,7 +105,7 @@ pub async fn start_poll(
     uuid: Uuid,
     remote: RemoteConfig,
     mut poll_rx: Receiver<PollRequest>,
-    seek_tx: Sender<SeekRequest>,
+    seek_tx: ack_watch::Sender<SeekRequest>,
 ) {
     info!("starting");
 

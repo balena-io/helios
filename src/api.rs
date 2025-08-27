@@ -23,11 +23,14 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::legacy::{proxy, ProxyConfig, ProxyState};
 use crate::remote::PollRequest;
 use crate::state::models::{App, Device, TargetApp, TargetDevice};
 use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
 use crate::types::Uuid;
+use crate::{
+    legacy::{proxy, ProxyConfig, ProxyState},
+    util::ack_watch,
+};
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -84,7 +87,7 @@ type LocalStateRx = Receiver<LocalState>;
 #[instrument(name = "api", skip_all)]
 pub async fn start(
     listener: Listener,
-    seek_request_tx: Sender<SeekRequest>,
+    seek_request_tx: ack_watch::Sender<SeekRequest>,
     poll_request_tx: Sender<PollRequest>,
     state_rx: LocalStateRx,
     proxy_config: Option<ProxyConfig>,
@@ -203,7 +206,7 @@ async fn get_app_cur_state(
 ///
 /// Sets the target state for the device apps
 async fn set_app_tgt_state(
-    seek_request_tx: Sender<SeekRequest>,
+    seek_request_tx: ack_watch::Sender<SeekRequest>,
     State(state_rx): State<LocalStateRx>,
     Path(app_uuid): Path<Uuid>,
     Query(opts): Query<UpdateOpts>,
@@ -214,20 +217,23 @@ async fn set_app_tgt_state(
     // - convert it to a target
     // - replace the relevant part of the target with the input
     // - send the full target to the channel
-    let state = state_rx.borrow();
+    let state = state_rx.borrow().clone();
     let device = state.device.clone();
     let mut target: TargetDevice = device.into();
     target.apps.insert(app_uuid, app);
 
-    if seek_request_tx
-        .send(SeekRequest {
+    if let Err(e) = seek_request_tx
+        .send_and_wait(SeekRequest {
             target,
             opts,
             raw_target: None,
         })
-        .is_err()
+        .await
     {
-        return StatusCode::SERVICE_UNAVAILABLE;
+        match e {
+            ack_watch::SendError::Closed => return StatusCode::SERVICE_UNAVAILABLE,
+            ack_watch::SendError::Dropped => return StatusCode::CONFLICT,
+        }
     }
 
     StatusCode::ACCEPTED
@@ -245,9 +251,9 @@ mod tests {
     async fn setup_test_server() -> (
         u16,
         watch::Receiver<PollRequest>,
-        watch::Receiver<SeekRequest>,
+        ack_watch::Receiver<SeekRequest>,
     ) {
-        let (seek_request_tx, seek_rx) = watch::channel(SeekRequest {
+        let (seek_request_tx, seek_rx) = ack_watch::channel(SeekRequest {
             target: TargetDevice::default(),
             opts: UpdateOpts::default(),
             raw_target: None,
@@ -333,20 +339,27 @@ mod tests {
 
         let app_uuid = Uuid::default();
         let target_app = TargetApp::default();
-        let response = client
-            .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
-            .json(&target_app)
-            .send()
-            .await
-            .unwrap();
 
-        assert_eq!(response.status(), 202);
+        let handle = {
+            let app_uuid = app_uuid.clone();
+            tokio::spawn(async move {
+                client
+                    .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
+                    .json(&target_app)
+                    .send()
+                    .await
+                    .unwrap()
+            })
+        };
 
-        assert!(seek_rx.changed().await.is_ok());
-        let seek_request = seek_rx.borrow().clone();
+        let req = seek_rx.recv().await.unwrap();
+        let seek_request = req.accept();
         assert!(!seek_request.opts.force);
         assert!(!seek_request.opts.cancel); // API default via serde is false
         assert!(seek_request.target.apps.contains_key(&app_uuid));
+
+        let response = handle.await.unwrap();
+        assert_eq!(response.status(), 202);
     }
 
     #[tokio::test]
@@ -356,20 +369,89 @@ mod tests {
 
         let app_uuid = Uuid::default();
         let target_app = TargetApp::default();
-        let response = client
-            .post(format!(
-                "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true",
-            ))
-            .json(&target_app)
-            .send()
-            .await
-            .unwrap();
 
-        assert_eq!(response.status(), 202);
+        let handle = {
+            let app_uuid = app_uuid.clone();
+            tokio::spawn(async move {
+                client
+                    .post(format!(
+                        "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true",
+                    ))
+                    .json(&target_app)
+                    .send()
+                    .await
+                    .unwrap()
+            })
+        };
 
-        assert!(seek_rx.changed().await.is_ok());
-        let seek_request = seek_rx.borrow().clone();
+        let req = seek_rx.recv().await.unwrap();
+        let seek_request = req.accept();
         assert!(seek_request.opts.force);
         assert!(seek_request.target.apps.contains_key(&app_uuid));
+
+        let response = handle.await.unwrap();
+        assert_eq!(response.status(), 202);
+    }
+
+    #[tokio::test]
+    async fn test_set_app_with_rejection() {
+        let (port, _, mut seek_rx) = setup_test_server().await;
+
+        let app_uuid = Uuid::default();
+        let target_app = TargetApp::default();
+
+        let handle_orig = {
+            let client = reqwest::Client::new();
+            let app_uuid = app_uuid.clone();
+            let target_app = target_app.clone();
+            tokio::spawn(async move {
+                client
+                    .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
+                    .json(&target_app)
+                    .send()
+                    .await
+                    .unwrap()
+            })
+        };
+
+        let handle_replacement = {
+            let client = reqwest::Client::new();
+            let app_uuid = app_uuid.clone();
+            let target_app = TargetApp {
+                name: Some("app-name".to_string()),
+                ..target_app
+            };
+            tokio::spawn(async move {
+                client
+                    .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
+                    .json(&target_app)
+                    .send()
+                    .await
+                    .unwrap()
+            })
+        };
+
+        // give it some time so the original request gets replaced
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let req = seek_rx.recv().await.unwrap();
+        let seek_request = req.accept();
+        assert!(!seek_request.opts.force);
+        assert!(!seek_request.opts.cancel); // API default via serde is false
+        assert!(seek_request.target.apps.contains_key(&app_uuid));
+        assert_eq!(
+            seek_request
+                .target
+                .apps
+                .get(&app_uuid)
+                .and_then(|app| app.name.as_ref()),
+            Some(&"app-name".to_string())
+        );
+
+        let response = handle_orig.await.unwrap();
+        assert_eq!(response.status(), 409);
+
+        let response = handle_replacement.await.unwrap();
+        assert_eq!(response.status(), 202);
     }
 }

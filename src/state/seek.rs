@@ -9,16 +9,14 @@ use std::{
     future::{self, Future},
     pin::Pin,
 };
-use tokio::sync::{
-    watch::{Receiver, Sender},
-    Notify,
-};
+use tokio::sync::{watch::Sender, Notify};
 use tracing::{error, info, instrument, trace};
 
 use crate::types::Uuid;
 use crate::{
     legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
     types::DeviceType,
+    util::ack_watch,
 };
 
 use super::models::{Device, TargetDevice};
@@ -125,17 +123,18 @@ enum SeekState {
 
 type SeekResult = Result<SeekState, SeekError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum SeekAction {
     Terminate,
-    Apply(SeekRequest),
+    Apply(ack_watch::Req<SeekRequest>),
     Report(Device),
     Complete(SeekState),
 }
 
 // Helper struct to keep track of the next seek request
 struct NextTarget {
-    next: Option<SeekRequest>,
+    next: Option<ack_watch::Req<SeekRequest>>,
     notify: Notify,
 }
 
@@ -147,7 +146,7 @@ impl NextTarget {
         }
     }
 
-    fn set(&mut self, next: SeekRequest) {
+    fn set(&mut self, next: ack_watch::Req<SeekRequest>) {
         self.next = Some(next);
     }
 
@@ -157,7 +156,7 @@ impl NextTarget {
         }
     }
 
-    async fn wait(&mut self) -> SeekRequest {
+    async fn wait(&mut self) -> ack_watch::Req<SeekRequest> {
         let notify = &self.notify;
         // We loop here to apease the compiler, but no notification
         // will happen if self.next is None
@@ -184,7 +183,7 @@ pub async fn start_seek(
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
-    mut seek_rx: Receiver<SeekRequest>,
+    mut seek_rx: ack_watch::Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
 ) -> Result<(), SeekError> {
     info!("waiting for target");
@@ -218,14 +217,14 @@ pub async fn start_seek(
             biased;
 
             // Wake on update request
-            update_requested = seek_rx.changed() => {
-                if update_requested.is_err() {
+            seek_res = seek_rx.recv() => {
+                if let Ok(req) = seek_res {
+                    SeekAction::Apply(req.clone())
+                }
+                else {
                     // Not really an error, it just means the API closed
                     trace!("request channel closed");
                     SeekAction::Terminate
-                } else {
-                    let update_req = seek_rx.borrow_and_update().clone();
-                    SeekAction::Apply(update_req)
                 }
             }
 
@@ -307,10 +306,18 @@ pub async fn start_seek(
                     if update_req.raw_target.is_none()
                         && matches!(prev_seek_state, SeekState::Legacy)
                     {
+                        // XXX: this makes the ack_watch tricky because we now have two
+                        // copies of the request, one that goes into the async block (local)
+                        // and one that goes on the queue. When the local copy gets dropped, even
+                        // if it is not used, then it will trigger a 409 response from the API,
+                        // even if the queued message gets used later.
+                        // If we didn't have the legacy update, this would not be an issue
                         next_target.set(update_req.clone());
                     }
 
                     Box::pin(async move {
+                        // accept the request once the async block starts being processed
+                        let update_req = update_req.accept().clone();
                         let mut status = UpdateStatus::ApplyingChanges;
                         if !matches!(prev_seek_state, SeekState::Legacy) {
                             // Reset the target state so a supervisor poll cannot
@@ -321,7 +328,7 @@ pub async fn start_seek(
 
                             // Apply the target
                             status = tokio::select! {
-                                status = worker.seek_target(update_req.target.clone()) => status?.into(),
+                                status = worker.seek_target(update_req.target) => status?.into(),
                                 _ = interrupt.wait() => {
                                     return Ok(SeekState::Local(UpdateStatus::Interrupted))
                                 }
