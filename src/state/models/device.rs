@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 
+use crate::remote::RegistryAuth;
 use crate::types::{DeviceType, Uuid};
+use crate::util::docker::ImageUri;
 
 use super::app::{App, TargetAppMap};
 use super::image::Image;
 
-pub type DeviceConfig = HashMap<String, String>;
+pub type DeviceConfig = BTreeMap<String, String>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Host {
@@ -33,6 +35,8 @@ impl Default for Host {
     }
 }
 
+pub type RegistryAuthSet = HashSet<RegistryAuth>;
+
 /// The current state of a device that will be stored
 /// by the worker
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -51,17 +55,23 @@ pub struct Device {
     #[serde(default)]
     pub host: Host,
 
+    #[serde(default)]
+    pub auths: RegistryAuthSet,
+
     /// List of docker images on the device
     #[serde(default)]
-    pub images: HashMap<String, Image>,
+    pub images: BTreeMap<ImageUri, Image>,
 
     /// Apps on the device
     #[serde(default)]
-    pub apps: HashMap<Uuid, App>,
+    pub apps: BTreeMap<Uuid, App>,
 
     /// Config vars
     #[serde(default)]
     pub config: DeviceConfig,
+
+    #[serde(default)]
+    pub needs_cleanup: bool,
 }
 
 impl Device {
@@ -71,9 +81,11 @@ impl Device {
             name: None,
             device_type,
             host,
-            images: HashMap::new(),
-            apps: HashMap::new(),
-            config: HashMap::new(),
+            auths: RegistryAuthSet::new(),
+            images: BTreeMap::new(),
+            apps: BTreeMap::new(),
+            config: BTreeMap::new(),
+            needs_cleanup: false,
         }
     }
 }
@@ -83,7 +95,7 @@ impl Device {
 /// For Mahler, the target must be a structural subtype of the internal
 /// state, meaning the state should be serializable into the target.
 /// If they don't, planning will fail
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetDevice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -93,12 +105,19 @@ pub struct TargetDevice {
 
     #[serde(default)]
     pub config: DeviceConfig,
+
+    #[serde(default)]
+    pub needs_cleanup: bool,
 }
 
 impl From<Device> for TargetDevice {
     fn from(device: Device) -> Self {
         let Device {
-            name, apps, config, ..
+            name,
+            apps,
+            config,
+            needs_cleanup,
+            ..
         } = device;
         Self {
             name,
@@ -107,6 +126,7 @@ impl From<Device> for TargetDevice {
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
             config,
+            needs_cleanup,
         }
     }
 }

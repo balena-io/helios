@@ -1136,9 +1136,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mahler"
-version = "0.18.0"
+version = "0.19.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6201eb009a9abc98b114fce3c079200a4ecd3b07e673794b3b228215d3196528"
+checksum = "ab0731ebbbf3a0d6eaa592ada2fff61371a2394e9ab3e017862195f6c8ba4166"
 dependencies = [
  "anyhow",
  "async-trait",

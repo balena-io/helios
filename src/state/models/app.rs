@@ -1,44 +1,56 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     ops::{Deref, DerefMut},
 };
 
 use crate::types::Uuid;
 
+use super::{ReleaseMap, TargetReleaseMap};
+
 /// The internal state of the app
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct App {
     pub id: u32,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    #[serde(default)]
+    pub releases: ReleaseMap,
 }
 
-// Target app definition, the
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+// Target app definition, used as input to the worker
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TargetApp {
-    /// app id on the remote backend. This only exists for legacy reasons
+    /// App id on the remote backend. This only exists for legacy reasons
     /// and should be removed at some point.
     ///
     /// We use 0 as the default to not make the id required
     #[serde(default)]
     pub id: u32,
 
-    /// the target app name
+    /// The target app name
     ///
     /// while this value is technically never null, we need to be able to
     /// convert from App into TargetApp
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// Target app releases
+    #[serde(default)]
+    pub releases: TargetReleaseMap,
 }
 
-#[derive(Debug, Serialize, Default, Clone)]
-pub struct TargetAppMap(HashMap<Uuid, TargetApp>);
+/// Target apps model
+///
+/// This type exists for controlling/validating deserialization of target apps
+#[derive(Debug, Serialize, Default, Clone, PartialEq, Eq)]
+pub struct TargetAppMap(BTreeMap<Uuid, TargetApp>);
 
 impl Deref for TargetAppMap {
-    type Target = HashMap<Uuid, TargetApp>;
+    type Target = BTreeMap<Uuid, TargetApp>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -55,9 +67,9 @@ impl<'de> Deserialize<'de> for TargetAppMap {
     where
         D: serde::Deserializer<'de>,
     {
-        let apps_value: HashMap<Uuid, Value> = HashMap::deserialize(deserializer)?;
+        let apps_value: BTreeMap<Uuid, Value> = BTreeMap::deserialize(deserializer)?;
 
-        let mut target_apps = HashMap::new();
+        let mut target_apps = BTreeMap::new();
 
         for (uuid, app_value) in apps_value {
             let is_host = app_value
@@ -78,14 +90,21 @@ impl<'de> Deserialize<'de> for TargetAppMap {
 
 impl FromIterator<(Uuid, TargetApp)> for TargetAppMap {
     fn from_iter<T: IntoIterator<Item = (Uuid, TargetApp)>>(iter: T) -> Self {
-        Self(HashMap::from_iter(iter))
+        Self(BTreeMap::from_iter(iter))
     }
 }
 
 impl From<App> for TargetApp {
     fn from(app: App) -> Self {
-        let App { id, name } = app;
-        Self { id, name }
+        let App { id, name, releases } = app;
+        Self {
+            id,
+            name,
+            releases: releases
+                .into_iter()
+                .map(|(commit, rel)| (commit, rel.into()))
+                .collect(),
+        }
     }
 }
 

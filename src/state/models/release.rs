@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     ops::{Deref, DerefMut},
 };
 
@@ -7,23 +7,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Uuid;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Release {}
+use super::service::{ServiceMap, TargetServiceMap};
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct TargetRelease {}
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct Release {
+    #[serde(default)]
+    pub services: ServiceMap,
+}
+
+pub type ReleaseMap = BTreeMap<Uuid, Release>;
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct TargetRelease {
+    #[serde(default)]
+    pub services: TargetServiceMap,
+}
 
 impl From<Release> for TargetRelease {
-    fn from(_: Release) -> Self {
-        Self {}
+    fn from(r: Release) -> Self {
+        let Release { services } = r;
+
+        Self {
+            services: services
+                .into_iter()
+                .map(|(name, svc)| (name, svc.into()))
+                .collect(),
+        }
     }
 }
 
-#[derive(Serialize, Debug, Default)]
-pub struct TargetReleaseMap(HashMap<Uuid, TargetRelease>);
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct TargetReleaseMap(BTreeMap<Uuid, TargetRelease>);
 
 impl Deref for TargetReleaseMap {
-    type Target = HashMap<Uuid, TargetRelease>;
+    type Target = BTreeMap<Uuid, TargetRelease>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -37,7 +54,7 @@ impl DerefMut for TargetReleaseMap {
 
 impl FromIterator<(Uuid, TargetRelease)> for TargetReleaseMap {
     fn from_iter<T: IntoIterator<Item = (Uuid, TargetRelease)>>(iter: T) -> Self {
-        Self(HashMap::from_iter(iter))
+        Self(BTreeMap::from_iter(iter))
     }
 }
 
@@ -46,7 +63,7 @@ impl<'de> Deserialize<'de> for TargetReleaseMap {
     where
         D: serde::Deserializer<'de>,
     {
-        let releases: HashMap<Uuid, TargetRelease> = HashMap::deserialize(deserializer)?;
+        let releases: BTreeMap<Uuid, TargetRelease> = BTreeMap::deserialize(deserializer)?;
 
         if releases.len() > 1 {
             return Err(serde::de::Error::custom(

@@ -7,7 +7,7 @@ use crate::util::crypto::{pseudorandom_string, ALPHA_NUM};
 // Just an alias for more descriptive code
 pub type DeviceType = String;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uuid(String);
 
 impl Deref for Uuid {

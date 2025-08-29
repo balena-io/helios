@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bollard::secret::ImageInspect;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Image {
     /// Container engine id
     #[serde(skip_serializing_if = "Option::is_none")]
