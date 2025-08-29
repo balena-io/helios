@@ -1,4 +1,90 @@
 - commits:
+    - subject: Use BTreeMap rather than HashMap for models
+      hash: 7d7366ddaa1e4916a5007b8324db9339c9b63feb
+      body: |
+        This preserves the serialization order and ensures consistency in the
+        generated workflows, avoiding flakyness in the tests.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add clean-up tasks
+      hash: 91ac5e437823a731cbdd410e67ebefc10dd92847
+      body: |
+        Every workflow should now start with an "ensure cleanup" task
+        and finish with a "perform cleanup". This should allow that the state of
+        the system (and the internal helios state) remain healthy.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Add registry credentials management
+      hash: ed5ed51b8bd8d4070ebd876c46d9c0a092ff8d1d
+      body: |
+        This makes use of the /auth/v1/token endpoint to request a registry
+        token scoped to image pulls. This allows secure access to image pulls
+        without leaking the device api key.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Add task to fetch service image.
+      hash: 337fcfc3a087f96faafc6a74ad172c9e104ddcb4
+      body: |
+        The fetch service image will re-tag any existing images with the same
+        digest or pull the image otherwise. This also adds credentials handling.
+
+        This comit updates Mahler to v0.19.5 to use the latest concurrency
+        improvements and bug fixes
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add task to tag image
+      hash: 6f3e2cb8326dc90350a447716e7f054ee03850a8
+      body: |
+        Tagging images is a necessary step when a local image with the same
+        digest already exists.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add image pull/remove tasks to worker
+      hash: 4bdb476b96d7aea1f72d8ee69d82db5cf266a2e5
+      body: ""
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Create docker::ImageUri type to handle URI manipulation
+      hash: 9f2fa18ab2e10aba96bba172e1c3aed44c04c61c
+      body: |
+        This replaces the get_image_parts and normalise functions in
+        util::docker and uses the same type for all image URI operations
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use shared docker connection
+      hash: be53a0b2b8823f23e8aaf192b5eb5f5b11046a15
+      body: |
+        Passes docker connection from main into relevant components.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.9.0
+  title: ""
+  date: 2025-08-29T06:28:05.506Z
+- commits:
     - subject: Remove POST /v3/device API endpoint
       hash: 3011edff6643f3f1026165375d5b6c739a096c35
       body: |
