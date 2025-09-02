@@ -1,4 +1,17 @@
 - commits:
+    - subject: Fix setup-supervisor script to use latest CLI config
+      hash: 9211d355c58c5f6c84f4824022fad5a05464ebf3
+      body: |
+        We missed this during the CLI refactor
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.9.2
+  title: ""
+  date: 2025-09-02T14:57:04.676Z
+- commits:
     - subject: Update README with project goals and architecture
       hash: 8bc28a64790e4a0154281d971130b47577059cbe
       body: ""
