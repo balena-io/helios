@@ -1,4 +1,16 @@
 - commits:
+    - subject: Update README with project goals and architecture
+      hash: 8bc28a64790e4a0154281d971130b47577059cbe
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.9.1
+  title: ""
+  date: 2025-09-02T09:31:28.968Z
+- commits:
     - subject: Use BTreeMap rather than HashMap for models
       hash: 7d7366ddaa1e4916a5007b8324db9339c9b63feb
       body: |
