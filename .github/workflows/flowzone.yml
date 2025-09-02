@@ -49,7 +49,7 @@ jobs:
     secrets: inherit
     with:
       docker_images: |
-        ghcr.io/balena-io-experimental/helios
+        ghcr.io/balena-io/helios
       # The dockerfile runs its own tests so only test building
       # for aarch64
       cargo_targets: aarch64-unknown-linux-gnu
