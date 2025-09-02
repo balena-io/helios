@@ -150,20 +150,13 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
 mod tests {
     use serde_json::json;
 
-    use crate::state::models::{Device, Host};
+    use crate::state::models::Device;
 
     use super::*;
 
     #[test]
     fn it_creates_a_device_report_from_a_device() {
-        let device = Device::new(
-            "test-uuid".into(),
-            Some("generic-aarch64".into()),
-            Host {
-                os: "balenaOS 5.3.1".into(),
-                arch: "aarch64".into(),
-            },
-        );
+        let device = Device::new("test-uuid".into(), "balenaOS 5.3.1".parse().ok());
 
         let report = Report::from(LocalState {
             status: crate::state::UpdateStatus::Done,

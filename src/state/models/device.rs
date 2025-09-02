@@ -2,38 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
 use crate::remote::RegistryAuth;
-use crate::types::{DeviceType, Uuid};
+use crate::types::{OperatingSystem, Uuid};
 use crate::util::docker::ImageUri;
 
 use super::app::{App, TargetAppMap};
 use super::image::Image;
 
 pub type DeviceConfig = BTreeMap<String, String>;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Host {
-    pub os: String,
-    pub arch: String,
-}
-
-impl Default for Host {
-    fn default() -> Self {
-        // See list in https://doc.rust-lang.org/std/env/consts/constant.ARCH.html
-        let arch: String = match std::env::consts::ARCH {
-            "x86" => "i386",
-            "x86_64" => "amd64",
-            "arm" => "armv7hf",
-            "aarch64" => "aarch64",
-            other => other,
-        }
-        .into();
-
-        // See list in https://doc.rust-lang.org/std/env/consts/constant.OS.html
-        let os: String = std::env::consts::OS.into();
-
-        Self { os, arch }
-    }
-}
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
@@ -47,13 +22,8 @@ pub struct Device {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// The device type accepted by the backend
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_type: Option<String>,
-
-    /// Host system info
-    #[serde(default)]
-    pub host: Host,
+    pub os: Option<OperatingSystem>,
 
     #[serde(default)]
     pub auths: RegistryAuthSet,
@@ -75,12 +45,11 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(uuid: Uuid, device_type: Option<DeviceType>, host: Host) -> Self {
+    pub fn new(uuid: Uuid, os: Option<OperatingSystem>) -> Self {
         Self {
             uuid,
             name: None,
-            device_type,
-            host,
+            os,
             auths: RegistryAuthSet::new(),
             images: BTreeMap::new(),
             apps: BTreeMap::new(),
@@ -140,9 +109,9 @@ mod tests {
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
             "uuid": "device-uuid",
-            "host": {
-                "os": "balenaOS 6.3.1",
-                "arch": "aarch64"
+            "os": {
+                "name": "balenaOS",
+                "version": "6.5.4",
             },
             "apps": {
                 "aaa": {

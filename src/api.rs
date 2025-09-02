@@ -235,8 +235,6 @@ async fn set_app_tgt_state(
 
 #[cfg(test)]
 mod tests {
-    use crate::state::models::Host;
-
     use super::*;
     use serde_json::json;
     use tokio::net::TcpListener;
@@ -253,14 +251,7 @@ mod tests {
             raw_target: None,
         });
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
-        let device = Device::new(
-            Uuid::default(),
-            Some("generic-aarch64".into()),
-            Host {
-                os: "balenaOS 6.3.1".into(),
-                arch: "aarch64".into(),
-            },
-        );
+        let device = Device::new(Uuid::default(), "balenaOS 6.3.1".parse().ok());
         let local_state = LocalState {
             device,
             status: UpdateStatus::default(),
