@@ -3,7 +3,7 @@ use std::num::ParseIntError;
 use std::time::Duration;
 
 use crate::api::LocalAddress;
-use crate::types::{ApiKey, Uuid};
+use crate::types::{ApiKey, OperatingSystem, Uuid};
 use crate::util::http::Uri;
 
 fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
@@ -17,6 +17,10 @@ pub struct Cli {
     /// Unique identifier for this device
     #[arg(env = "HELIOS_UUID", long = "uuid", value_name = "uuid")]
     pub uuid: Option<Uuid>,
+
+    /// Host OS name and version with metadata, eg. "balenaOS 6.5.39+rev1"
+    #[arg(env = "HELIOS_OS_VERSION", long = "os-version", value_name = "str")]
+    pub os: Option<OperatingSystem>,
 
     /// Local API listen address
     #[arg(

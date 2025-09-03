@@ -33,6 +33,11 @@ unset HELIOS_REMOTE_MIN_INTERVAL_MS
 # Read configuration from BALENA_* variables
 HELIOS_DEVICE_UUID="${BALENA_DEVICE_UUID}"
 
+if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
+  HELIOS_OS_VERSION="${BALENA_HOST_OS_VERSION}"
+  export HELIOS_OS_VERSION
+fi
+
 # Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"

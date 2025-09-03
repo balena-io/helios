@@ -28,7 +28,7 @@ use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use crate::remote::{
     provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
 };
-use crate::types::Uuid;
+use crate::types::{OperatingSystem, Uuid};
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -82,8 +82,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
 
     let (uuid, remote_config) = maybe_provision(&cli).await?;
+    let os = cli.os.clone();
 
-    start_supervisor(uuid, api_config, remote_config, legacy_config).await?;
+    start_supervisor(uuid, os, api_config, remote_config, legacy_config).await?;
 
     Ok(())
 }
@@ -91,6 +92,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[instrument(name = "helios", skip_all, err)]
 async fn start_supervisor(
     uuid: Uuid,
+    os: Option<OperatingSystem>,
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
@@ -105,7 +107,7 @@ async fn start_supervisor(
 
     // Load the initial state
     let docker = Docker::connect_with_defaults()?;
-    let initial_state = state::read(&docker, uuid.clone(), None).await?;
+    let initial_state = state::read(&docker, uuid.clone(), os).await?;
 
     let registry_auth = remote_config.clone().map(RegistryAuthClient::new);
 
