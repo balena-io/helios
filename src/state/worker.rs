@@ -266,12 +266,10 @@ fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> 
 /// Tag an existing image with a new name
 fn tag_image(
     image: View<Option<Image>>,
-    Target(tgt): Target<Image>,
+    Target((tgt_uri, tgt_img)): Target<(ImageUri, Image)>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
 ) -> IO<Option<Image>, DockerError> {
-    let tgt_engine_id = tgt.engine_id.clone();
-
     with_io(image, |image| async move {
         let docker = docker
             .as_ref()
@@ -280,12 +278,9 @@ fn tag_image(
         let repo = image_name.repo();
         let tag = image_name.tag().clone();
 
-        // catch any inconsistencies when using the task within a method. If this
-        // happens there is a bug
-        let engine_id = tgt_engine_id.expect("target image should include an engine id");
         docker
             .tag_image(
-                &engine_id,
+                tgt_uri.as_str(),
                 Some(TagImageOptions {
                     repo: Some(repo),
                     tag,
@@ -293,7 +288,7 @@ fn tag_image(
             )
             .await
             .map_err(|source| DockerError {
-                context: format!("failed to tag image {engine_id} with {image_name}"),
+                context: format!("failed to tag image {tgt_uri} with {image_name}"),
                 source,
             })?;
 
@@ -301,7 +296,7 @@ fn tag_image(
     })
     // set the to the target
     .map(|mut image| {
-        image.replace(tgt);
+        image.replace(tgt_img);
         image
     })
 }
@@ -410,12 +405,12 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
     if let Some(digest) = image_name.digest() {
         let existing = device
             .images
-            .iter()
+            .into_iter()
             .find(|(name, _)| name.digest().as_ref().is_some_and(|d| d == digest));
 
-        if let Some((_, image)) = existing {
+        if let Some((img_uri, img)) = existing {
             // If an image with the same digest exists, we just need to tag it
-            return Some(tag_image.with_target(image.clone()));
+            return Some(tag_image.with_target((img_uri, img)));
         }
     }
 
@@ -563,12 +558,9 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                     format!("delete image '{image_name}'")
                 }),
                 task::none(tag_image).with_description(
-                    |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        if let Some(engine_id) = &tgt.engine_id {
-                            format!("tag image {engine_id} with '{image_name}'")
-                        } else {
-                            format!("tag image '{image_name}'")
-                        }
+                    |Args(image_name): Args<ImageUri>,
+                     Target((src_uri, _)): Target<(ImageUri, Image)>| {
+                        format!("tag image '{src_uri}' with '{}'", image_name.repo())
                     },
                 ),
                 task::none(create_image),
@@ -845,7 +837,7 @@ mod tests {
                 "pull image 'alpine:latest'",
             )
             + par!(
-                "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                "tag image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080' with 'registry2.balena-cloud.com/v2/deafc41f'",
                 "pull image 'alpine:3.20'",
             )
             + seq!(
