@@ -1,4 +1,56 @@
 - commits:
+    - subject: Ignore HELIOS_REMOTE_* credentials in the container
+      hash: 2665ec76da06f4695ba3c7760763f9284db16579
+      body: |
+        This prevents a user trying to get a device to masquerade as a separate
+        device by setting UUID/KEY
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Read host OS version from CLI
+      hash: 381452ca60ef592589ffd11f1cba1602b397594b
+      body: >
+        The information is available in the BALENA_HOST_OS_VERSION variable and
+
+        we take advantage of that rather than trying to read the data from the
+
+        engine that was causing a crash due to
+        https://github.com/fussybeaver/bollard/issues/582
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Refactor Host type into OperatingSystem
+      hash: e81a8eec10fbe2c40c6dbcda53e8663d4854fe28
+      body: >
+        The new OperatingSystem type parses a OS version string, e.g. `balenaOS
+        6.5.3+rev2` into the
+
+        corresponding parts.
+
+
+        This also removes the arch property, the architecture is a property of
+        the device
+
+        type and is used as container metadata and for contracts in the legacy
+
+        supervisor. We'll re-evaluate adding it at that point. This commit also
+
+        removes the `device_type` property from the `Device` type for the same
+
+        reason.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+  version: 0.10.0
+  title: ""
+  date: 2025-09-04T07:32:02.246Z
+- commits:
     - subject: Fix setup-supervisor script to use latest CLI config
       hash: 9211d355c58c5f6c84f4824022fad5a05464ebf3
       body: |
