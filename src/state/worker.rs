@@ -889,4 +889,66 @@ mod tests {
             "unexpected plan:\n{workflow}"
         );
     }
+
+    // The worker doesn't have any tasks to update services or delete releases
+    // so this plan should fail
+    #[tokio::test]
+    async fn it_fails_to_find_a_workflow_for_updating_services() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "old-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "new-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        // this should return Err(NotFound) and not panic
+        let workflow = worker().find_workflow(initial_state, target);
+        assert!(workflow.is_err(), "unexpected plan:\n{}", workflow.unwrap());
+    }
 }
