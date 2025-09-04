@@ -31,7 +31,15 @@ unset HELIOS_REMOTE_MIN_INTERVAL_MS
 # - io.balena.features.balena-api: '1'
 
 # Read configuration from BALENA_* variables
-HELIOS_DEVICE_UUID="${BALENA_DEVICE_UUID}"
+# Ignore any credentials env vars and use BALENA_DEVICE_UUID by default
+HELIOS_UUID="${BALENA_DEVICE_UUID}"
+export HELIOS_UUID
+unset HELIOS_REMOTE_API_KEY
+
+if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
+  HELIOS_OS_VERSION="${BALENA_HOST_OS_VERSION}"
+  export HELIOS_OS_VERSION
+fi
 
 # Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
@@ -57,4 +65,4 @@ export XDG_STATE_HOME=/local
 rm /tmp/run/helios.sock 2>/dev/null || true
 
 # Start the new supervisor
-exec helios --uuid "${HELIOS_DEVICE_UUID}" --local-api-address /tmp/run/helios.sock
+exec helios --local-api-address /tmp/run/helios.sock

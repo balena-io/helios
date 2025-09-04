@@ -192,7 +192,7 @@ pub async fn start_seek(
 
     // Keep track of the current state and update status
     let uuid = initial_state.uuid.clone();
-    let device_type = initial_state.device_type.clone();
+    let os = initial_state.os.clone();
     let mut current_state = initial_state.clone();
     let mut update_status = UpdateStatus::default();
 
@@ -395,8 +395,7 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state =
-                        read_state(docker, uuid.clone(), device_type.clone()).await?;
+                    let initial_state = read_state(docker, uuid.clone(), os.clone()).await?;
 
                     worker = create(docker.clone(), registry_auth_client.clone(), initial_state)?;
                     worker_stream = worker.follow();
