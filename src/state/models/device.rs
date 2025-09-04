@@ -8,8 +8,6 @@ use crate::util::docker::ImageUri;
 use super::app::{App, TargetAppMap};
 use super::image::Image;
 
-pub type DeviceConfig = BTreeMap<String, String>;
-
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
 /// The current state of a device that will be stored
@@ -36,10 +34,6 @@ pub struct Device {
     #[serde(default)]
     pub apps: BTreeMap<Uuid, App>,
 
-    /// Config vars
-    #[serde(default)]
-    pub config: DeviceConfig,
-
     #[serde(default)]
     pub needs_cleanup: bool,
 }
@@ -53,7 +47,6 @@ impl Device {
             auths: RegistryAuthSet::new(),
             images: BTreeMap::new(),
             apps: BTreeMap::new(),
-            config: BTreeMap::new(),
             needs_cleanup: false,
         }
     }
@@ -73,9 +66,6 @@ pub struct TargetDevice {
     pub apps: TargetAppMap,
 
     #[serde(default)]
-    pub config: DeviceConfig,
-
-    #[serde(default)]
     pub needs_cleanup: bool,
 }
 
@@ -84,7 +74,6 @@ impl From<Device> for TargetDevice {
         let Device {
             name,
             apps,
-            config,
             needs_cleanup,
             ..
         } = device;
@@ -94,7 +83,6 @@ impl From<Device> for TargetDevice {
                 .into_iter()
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
-            config,
             needs_cleanup,
         }
     }
@@ -123,7 +111,6 @@ mod tests {
                     "id": 123
                 }
             },
-
             "images": {
                 "ubuntu": {
                     "engine_id": "ccc"
