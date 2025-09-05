@@ -23,7 +23,7 @@ use crate::util::docker::ImageUri;
 
 use super::models::{
     App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
-    TargetRelease, TargetService,
+    TargetService,
 };
 
 #[derive(Error, Debug)]
@@ -111,17 +111,17 @@ fn set_app_name(
 }
 
 /// Find an installed service for a different commit
-fn find_installed_service(
-    device: &Device,
-    app_uuid: Uuid,
-    commit: Uuid,
-    service_name: String,
-) -> Option<&Service> {
-    device.apps.get(&app_uuid).and_then(|app| {
+fn find_installed_service<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    service_name: &'a String,
+) -> Option<&'a Service> {
+    device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()
-            .filter(|(c, _)| c != &&commit)
-            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &&service_name))
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &service_name))
             .map(|(_, s)| s)
             .next()
     })
@@ -171,9 +171,9 @@ fn request_registry_token_for_new_images(
                         // and there is no service from a different release
                         find_installed_service(
                             &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*service_name).clone(),
+                            app_uuid,
+                            commit,
+                            service_name,
                         )
                         // or there is a service and the digest doesn't match the target digest
                         .is_none_or(|s| {
@@ -188,7 +188,7 @@ fn request_registry_token_for_new_images(
 
     // Group images to install by registry
     let tgt_auths: RegistryAuthSet = images_to_install
-        .iter()
+        .into_iter()
         .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
             if let Some(service) = img.registry().clone() {
                 if let Some(scope) = acc.get_mut(&service) {
@@ -212,39 +212,49 @@ fn request_registry_token_for_new_images(
     Some(request_registry_credentials.with_target(tgt_auths))
 }
 
-/// Install all new images for a release
-fn fetch_release_images(
+/// Install all new images for target apps
+///
+/// NOTE: this and [`request_registry_token_for_new_images`] are expensive operations
+/// (`O(num_of_services^2)` in the worst case) and they are assigned to `update` operations on `/apps`
+/// on the worker configuration.
+/// This means they will be executed pretty much for every search iteration of the planner.
+/// `num_of_services` is usually small and the search will be closer to `O(num_of_services)` if
+/// there are no images to install so this might not have a ton of impact but there might
+/// be some future optimization to consider.
+fn fetch_apps_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<TargetRelease>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    Target(tgt_apps): Target<TargetAppMap>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
-    let images_to_install: Vec<ImageUri> = tgt_release
-        .services
-        .into_iter()
-        .filter(|(service_name, svc)| {
-            // if the service image has not been downloaded
-            !device.images.contains_key(&svc.image) &&
-            // and there is no service from a different release
-            find_installed_service(
-                    &device,
-                    app_uuid.clone(),
-                    commit.clone(),
-                    (*service_name).clone(),
-                )
-                // or if there is a service, then only chose it if it has the same digest 
-                // as the target service
-                .is_none_or(|s| {
-                    s.image.digest().is_some() && svc.image.digest() == s.image.digest()
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release.services.iter().filter(|(service_name, svc)| {
+                    // if the service image has not been downloaded
+                    !device.images.contains_key(&svc.image) &&
+                    // and there is no service from a different release
+                    find_installed_service(
+                            &device,
+                            app_uuid,
+                            commit,
+                            service_name,
+                        )
+                        // or if there is a service, then only chose it if it has the same digest
+                        // as the target service
+                        .is_none_or(|s| {
+                            s.image.digest().is_some() && svc.image.digest() == s.image.digest()
+                        })
                 })
+            })
         })
         // remove duplicate digests
-        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc)| {
             if acc
                 .iter()
                 .all(|img| img.digest().is_none() || img.digest() != svc.image.digest())
             {
-                acc.push(svc.image);
+                acc.push(&svc.image);
             }
             acc
         });
@@ -252,7 +262,7 @@ fn fetch_release_images(
     // only download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image))
+        tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
 }
@@ -440,7 +450,7 @@ fn fetch_service_image(
     // If there is a service with the same name in any other releases of the service
     // and the service image has as different digest then we skip the fetch as
     // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, app_uuid, commit, service_name)
+    if find_installed_service(&device, &app_uuid, &commit, &service_name)
         .is_none_or(|svc| svc.image.digest().is_some() && tgt.image.digest() == svc.image.digest())
     {
         return Some(create_image.with_arg("image_name", tgt.image));
@@ -566,7 +576,13 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::none(create_image),
             ],
         )
-        .job("/apps", task::update(request_registry_token_for_new_images))
+        .jobs(
+            "/apps",
+            [
+                task::update(request_registry_token_for_new_images),
+                task::update(fetch_apps_images),
+            ],
+        )
         .job(
             "/apps/{app_uuid}",
             task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
@@ -581,14 +597,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
+            [task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                },
+            )],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
