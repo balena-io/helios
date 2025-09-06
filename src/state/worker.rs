@@ -479,6 +479,25 @@ fn install_service(
     svc
 }
 
+/// Normalize the in-memory service image info
+///
+/// If all that changes from a service is the image, it means the docker image may be missing the
+/// digest expected on the target. In that case we just update the service to allow
+/// the planner to get to the target.
+fn normalize_service_image(
+    mut svc: View<Service>,
+    Target(tgt): Target<TargetService>,
+) -> View<Service> {
+    let TargetService { id, image, .. } = tgt;
+
+    if svc.id != id {
+        return svc;
+    }
+
+    svc.image = image;
+    svc
+}
+
 /// Remove an image
 ///
 /// Condition: the image exists (and there are no services referencing it?)
@@ -610,6 +629,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::create(install_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                task::update(normalize_service_image).with_description(
+                    |Args((_, _, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("normalize image info for service {service_name}")
                     },
                 ),
             ],
