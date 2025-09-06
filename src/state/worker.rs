@@ -479,6 +479,30 @@ fn install_service(
     svc
 }
 
+/// Update the service metadata
+///
+/// The service metadata obtained when reading the state may be wrong,
+/// for instance, we may have read an image name for the service but the target
+/// is expecting a different tag, so this allows to update the image name to the
+/// target once we have updated images.
+///
+/// This is identical to install_service for now
+fn update_service_metadata(
+    mut svc: View<Option<Service>>,
+    System(device): System<Device>,
+    Target(tgt): Target<TargetService>,
+) -> View<Option<Service>> {
+    // Skip the task if the image for the service doesn't exist yet
+    if device.images.keys().all(|img| img != &tgt.image) {
+        return svc;
+    }
+
+    let TargetService { id, image, .. } = tgt;
+
+    svc.replace(Service { id, image });
+    svc
+}
+
 /// Remove an image
 ///
 /// Condition: the image exists (and there are no services referencing it?)
@@ -610,6 +634,13 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::create(install_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                task::update(update_service_metadata).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!(
+                            "update metadata for service '{service_name}' for release '{commit}'"
+                        )
                     },
                 ),
             ],
