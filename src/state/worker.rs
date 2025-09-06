@@ -337,10 +337,30 @@ fn pull_image(
         // the state may have changed from under the worker
         match docker.inspect_image(image_name.as_str()).await {
             Ok(img_info) => {
-                if img_info.id.is_some() {
-                    // If the image exists and has an id, skip
-                    // download
-                    debug!("image already exists, skipping");
+                if let Some(id) = &img_info.id {
+                    // If the image exists and has an id, skip download
+                    debug!("image already exists, skipping download");
+
+                    if let Some(digest) = image_name.digest() {
+                        // we need to add the `sha256-` tag if the image_name has a digest
+                        let repo = image_name.repo();
+                        let tag = digest.replace("sha256:", "sha256-");
+                        debug!("adding tag {tag} to image {image_name}");
+
+                        docker
+                            .tag_image(
+                                id,
+                                Some(TagImageOptions {
+                                    repo: Some(repo),
+                                    tag: Some(tag),
+                                }),
+                            )
+                            .await
+                            .map_err(|source| DockerError {
+                                context: format!("failed to tag image {image_name}"),
+                                source,
+                            })?;
+                    }
                     image.replace(img_info.into());
                     return Ok(image);
                 }
