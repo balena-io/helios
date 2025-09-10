@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     hash::{Hash, Hasher},
     str::FromStr,
+    sync::LazyLock,
 };
 
 use regex::Regex;
@@ -89,14 +90,19 @@ impl Display for ImageUri {
     }
 }
 
+static IMAGE_URI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:(localhost|.*?[.:].*?)/)?(.+?)(?::(.*?))?(?:@(.*?))?$").unwrap()
+});
+
+static IMAGE_DIGEST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-f-A-F]{32,}$").unwrap()
+});
+
 impl FromStr for ImageUri {
     type Err = InvalidImageUriError;
 
     fn from_str(uri: &str) -> Result<Self, Self::Err> {
-        let re = Regex::new(r"^(?:(localhost|.*?[.:].*?)/)?(.+?)(?::(.*?))?(?:@(.*?))?$")
-            .expect("regular expression should compile");
-
-        let caps = re
+        let caps = IMAGE_URI_RE
             .captures(uri)
             .ok_or_else(|| InvalidImageUriError(uri.into()))?;
 
@@ -116,12 +122,7 @@ impl FromStr for ImageUri {
         };
 
         if let Some(ref d) = digest {
-            let digest_re = Regex::new(
-                r"^[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-f-A-F]{32,}$",
-            )
-            .expect("regular expression should compile");
-
-            if !digest_re.is_match(d) {
+            if !IMAGE_DIGEST_RE.is_match(d) {
                 return Err(InvalidImageUriError(uri.into()));
             }
         }
