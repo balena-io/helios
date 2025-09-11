@@ -337,13 +337,10 @@ fn pull_image(
         // the state may have changed from under the worker
         match docker.inspect_image(image_name.as_str()).await {
             Ok(img_info) => {
-                if img_info.id.is_some() {
-                    // If the image exists and has an id, skip
-                    // download
-                    debug!("image already exists, skipping");
-                    image.replace(img_info.into());
-                    return Ok(image);
-                }
+                // If the image exists skip download
+                debug!("image already exists, skipping");
+                image.replace(img_info.into());
+                return Ok(image);
             }
             Err(e) => {
                 if let bollard::errors::Error::DockerResponseServerError { status_code, .. } = e {
