@@ -22,8 +22,8 @@ use crate::types::Uuid;
 use crate::util::docker::ImageUri;
 
 use super::models::{
-    App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,
-    TargetDevice, TargetRelease, TargetService,
+    App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
+    TargetService,
 };
 
 #[derive(Error, Debug)]
@@ -87,17 +87,6 @@ fn set_device_name(
     name
 }
 
-/// Store configuration in memory
-fn store_config(
-    mut config: View<DeviceConfig>,
-    Target(tgt_config): Target<DeviceConfig>,
-) -> View<DeviceConfig> {
-    // If a new config received, just update the in-memory state, the config will be handled
-    // by the legacy supervisor
-    *config = tgt_config;
-    config
-}
-
 /// Initialize the app in memory
 fn prepare_app(
     mut app: View<Option<App>>,
@@ -122,17 +111,17 @@ fn set_app_name(
 }
 
 /// Find an installed service for a different commit
-fn find_installed_service(
-    device: &Device,
-    app_uuid: Uuid,
-    commit: Uuid,
-    service_name: String,
-) -> Option<&Service> {
-    device.apps.get(&app_uuid).and_then(|app| {
+fn find_installed_service<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    service_name: &'a String,
+) -> Option<&'a Service> {
+    device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()
-            .filter(|(c, _)| c != &&commit)
-            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &&service_name))
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &service_name))
             .map(|(_, s)| s)
             .next()
     })
@@ -182,9 +171,9 @@ fn request_registry_token_for_new_images(
                         // and there is no service from a different release
                         find_installed_service(
                             &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*service_name).clone(),
+                            app_uuid,
+                            commit,
+                            service_name,
                         )
                         // or there is a service and the digest doesn't match the target digest
                         .is_none_or(|s| {
@@ -199,7 +188,7 @@ fn request_registry_token_for_new_images(
 
     // Group images to install by registry
     let tgt_auths: RegistryAuthSet = images_to_install
-        .iter()
+        .into_iter()
         .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
             if let Some(service) = img.registry().clone() {
                 if let Some(scope) = acc.get_mut(&service) {
@@ -223,39 +212,49 @@ fn request_registry_token_for_new_images(
     Some(request_registry_credentials.with_target(tgt_auths))
 }
 
-/// Install all new images for a release
-fn fetch_release_images(
+/// Install all new images for target apps
+///
+/// NOTE: this and [`request_registry_token_for_new_images`] are expensive operations
+/// (`O(num_of_services^2)` in the worst case) and they are assigned to `update` operations on `/apps`
+/// on the worker configuration.
+/// This means they will be executed pretty much for every search iteration of the planner.
+/// `num_of_services` is usually small and the search will be closer to `O(num_of_services)` if
+/// there are no images to install so this might not have a ton of impact but there might
+/// be some future optimization to consider.
+fn fetch_apps_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<TargetRelease>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    Target(tgt_apps): Target<TargetAppMap>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
-    let images_to_install: Vec<ImageUri> = tgt_release
-        .services
-        .into_iter()
-        .filter(|(service_name, svc)| {
-            // if the service image has not been downloaded
-            !device.images.contains_key(&svc.image) &&
-            // and there is no service from a different release
-            find_installed_service(
-                    &device,
-                    app_uuid.clone(),
-                    commit.clone(),
-                    (*service_name).clone(),
-                )
-                // or if there is a service, then only chose it if it has the same digest 
-                // as the target service
-                .is_none_or(|s| {
-                    s.image.digest().is_some() && svc.image.digest() == s.image.digest()
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release.services.iter().filter(|(service_name, svc)| {
+                    // if the service image has not been downloaded
+                    !device.images.contains_key(&svc.image) &&
+                    // and there is no service from a different release
+                    find_installed_service(
+                            &device,
+                            app_uuid,
+                            commit,
+                            service_name,
+                        )
+                        // or if there is a service, then only chose it if it has the same digest
+                        // as the target service
+                        .is_none_or(|s| {
+                            s.image.digest().is_some() && svc.image.digest() == s.image.digest()
+                        })
                 })
+            })
         })
         // remove duplicate digests
-        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc)| {
             if acc
                 .iter()
                 .all(|img| img.digest().is_none() || img.digest() != svc.image.digest())
             {
-                acc.push(svc.image);
+                acc.push(&svc.image);
             }
             acc
         });
@@ -263,7 +262,7 @@ fn fetch_release_images(
     // only download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image))
+        tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
 }
@@ -277,12 +276,10 @@ fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> 
 /// Tag an existing image with a new name
 fn tag_image(
     image: View<Option<Image>>,
-    Target(tgt): Target<Image>,
+    Target((tgt_uri, tgt_img)): Target<(ImageUri, Image)>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
 ) -> IO<Option<Image>, DockerError> {
-    let tgt_engine_id = tgt.engine_id.clone();
-
     with_io(image, |image| async move {
         let docker = docker
             .as_ref()
@@ -291,12 +288,9 @@ fn tag_image(
         let repo = image_name.repo();
         let tag = image_name.tag().clone();
 
-        // catch any inconsistencies when using the task within a method. If this
-        // happens there is a bug
-        let engine_id = tgt_engine_id.expect("target image should include an engine id");
         docker
             .tag_image(
-                &engine_id,
+                tgt_uri.as_str(),
                 Some(TagImageOptions {
                     repo: Some(repo),
                     tag,
@@ -304,7 +298,7 @@ fn tag_image(
             )
             .await
             .map_err(|source| DockerError {
-                context: format!("failed to tag image {engine_id} with {image_name}"),
+                context: format!("failed to tag image {tgt_uri} with {image_name}"),
                 source,
             })?;
 
@@ -312,7 +306,7 @@ fn tag_image(
     })
     // set the to the target
     .map(|mut image| {
-        image.replace(tgt);
+        image.replace(tgt_img);
         image
     })
 }
@@ -343,13 +337,10 @@ fn pull_image(
         // the state may have changed from under the worker
         match docker.inspect_image(image_name.as_str()).await {
             Ok(img_info) => {
-                if img_info.id.is_some() {
-                    // If the image exists and has an id, skip
-                    // download
-                    debug!("image already exists, skipping");
-                    image.replace(img_info.into());
-                    return Ok(image);
-                }
+                // If the image exists skip download
+                debug!("image already exists, skipping");
+                image.replace(img_info.into());
+                return Ok(image);
             }
             Err(e) => {
                 if let bollard::errors::Error::DockerResponseServerError { status_code, .. } = e {
@@ -421,12 +412,12 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
     if let Some(digest) = image_name.digest() {
         let existing = device
             .images
-            .iter()
+            .into_iter()
             .find(|(name, _)| name.digest().as_ref().is_some_and(|d| d == digest));
 
-        if let Some((_, image)) = existing {
+        if let Some((img_uri, img)) = existing {
             // If an image with the same digest exists, we just need to tag it
-            return Some(tag_image.with_target(image.clone()));
+            return Some(tag_image.with_target((img_uri, img)));
         }
     }
 
@@ -456,7 +447,7 @@ fn fetch_service_image(
     // If there is a service with the same name in any other releases of the service
     // and the service image has as different digest then we skip the fetch as
     // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, app_uuid, commit, service_name)
+    if find_installed_service(&device, &app_uuid, &commit, &service_name)
         .is_none_or(|svc| svc.image.digest().is_some() && tgt.image.digest() == svc.image.digest())
     {
         return Some(create_image.with_arg("image_name", tgt.image));
@@ -482,6 +473,25 @@ fn install_service(
     let TargetService { id, image, .. } = tgt;
 
     svc.replace(Service { id, image });
+    svc
+}
+
+/// Normalize the in-memory service image info
+///
+/// If all that changes from a service is the image, it means the docker image may be missing the
+/// digest expected on the target. In that case we just update the service to allow
+/// the planner to get to the target.
+fn normalize_service_image(
+    mut svc: View<Service>,
+    Target(tgt): Target<TargetService>,
+) -> View<Service> {
+    let TargetService { id, image, .. } = tgt;
+
+    if svc.id != id {
+        return svc;
+    }
+
+    svc.image = image;
     svc
 }
 
@@ -564,10 +574,6 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             task::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
-        .job(
-            "/config",
-            task::update(store_config).with_description(|| "store device configuration"),
-        )
         .jobs(
             "/images/{image_name}",
             [
@@ -578,18 +584,21 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                     format!("delete image '{image_name}'")
                 }),
                 task::none(tag_image).with_description(
-                    |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        if let Some(engine_id) = &tgt.engine_id {
-                            format!("tag image {engine_id} with '{image_name}'")
-                        } else {
-                            format!("tag image '{image_name}'")
-                        }
+                    |Args(image_name): Args<ImageUri>,
+                     Target((src_uri, _)): Target<(ImageUri, Image)>| {
+                        format!("tag image '{src_uri}' with '{}'", image_name.repo())
                     },
                 ),
                 task::none(create_image),
             ],
         )
-        .job("/apps", task::update(request_registry_token_for_new_images))
+        .jobs(
+            "/apps",
+            [
+                task::update(request_registry_token_for_new_images),
+                task::update(fetch_apps_images),
+            ],
+        )
         .job(
             "/apps/{app_uuid}",
             task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
@@ -604,14 +613,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
+            [task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                },
+            )],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
@@ -620,6 +626,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::create(install_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                task::update(normalize_service_image).with_description(
+                    |Args((_, _, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("normalize image info for service {service_name}")
                     },
                 ),
             ],
@@ -713,17 +724,12 @@ mod tests {
                     "name": "my-app"
                 }
             },
-            "config": {
-                "SOME_VAR": "one",
-                "OTHER_VAR": "two"
-            }
         }))
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
-                "store device configuration",
                 "update device name",
                 "initialize app with uuid 'my-app-uuid'",
             )
@@ -755,17 +761,12 @@ mod tests {
                     "name": "my-app"
                 }
             },
-            "config": {
-                "SOME_VAR": "one",
-                "OTHER_VAR": "two"
-            }
         }))
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
-                "store device configuration",
                 "update device name",
                 "update name for app with uuid 'my-app-uuid'",
             )
@@ -870,7 +871,7 @@ mod tests {
                 "pull image 'alpine:latest'",
             )
             + par!(
-                "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                "tag image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080' with 'registry2.balena-cloud.com/v2/deafc41f'",
                 "pull image 'alpine:3.20'",
             )
             + seq!(
@@ -888,5 +889,67 @@ mod tests {
             expected.to_string(),
             "unexpected plan:\n{workflow}"
         );
+    }
+
+    // The worker doesn't have any tasks to update services or delete releases
+    // so this plan should fail
+    #[tokio::test]
+    async fn it_fails_to_find_a_workflow_for_updating_services() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "old-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "new-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        // this should return Err(NotFound) and not panic
+        let workflow = worker().find_workflow(initial_state, target);
+        assert!(workflow.is_err(), "unexpected plan:\n{}", workflow.unwrap());
     }
 }

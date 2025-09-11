@@ -21,6 +21,7 @@ struct AppReport {
 struct DeviceReport {
     // the apps object should not be present if the
     // previous report apps match the current report
+    #[serde(skip_serializing_if = "Option::is_none")]
     apps: Option<HashMap<Uuid, AppReport>>,
 }
 
@@ -43,17 +44,9 @@ impl From<Report> for Value {
 }
 
 impl From<LocalState> for DeviceReport {
-    fn from(local_state: LocalState) -> Self {
-        let LocalState { device, .. } = local_state;
-        DeviceReport {
-            apps: Some(
-                device
-                    .apps
-                    .into_keys()
-                    .map(|uuid| (uuid, AppReport { release_uuid: None }))
-                    .collect(),
-            ),
-        }
+    fn from(_: LocalState) -> Self {
+        // TODO: convert apps to an accepted report
+        DeviceReport { apps: None }
     }
 }
 
@@ -164,11 +157,6 @@ mod tests {
         });
 
         let value: Value = report.into();
-        assert_eq!(
-            value,
-            json!({"test-uuid": {
-                "apps": {}
-            }})
-        )
+        assert_eq!(value, json!({"test-uuid": {}}))
     }
 }
