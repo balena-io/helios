@@ -6,7 +6,7 @@ use bollard::Docker;
 use futures_lite::StreamExt;
 use thiserror::Error;
 
-use mahler::extract::{Res, System, Target, View};
+use mahler::extract::{Path, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::Uninitialized;
 use mahler::{
@@ -21,6 +21,7 @@ use crate::remote::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::types::Uuid;
 use crate::util::docker::ImageUri;
 
+use super::local::{self, LocalStateError};
 use super::models::{
     App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
     TargetRelease, TargetService,
@@ -48,7 +49,7 @@ fn perform_cleanup(
     device: View<Device>,
     Target(tgt_device): Target<TargetDevice>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
-) -> IO<Device> {
+) -> IO<Device, LocalStateError> {
     // skip the task if we have not reached the target state
     // (outside the needs_cleanup property)
     if TargetDevice::from(Device {
@@ -67,6 +68,16 @@ fn perform_cleanup(
             // Wait for write authorization
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
+
+            let app_uuids: Vec<Uuid> = local::read_all("/apps").await?;
+            for app_uuid in app_uuids {
+                // remove app metadata if not in the target state
+                if !device.apps.contains_key(&app_uuid) {
+                    local::remove(&format!("/apps/{app_uuid}/id")).await?;
+                    local::remove(&format!("/apps/{app_uuid}/name")).await?;
+                    local::remove_dir(&format!("/apps/{app_uuid}")).await?;
+                }
+            }
         }
 
         Ok(device)
@@ -78,36 +89,70 @@ fn perform_cleanup(
     })
 }
 
-/// Update the in-memory device name
+/// Update the device name
 fn set_device_name(
-    mut name: View<Option<String>>,
+    name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
-    *name = tgt;
-    name
+) -> IO<Option<String>, LocalStateError> {
+    let tgt_name = tgt.clone();
+    with_io(name, |name| async move {
+        if let Some(name) = tgt_name {
+            local::store("/name", &name).await?;
+        }
+
+        Ok(name)
+    })
+    .map(|mut name| {
+        *name = tgt;
+        name
+    })
 }
 
-/// Initialize the app in memory
-fn prepare_app(
-    mut app: View<Option<App>>,
+/// Initialize the app and store its local data
+fn init_app(
+    app: View<Option<App>>,
     Target(tgt_app): Target<TargetApp>,
-) -> View<Option<App>> {
-    let TargetApp { id, name, .. } = tgt_app;
-    app.replace(App {
-        id,
-        name,
-        ..Default::default()
-    });
-    app
+    Path(job_path): Path,
+) -> IO<Option<App>, LocalStateError> {
+    let tgt_app_id = tgt_app.id;
+    let tgt_app_name = tgt_app.name.clone();
+
+    with_io(app, move |app| async move {
+        // store id and name as local state
+        local::store_with_name(&job_path, "id", &tgt_app_id).await?;
+        if let Some(app_name) = tgt_app_name {
+            local::store_with_name(&job_path, "name", &app_name).await?;
+        }
+        Ok(app)
+    })
+    .map(move |mut app| {
+        let TargetApp { id, name, .. } = tgt_app;
+        app.replace(App {
+            id,
+            name,
+            ..Default::default()
+        });
+        app
+    })
 }
 
-/// Update the in-memory app name
+/// Update the app local name
 fn set_app_name(
-    mut name: View<Option<String>>,
+    app_name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
-    *name = tgt;
-    name
+    Path(job_path): Path,
+) -> IO<Option<String>, LocalStateError> {
+    let tgt_app_name = tgt.clone();
+    with_io(app_name, |app_name| async move {
+        if let Some(app_name) = tgt_app_name {
+            local::store(&job_path, &app_name).await?;
+        }
+        Ok(app_name)
+    })
+    .map(|mut name| {
+        *name = tgt;
+        name
+    })
 }
 
 /// Find an installed service for a different commit
@@ -258,7 +303,7 @@ fn fetch_release_images(
 }
 
 /// Initialize an empty release
-fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
+fn init_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release.replace(Release::default());
     release
 }
@@ -577,7 +622,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         .job("/apps", task::update(request_registry_token_for_new_images))
         .job(
             "/apps/{app_uuid}",
-            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            task::create(init_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
@@ -591,7 +636,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             "/apps/{app_uuid}/releases/{commit}",
             [
                 task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
+                task::create(init_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("initialize release '{commit}' for app with uuid '{uuid}'")
                     },

@@ -5,7 +5,8 @@ use tracing::instrument;
 use crate::types::{OperatingSystem, Uuid};
 use crate::util::docker::{ImageUri, InvalidImageUriError};
 
-use super::models::{Device, Image};
+use super::local::{self, LocalStateError};
+use super::models::{App, Device, Image};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -14,6 +15,9 @@ pub enum ReadStateError {
 
     #[error(transparent)]
     InvalidRegistryUri(#[from] InvalidImageUriError),
+
+    #[error(transparent)]
+    LocalStateError(#[from] LocalStateError),
 }
 
 /// Read the state of system
@@ -24,6 +28,9 @@ pub async fn read(
     os: Option<OperatingSystem>,
 ) -> Result<Device, ReadStateError> {
     let mut device = Device::new(uuid, os);
+
+    // read device name
+    device.name = local::read("/name").await?;
 
     let installed_images = docker
         .list_images(Some(ListImagesOptions {
@@ -56,6 +63,24 @@ pub async fn read(
     }
 
     // TODO: read state of apps
+    let app_uuids: Vec<Uuid> = local::read_all("/apps").await?;
+    for app_uuid in app_uuids {
+        let id: Option<u32> = local::read(&format!("/apps/{app_uuid}/id")).await?;
+        if let Some(id) = id {
+            let name: Option<String> = local::read(&format!("/apps/{app_uuid}/name")).await?;
+
+            // FIXME: we probably don't want to read all apps in the local dir
+            // but read containers and infer apps from there, but we'll do this for now
+            device.apps.insert(
+                app_uuid,
+                App {
+                    id,
+                    name,
+                    ..Default::default()
+                },
+            );
+        }
+    }
 
     Ok(device)
 }
