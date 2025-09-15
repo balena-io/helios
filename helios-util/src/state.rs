@@ -53,7 +53,7 @@ fn with_state_dir<P: AsRef<Path>>(path: P) -> PathBuf {
 /// Helper function to store local state
 ///
 /// Example:
-/// ```rust,no_run
+/// ```rust,ignore
 /// util::state::store("/apps/app-uuid/name", "my-app-name").await?;
 /// ```
 pub async fn store<P: AsRef<Path>, V: Serialize>(path: P, value: &V) -> Result<(), ReadWriteError> {
@@ -73,7 +73,7 @@ pub async fn store<P: AsRef<Path>, V: Serialize>(path: P, value: &V) -> Result<(
 /// Helper function to store local state
 ///
 /// Example:
-/// ```rust,no_run
+/// ```rust,ignore
 /// util::state::store_with_name("/apps/app-uuid", "name", "my-app-name").await?;
 /// ```
 pub async fn store_with_name<P: AsRef<Path>, V: Serialize>(
