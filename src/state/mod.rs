@@ -1,3 +1,4 @@
+mod local;
 mod read;
 mod seek;
 mod worker;
