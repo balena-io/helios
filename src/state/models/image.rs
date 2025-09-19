@@ -1,25 +1,24 @@
 use std::collections::HashMap;
 
-use bollard::secret::ImageInspect;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+use crate::oci::LocalImage;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {
     /// Container engine id
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub engine_id: Option<String>,
+    pub engine_id: String,
 
     /// Image labels
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
 }
 
-impl From<ImageInspect> for Image {
-    fn from(img: ImageInspect) -> Self {
-        let ImageInspect { id, config, .. } = img;
+impl From<LocalImage> for Image {
+    fn from(img: LocalImage) -> Self {
         Self {
-            engine_id: id,
-            labels: config.and_then(|config| config.labels),
+            engine_id: img.id,
+            labels: img.labels,
         }
     }
 }
