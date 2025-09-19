@@ -732,6 +732,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "futures-lite",
+ "helios-legacy",
  "helios-oci",
  "helios-util",
  "mahler",
@@ -749,6 +750,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "helios-legacy"
+version = "0.10.1"
+dependencies = [
+ "axum",
+ "helios-util",
+ "mahler",
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

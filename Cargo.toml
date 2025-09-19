@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "helios-legacy",
   "helios-oci",
   "helios-util",
 ]
@@ -84,6 +85,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+helios-legacy = { path = "helios-legacy" }
 helios-oci = { path = "helios-oci" }
 helios-util = { path = "helios-util" }
 
