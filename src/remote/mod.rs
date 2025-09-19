@@ -12,7 +12,6 @@ mod poll;
 mod provisioning;
 mod registry_auth;
 mod report;
-mod request;
 
 pub use config::{ProvisioningConfig, RemoteConfig, RequestConfig};
 pub use poll::{start_poll, PollRequest};

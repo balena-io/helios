@@ -10,9 +10,9 @@ use tracing::debug;
 
 use crate::oci::ImageUri;
 use crate::util::http::{InvalidUriError, Uri};
+use crate::util::request::{Get, GetConfig, GetError};
 
 use super::config::RemoteConfig;
-use super::request::{Get, GetConfig, GetError};
 
 // See: https://github.com/balena-io/open-balena-api/blob/master/src/lib/config.ts#L476-L479
 const REGISTRY_TOKEN_EXPIRE_SECONDS: Duration = Duration::from_secs(4 * 3600);

@@ -11,9 +11,9 @@ use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::types::Uuid;
 use crate::util::http::Uri;
+use crate::util::request::{Get, GetConfig};
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::request::{Get, GetConfig};
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
