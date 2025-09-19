@@ -7,7 +7,7 @@ use serde::Serialize;
 use thiserror::Error;
 use tracing::trace;
 
-use crate::util::fs::safe_write_all;
+use crate::fs::safe_write_all;
 
 pub trait StoredConfig
 where

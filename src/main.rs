@@ -13,7 +13,6 @@ use tracing_subscriber::{
 
 mod api;
 mod cli;
-mod config;
 mod legacy;
 mod oci;
 mod remote;
@@ -63,7 +62,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = cli::parse();
 
     // make sure our config directory exists
-    config::ensure_config_dir()?;
+    util::config::ensure_config_dir()?;
 
     let api_config = cli
         .local_api_address
@@ -231,7 +230,7 @@ where
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
 async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
     // Load our provisioning config, if one exists
-    let provisioning_config = config::get::<ProvisioningConfig>()?;
+    let provisioning_config = util::config::get::<ProvisioningConfig>()?;
 
     // See if the triplet (uuid, remote_api_endpoint, remote_api_key) is provided.
     // If so, we have everything we need to assume an identity.

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::config::StoredConfig;
 use crate::types::{ApiKey, DeviceType, Uuid};
+use crate::util::config::StoredConfig;
 use crate::util::http::Uri;
 use crate::util::json::{deserialize_duration_from_ms, serialize_duration_to_ms};
 
