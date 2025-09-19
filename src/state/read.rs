@@ -2,8 +2,8 @@ use bollard::{query_parameters::ListImagesOptions, Docker};
 use thiserror::Error;
 use tracing::instrument;
 
+use crate::oci::{ImageUri, InvalidImageUriError};
 use crate::types::{OperatingSystem, Uuid};
-use crate::util::docker::{ImageUri, InvalidImageUriError};
 
 use super::models::{Device, Image};
 

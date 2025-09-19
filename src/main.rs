@@ -17,6 +17,7 @@ mod api;
 mod cli;
 mod config;
 mod legacy;
+mod oci;
 mod remote;
 mod state;
 mod types;

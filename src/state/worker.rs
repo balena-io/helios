@@ -17,9 +17,9 @@ use mahler::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
+use crate::oci::ImageUri;
 use crate::remote::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::types::Uuid;
-use crate::util::docker::ImageUri;
 
 use super::models::{
     App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,

@@ -8,10 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::debug;
 
-use crate::util::{
-    docker::ImageUri,
-    http::{InvalidUriError, Uri},
-};
+use crate::oci::ImageUri;
+use crate::util::http::{InvalidUriError, Uri};
 
 use super::config::RemoteConfig;
 use super::request::{Get, GetConfig, GetError};
