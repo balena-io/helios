@@ -732,6 +732,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "futures-lite",
+ "helios-oci",
  "helios-util",
  "mahler",
  "mockito",
@@ -748,6 +749,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "helios-oci"
+version = "0.10.1"
+dependencies = [
+ "bollard",
+ "futures-lite",
+ "helios-util",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tracing",
 ]
 
 [[package]]

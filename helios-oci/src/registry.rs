@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::debug;
 
-use crate::oci::ImageUri;
+use crate::models::ImageUri;
 use crate::util::http::{InvalidUriError, Uri};
 use crate::util::request::{Get, GetConfig, GetError, RequestConfig};
 

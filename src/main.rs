@@ -14,10 +14,10 @@ use tracing_subscriber::{
 mod api;
 mod cli;
 mod legacy;
-mod oci;
 mod remote;
 mod state;
 
+use helios_oci as oci;
 use helios_util as util;
 use helios_util::types::{OperatingSystem, Uuid};
 

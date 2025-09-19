@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "helios-oci",
   "helios-util",
 ]
 
@@ -83,6 +84,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+helios-oci = { path = "helios-oci" }
 helios-util = { path = "helios-util" }
 
 axum.workspace = true

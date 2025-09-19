@@ -14,6 +14,8 @@ pub use models::{ImageUri, InvalidImageUriError};
 mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
+use helios_util as util;
+
 #[derive(Debug, Clone)]
 pub struct Client(Docker);
 
