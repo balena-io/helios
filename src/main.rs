@@ -11,9 +11,9 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-mod api;
 mod cli;
 
+use helios_api as api;
 use helios_legacy as legacy;
 use helios_oci as oci;
 use helios_remote as remote;

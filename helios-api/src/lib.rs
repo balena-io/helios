@@ -23,11 +23,11 @@ use tracing::{
     info, instrument, Span,
 };
 
-use crate::legacy::{proxy, ProxyConfig, ProxyState};
-use crate::remote::PollRequest;
-use crate::state::models::{App, Device, TargetApp, TargetDevice};
-use crate::state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
-use crate::util::types::Uuid;
+use helios_legacy::{proxy, ProxyConfig, ProxyState};
+use helios_remote::PollRequest;
+use helios_state::models::{App, Device, TargetApp, TargetDevice};
+use helios_state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
+use helios_util::types::Uuid;
 
 pub enum Listener {
     Tcp(TcpListener),

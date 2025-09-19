@@ -732,6 +732,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "futures-lite",
+ "helios-api",
  "helios-legacy",
  "helios-oci",
  "helios-remote",
@@ -752,6 +753,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "helios-api"
+version = "0.10.1"
+dependencies = [
+ "axum",
+ "helios-legacy",
+ "helios-remote",
+ "helios-state",
+ "helios-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
 ]
 
 [[package]]
