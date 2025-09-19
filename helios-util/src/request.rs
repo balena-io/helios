@@ -9,6 +9,20 @@ use tracing::{field, instrument, warn, Span};
 
 use crate::crypto::sha256_hex_digest;
 
+/// Base configuration for HTTP request behavior including timeouts, rate
+/// limiting, and backoff.
+#[derive(Debug, Clone)]
+pub struct RequestConfig {
+    /// Maximum time to wait for a single HTTP request to complete.
+    pub timeout: Duration,
+    /// Minimum time to wait between consecutive requests (rate limiting).
+    pub min_interval: Duration,
+    /// Maximum time to wait during exponential backoff after errors.
+    pub max_backoff: Duration,
+    /// Optional authentication token (will be sent as "Bearer {token}").
+    pub auth_token: Option<String>,
+}
+
 /// Internal errors that can occur during HTTP GET requests (including retry logic).
 #[derive(Debug, Error)]
 enum TryGetError {
@@ -122,18 +136,6 @@ pub enum PatchError {
 /// HTTP PATCH response
 pub type PatchResponse = ();
 
-/// Configuration for HTTP request behavior including timeouts, rate limiting, and backoff.
-#[derive(Clone)]
-pub struct RequestConfig {
-    /// Maximum time to wait for a single HTTP request to complete.
-    pub timeout: Duration,
-    /// Minimum time to wait between consecutive requests (rate limiting).
-    pub min_interval: Duration,
-    /// Maximum time to wait during exponential backoff after errors.
-    pub max_backoff: Duration,
-    /// Optional API token for authentication (will be sent as "Bearer {token}").
-    pub api_token: Option<String>,
-}
 /// Metrics tracking the success and failure counts for HTTP requests.
 #[derive(Debug, Clone, Copy)]
 pub struct RequestMetrics {
@@ -260,16 +262,10 @@ pub struct Get {
 }
 
 /// Configuration for HTTP GET request behavior including timeouts, rate limiting, and backoff.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct GetConfig {
-    /// Maximum time to wait for a single HTTP request to complete.
-    pub timeout: Duration,
-    /// Minimum time to wait between consecutive requests (rate limiting).
-    pub min_interval: Duration,
-    /// Maximum time to wait during exponential backoff after errors.
-    pub max_backoff: Duration,
-    /// Optional API token for authentication (will be sent as "Bearer {token}").
-    pub api_token: Option<String>,
+    /// Configuration for HTTP request behavior including timeouts, rate limiting, and backoff.
+    pub request: RequestConfig,
     /// Set to true to persist the request cache on disk
     pub persist_cache: bool,
 }
@@ -307,10 +303,13 @@ impl Get {
     /// ```
     pub fn new(endpoint: impl Into<String>, config: impl Into<GetConfig>) -> Self {
         let GetConfig {
-            timeout,
-            min_interval,
-            max_backoff,
-            api_token,
+            request:
+                RequestConfig {
+                    timeout,
+                    min_interval,
+                    max_backoff,
+                    auth_token: api_token,
+                },
             persist_cache,
         } = config.into();
         let endpoint: String = endpoint.into();
@@ -322,7 +321,7 @@ impl Get {
                     timeout,
                     min_interval,
                     max_backoff,
-                    api_token,
+                    auth_token: api_token,
                 },
             ),
             cached: None,
@@ -404,7 +403,7 @@ impl Get {
             .timeout(self.state.config.timeout)
             .header("Accept-Encoding", "br, gzip, deflate");
 
-        if let Some(api_token) = &self.state.config.api_token {
+        if let Some(api_token) = &self.state.config.auth_token {
             request = request.header("Authorization", format!("Bearer {api_token}"));
         }
 
@@ -660,7 +659,7 @@ impl Patch {
             .timeout(state.config.timeout)
             .json(&state_to_send);
 
-        if let Some(api_token) = &state.config.api_token {
+        if let Some(api_token) = &state.config.auth_token {
             request = request.header("Authorization", format!("Bearer {api_token}"));
         }
 
@@ -742,14 +741,16 @@ mod tests {
                 timeout,
                 min_interval,
                 max_backoff,
-                api_token,
+                auth_token: api_token,
             } = conf;
 
             Self {
-                timeout,
-                min_interval,
-                max_backoff,
-                api_token,
+                request: RequestConfig {
+                    timeout,
+                    min_interval,
+                    max_backoff,
+                    auth_token: api_token,
+                },
                 persist_cache: false,
             }
         }
@@ -760,7 +761,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(200),
-            api_token: None,
+            auth_token: None,
         }
     }
 
@@ -779,7 +780,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("test-token".to_string());
+        client_config.auth_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint, client_config);
         let response = client.get(None).await.unwrap();
 
@@ -805,7 +806,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("test-token".to_string());
+        client_config.auth_token = Some("test-token".to_string());
         let mut client = Get::new(endpoint.clone(), client_config);
         let response1 = client.get(None).await.unwrap();
 
@@ -848,7 +849,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(100),
             max_backoff: Duration::from_secs(60),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Get::new(endpoint, config);
@@ -879,7 +880,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("test-token".to_string());
+        client_config.auth_token = Some("test-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
         client
@@ -917,7 +918,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("test-token".to_string());
+        client_config.auth_token = Some("test-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
         client
@@ -950,7 +951,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("test-token".to_string());
+        client_config.auth_token = Some("test-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
         let metrics_before = client.metrics();
@@ -978,7 +979,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("invalid-token".to_string());
+        client_config.auth_token = Some("invalid-token".to_string());
         let mut client = Get::new(endpoint, client_config);
         let response = client.get(None).await;
 
@@ -1005,7 +1006,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(50),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Get::new(endpoint, config);
@@ -1035,7 +1036,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10), // Very short for test
             max_backoff: Duration::from_millis(50),  // Very short for test
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Get::new(endpoint.clone(), config);
@@ -1097,7 +1098,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(100),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Get::new(endpoint, config);
@@ -1141,7 +1142,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("invalid-token".to_string());
+        client_config.auth_token = Some("invalid-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 400
@@ -1180,7 +1181,7 @@ mod tests {
             .await;
 
         let mut client_config = test_config();
-        client_config.api_token = Some("invalid-token".to_string());
+        client_config.auth_token = Some("invalid-token".to_string());
         let mut client = Patch::new(endpoint, client_config);
 
         // First patch fails with 401
@@ -1225,7 +1226,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(100),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Patch::new(endpoint, config);
@@ -1273,7 +1274,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(100), // Short for test
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Patch::new(endpoint, config);
@@ -1321,7 +1322,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_millis(50), // Short for test
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Patch::new(endpoint, config);
@@ -1373,7 +1374,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(50),
             max_backoff: Duration::from_secs(10), // Long backoff to test reset
-            api_token: None,
+            auth_token: None,
         };
 
         let mut client = Get::new(endpoint, config);
@@ -1436,7 +1437,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(50),
             max_backoff: Duration::from_secs(10), // Long backoff to test reset
-            api_token: None,
+            auth_token: None,
         };
 
         let mut client = Patch::new(endpoint, config);
@@ -1519,7 +1520,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(60),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Get::new(endpoint, config);
@@ -1553,7 +1554,7 @@ mod tests {
             timeout: Duration::from_secs(10),
             min_interval: Duration::from_millis(10),
             max_backoff: Duration::from_secs(60),
-            api_token: Some("test-token".to_string()),
+            auth_token: Some("test-token".to_string()),
         };
 
         let mut client = Patch::new(endpoint, config);

@@ -10,7 +10,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::util::http::Uri;
-use crate::util::request::{Get, GetConfig};
+use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
@@ -21,11 +21,13 @@ async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Val
         .expect("remote API endpoint must be a valid URI")
         .to_string();
 
-    let client_config = GetConfig {
-        timeout: remote.request.timeout,
-        min_interval: remote.request.poll_min_interval,
-        max_backoff: remote.request.poll_interval,
-        api_token: Some(remote.api_key.to_string()),
+    let client_config = request::GetConfig {
+        request: request::RequestConfig {
+            timeout: remote.request.timeout,
+            min_interval: remote.request.poll_min_interval,
+            max_backoff: remote.request.poll_interval,
+            auth_token: Some(remote.api_key.to_string()),
+        },
         persist_cache: true,
     };
 

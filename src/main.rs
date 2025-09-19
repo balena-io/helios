@@ -109,7 +109,9 @@ async fn start_supervisor(
     let docker = Docker::connect().await?;
     let initial_state = state::read(&docker, uuid.clone(), os).await?;
 
-    let registry_auth = remote_config.clone().map(RegistryAuthClient::new);
+    let registry_auth = remote_config
+        .clone()
+        .map(|c| RegistryAuthClient::new(c.api_endpoint, c.request.into()));
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());

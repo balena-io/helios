@@ -10,10 +10,7 @@ use tracing::debug;
 
 use crate::oci::ImageUri;
 use crate::util::http::{InvalidUriError, Uri};
-use crate::util::request::{Get, GetConfig, GetError};
-
-// FIXME: break this dependency
-use crate::RemoteConfig;
+use crate::util::request::{Get, GetConfig, GetError, RequestConfig};
 
 // See: https://github.com/balena-io/open-balena-api/blob/master/src/lib/config.ts#L476-L479
 const REGISTRY_TOKEN_EXPIRE_SECONDS: Duration = Duration::from_secs(4 * 3600);
@@ -118,7 +115,8 @@ impl AsRef<str> for RegistryToken {
 
 #[derive(Clone, Debug)]
 pub struct RegistryAuthClient {
-    config: RemoteConfig,
+    api_endpoint: Uri,
+    config: RequestConfig,
     cached: HashMap<RegistryAuth, RegistryToken>,
 }
 
@@ -138,8 +136,9 @@ pub enum RegistryAuthError {
 }
 
 impl RegistryAuthClient {
-    pub fn new(config: RemoteConfig) -> Self {
+    pub fn new(api_endpoint: Uri, config: RequestConfig) -> Self {
         Self {
+            api_endpoint,
             config,
             cached: HashMap::new(),
         }
@@ -174,7 +173,7 @@ impl RegistryAuthClient {
             .join("&");
 
         let endpoint = Uri::from_parts(
-            self.config.api_endpoint.clone(),
+            self.api_endpoint.clone(),
             "/auth/v1/token",
             Some(format!("service={}&{scope_query}", auth.service).as_str()),
         )?;
@@ -183,10 +182,7 @@ impl RegistryAuthClient {
         let mut client = Get::new(
             endpoint.to_string(),
             GetConfig {
-                timeout: self.config.request.timeout,
-                api_token: Some(self.config.api_key.to_string()),
-                max_backoff: self.config.request.poll_interval,
-                min_interval: self.config.request.poll_min_interval,
+                request: self.config.clone(),
                 // Do NOT persist cache or the service will slowly start using disk
                 persist_cache: false,
             },

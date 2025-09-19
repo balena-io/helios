@@ -76,7 +76,7 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
         timeout: config.request.timeout,
         min_interval: config.request.poll_min_interval,
         max_backoff: config.request.poll_interval,
-        api_token: Some(config.api_key.to_string()),
+        auth_token: Some(config.api_key.to_string()),
     };
 
     Patch::new(endpoint, client_config)

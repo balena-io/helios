@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::util::config::StoredConfig;
 use crate::util::http::Uri;
 use crate::util::json::{deserialize_duration_from_ms, serialize_duration_to_ms};
+use crate::util::request;
 use crate::util::types::{ApiKey, DeviceType, Uuid};
 
 // IMPORTANT: be VERY careful making changes to these structs,
@@ -56,6 +57,17 @@ impl Default for RequestConfig {
             poll_interval: Duration::from_millis(900_000),
             poll_min_interval: Duration::from_millis(10_000),
             poll_max_jitter: Duration::from_millis(60_000),
+        }
+    }
+}
+
+impl From<RequestConfig> for request::RequestConfig {
+    fn from(value: RequestConfig) -> Self {
+        Self {
+            timeout: value.timeout,
+            min_interval: value.poll_min_interval,
+            max_backoff: value.poll_interval,
+            auth_token: None,
         }
     }
 }
