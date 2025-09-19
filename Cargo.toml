@@ -1,16 +1,23 @@
-[package]
-name = "helios"
+[workspace]
+resolver = "3"
+members = [
+  "helios-util",
+]
+
+[workspace.package]
 version = "0.10.1"
 rust-version = "1.83"
 edition = "2021"
+
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"
+repository = "https://github.com/balena-io/helios"
+authors = ["Balena Inc. <hello@balena.io>"]
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/balena-io/helios"
 publish = false
 
-[dependencies]
+[workspace.dependencies]
 axum = { version = "0.8.4", default-features = false, features = [
   "tokio",
   "http1",
@@ -53,10 +60,51 @@ fastrand = "2.3.0"
 futures-lite = { version = "2.6.1", default-features = false }
 regex = "1.11"
 
-[dev-dependencies]
+# dev-only dependencies
 mockito = { version = "1.7", default-features = false }
 pretty_assertions = "1.4.1"
 
 [profile.release]
 opt-level = "z"
 codegen-units = 1
+
+[package]
+name = "helios"
+
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+helios-util = { path = "helios-util" }
+
+axum.workspace = true
+bollard.workspace = true
+clap.workspace = true
+dirs.workspace = true
+fastrand.workspace = true
+futures-lite.workspace = true
+mahler.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+mockito.workspace = true
+pretty_assertions.workspace = true

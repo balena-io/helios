@@ -732,6 +732,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "futures-lite",
+ "helios-util",
  "mahler",
  "mockito",
  "pretty_assertions",
@@ -747,6 +748,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "helios-util"
+version = "0.10.1"
+dependencies = [
+ "axum",
+ "dirs",
+ "fastrand",
+ "mahler",
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.16",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

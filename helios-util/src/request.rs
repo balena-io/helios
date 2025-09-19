@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{field, instrument, warn, Span};
 
-use crate::util::crypto::sha256_hex_digest;
+use crate::crypto::sha256_hex_digest;
 
 /// Internal errors that can occur during HTTP GET requests (including retry logic).
 #[derive(Debug, Error)]

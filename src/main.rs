@@ -19,7 +19,8 @@ mod oci;
 mod remote;
 mod state;
 mod types;
-mod util;
+
+use helios_util as util;
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
