@@ -1,16 +1,15 @@
-use bollard::{query_parameters::ListImagesOptions, Docker};
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::oci::{ImageUri, InvalidImageUriError};
+use crate::oci::{Client as Docker, Error as DockerError, InvalidImageUriError, WithContext};
 use crate::types::{OperatingSystem, Uuid};
 
-use super::models::{Device, Image};
+use super::models::Device;
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
     #[error(transparent)]
-    DockerError(#[from] bollard::errors::Error),
+    DockerError(#[from] DockerError),
 
     #[error(transparent)]
     InvalidRegistryUri(#[from] InvalidImageUriError),
@@ -25,34 +24,12 @@ pub async fn read(
 ) -> Result<Device, ReadStateError> {
     let mut device = Device::new(uuid, os);
 
-    let installed_images = docker
-        .list_images(Some(ListImagesOptions {
-            all: true,
-            ..Default::default()
-        }))
-        .await?;
-
     // Read the state of images
-    for img_summary in installed_images {
-        let repo_tags = img_summary.repo_tags;
-        let img: Image = docker.inspect_image(&img_summary.id).await?.into();
-
-        for img_tag in repo_tags {
-            let mut img_name: ImageUri = img_tag.parse()?;
-
-            // If the image name has a tag starting with 'sha256-' use that as the digest.
-            //
-            // This is needed because the digest doesn't survive when pulling with deltas
-            // https://github.com/balena-os/balena-engine/issues/283
-            if let Some(tag) = img_name.tag() {
-                if tag.starts_with("sha256-") {
-                    img_name = format!("{}@{}", img_name.repo(), tag.replace("sha256-", "sha256:"))
-                        .parse()?;
-                }
-            }
-
-            device.images.insert(img_name, img.clone());
-        }
+    let res = docker.image().list().await;
+    let images = res.context("failed to read state of images")?;
+    for res in images.iter() {
+        let (uri, image) = res?;
+        device.images.insert(uri, image.into());
     }
 
     // TODO: read state of apps

@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::oci::{ImageUri, RegistryAuth};
 use crate::types::{OperatingSystem, Uuid};
@@ -8,7 +9,6 @@ use super::app::{App, TargetAppMap};
 use super::image::Image;
 
 pub type DeviceConfig = BTreeMap<String, String>;
-
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
 /// The current state of a device that will be stored
