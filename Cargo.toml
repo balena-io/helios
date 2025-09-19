@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "helios",
   "helios-api",
   "helios-legacy",
   "helios-oci",
@@ -72,49 +73,3 @@ pretty_assertions = "1.4.1"
 [profile.release]
 opt-level = "z"
 codegen-units = 1
-
-[package]
-name = "helios"
-
-authors.workspace = true
-description.workspace = true
-edition.workspace = true
-homepage.workspace = true
-license.workspace = true
-publish.workspace = true
-readme.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-version.workspace = true
-
-[dependencies]
-helios-api = { path = "helios-api" }
-helios-legacy = { path = "helios-legacy" }
-helios-oci = { path = "helios-oci" }
-helios-remote = { path = "helios-remote" }
-helios-state = { path = "helios-state" }
-helios-util = { path = "helios-util" }
-
-axum.workspace = true
-bollard.workspace = true
-clap.workspace = true
-dirs.workspace = true
-fastrand.workspace = true
-futures-lite.workspace = true
-mahler.workspace = true
-rand.workspace = true
-regex.workspace = true
-reqwest.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tower-http.workspace = true
-tracing-subscriber.workspace = true
-tracing.workspace = true
-uuid.workspace = true
-
-[dev-dependencies]
-mockito.workspace = true
-pretty_assertions.workspace = true

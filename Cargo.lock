@@ -726,33 +726,16 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "helios"
 version = "0.10.1"
 dependencies = [
- "axum",
- "bollard",
  "clap",
- "dirs",
- "fastrand",
- "futures-lite",
  "helios-api",
  "helios-legacy",
  "helios-oci",
  "helios-remote",
  "helios-state",
  "helios-util",
- "mahler",
- "mockito",
- "pretty_assertions",
- "rand",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.16",
  "tokio",
- "tower-http",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
