@@ -39,6 +39,7 @@ async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Val
 
 fn next_poll(config: &RequestConfig) -> Duration {
     let max_jitter = &config.poll_max_jitter;
+    // FIXME: move rand to helios-util
     let jitter_ms = rand::random_range(0..=max_jitter.as_millis() as u64);
     let jitter = Duration::from_millis(jitter_ms);
     config.poll_interval + jitter

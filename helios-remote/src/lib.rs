@@ -16,3 +16,6 @@ pub use config::{ProvisioningConfig, RemoteConfig, RequestConfig};
 pub use poll::{start_poll, PollRequest};
 pub use provisioning::{provision, ProvisioningError};
 pub use report::start_report;
+
+use helios_state as state;
+use helios_util as util;

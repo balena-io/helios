@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "helios-legacy",
   "helios-oci",
+  "helios-remote",
   "helios-state",
   "helios-util",
 ]
@@ -88,6 +89,7 @@ version.workspace = true
 [dependencies]
 helios-legacy = { path = "helios-legacy" }
 helios-oci = { path = "helios-oci" }
+helios-remote = { path = "helios-remote" }
 helios-state = { path = "helios-state" }
 helios-util = { path = "helios-util" }
 

@@ -1,0 +1,26 @@
+[package]
+name = "helios-remote"
+description = "Helios support for balenaCloud"
+readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+helios-state = { path = "../helios-state", version = "0" }
+helios-util = { path = "../helios-util", version = "0" }
+
+mahler.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
