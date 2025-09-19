@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::ApiKey;
 use crate::util::http::Uri;
+use crate::util::types::ApiKey;
 
 /// Legacy Supervisor API configuration
 #[derive(Serialize, Deserialize, Debug, Clone)]

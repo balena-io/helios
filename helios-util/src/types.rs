@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::{fmt::Display, str::FromStr};
 use thiserror::Error;
 
-use crate::util::crypto::{pseudorandom_string, ALPHA_NUM};
+use crate::crypto::{pseudorandom_string, ALPHA_NUM};
 
 // Just an alias for more descriptive code
 pub type DeviceType = String;

@@ -6,10 +6,10 @@ use thiserror::Error;
 use tracing::{debug, field, instrument, Span};
 
 use crate::remote::{ProvisioningConfig, RemoteConfig};
-use crate::types::{ApiKey, DeviceType, Uuid};
 use crate::util::config;
 use crate::util::crypto::sha256_hex_digest;
 use crate::util::http::{InvalidUriError, Uri};
+use crate::util::types::{ApiKey, DeviceType, Uuid};
 
 #[derive(Debug, Error)]
 pub enum ProvisioningError {

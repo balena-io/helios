@@ -13,7 +13,7 @@ use tracing::debug;
 
 use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
-use crate::types::Uuid;
+use crate::util::types::Uuid;
 
 use super::models::{
     App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,
@@ -229,7 +229,7 @@ fn fetch_release_images(
                     commit.clone(),
                     (*service_name).clone(),
                 )
-                // or if there is a service, then only chose it if it has the same digest 
+                // or if there is a service, then only chose it if it has the same digest
                 // as the target service
                 .is_none_or(|s| {
                     s.image.digest().is_some() && svc.image.digest() == s.image.digest()

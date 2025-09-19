@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::oci::{ImageUri, RegistryAuth};
-use crate::types::{OperatingSystem, Uuid};
+use crate::util::types::{OperatingSystem, Uuid};
 
 use super::app::{App, TargetAppMap};
 use super::image::Image;

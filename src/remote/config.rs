@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::types::{ApiKey, DeviceType, Uuid};
 use crate::util::config::StoredConfig;
 use crate::util::http::Uri;
 use crate::util::json::{deserialize_duration_from_ms, serialize_duration_to_ms};
+use crate::util::types::{ApiKey, DeviceType, Uuid};
 
 // IMPORTANT: be VERY careful making changes to these structs,
 // namely ProvisioningConfig, RemoteConfig and RequestConfig.

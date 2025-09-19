@@ -6,9 +6,9 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
-use crate::types::Uuid;
 use crate::util::http::Uri;
 use crate::util::request::{Patch, PatchError, RequestConfig};
+use crate::util::types::Uuid;
 
 use super::config::RemoteConfig;
 

@@ -9,9 +9,9 @@ use tracing::{error, info, instrument, trace, warn};
 
 use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
-use crate::types::Uuid;
 use crate::util::http::Uri;
 use crate::util::request::{Get, GetConfig};
+use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
 

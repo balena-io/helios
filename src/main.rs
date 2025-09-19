@@ -17,9 +17,9 @@ mod legacy;
 mod oci;
 mod remote;
 mod state;
-mod types;
 
 use helios_util as util;
+use helios_util::types::{OperatingSystem, Uuid};
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
@@ -28,7 +28,6 @@ use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::remote::{
     provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
 };
-use crate::types::{OperatingSystem, Uuid};
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs

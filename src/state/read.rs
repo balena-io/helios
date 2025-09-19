@@ -2,7 +2,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 use crate::oci::{Client as Docker, Error as DockerError, InvalidImageUriError, WithContext};
-use crate::types::{OperatingSystem, Uuid};
+use crate::util::types::{OperatingSystem, Uuid};
 
 use super::models::Device;
 

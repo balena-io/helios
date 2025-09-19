@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::types::Uuid;
+use crate::util::types::Uuid;
 
 use super::{ReleaseMap, TargetReleaseMap};
 

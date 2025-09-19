@@ -3,8 +3,8 @@ use std::num::ParseIntError;
 use std::time::Duration;
 
 use crate::api::LocalAddress;
-use crate::types::{ApiKey, OperatingSystem, Uuid};
 use crate::util::http::Uri;
+use crate::util::types::{ApiKey, OperatingSystem, Uuid};
 
 fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     let millis: u64 = s.parse()?;

@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::Uuid;
+use crate::util::types::Uuid;
 
 use super::service::{ServiceMap, TargetServiceMap};
 

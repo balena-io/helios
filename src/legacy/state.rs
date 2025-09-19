@@ -5,8 +5,8 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, field, instrument, trace, warn};
 
-use crate::types::ApiKey;
 use crate::util::http::Uri;
+use crate::util::types::ApiKey;
 
 use super::error::UpstreamError;
 

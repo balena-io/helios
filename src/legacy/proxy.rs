@@ -9,8 +9,8 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{field, trace};
 
-use crate::types::Uuid;
 use crate::util::http::Uri;
+use crate::util::types::Uuid;
 
 use super::error::UpstreamError;
 
