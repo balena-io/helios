@@ -734,6 +734,7 @@ dependencies = [
  "futures-lite",
  "helios-legacy",
  "helios-oci",
+ "helios-state",
  "helios-util",
  "mahler",
  "mockito",
@@ -780,6 +781,24 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.16",
  "tracing",
+]
+
+[[package]]
+name = "helios-state"
+version = "0.10.1"
+dependencies = [
+ "futures-lite",
+ "helios-legacy",
+ "helios-oci",
+ "helios-util",
+ "mahler",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
