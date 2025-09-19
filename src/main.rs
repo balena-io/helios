@@ -2,7 +2,6 @@ use std::error::Error;
 use std::future::{self, Future};
 
 use bollard::Docker;
-use remote::RegistryAuthClient;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::{debug, instrument, trace, warn};
@@ -26,6 +25,7 @@ mod util;
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
+use crate::oci::RegistryAuthClient;
 use crate::remote::{
     provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
 };

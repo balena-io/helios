@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-use crate::oci::ImageUri;
-use crate::remote::RegistryAuth;
+use crate::oci::{ImageUri, RegistryAuth};
 use crate::types::{OperatingSystem, Uuid};
 
 use super::app::{App, TargetAppMap};

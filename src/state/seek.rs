@@ -16,10 +16,10 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::{
-    legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
-    remote::RegistryAuthClient,
+use crate::legacy::{
+    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
+use crate::oci::RegistryAuthClient;
 
 use super::models::{Device, TargetDevice};
 use super::read::{read as read_state, ReadStateError};

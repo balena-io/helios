@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::oci::ImageUri;
-use crate::remote::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
+use crate::oci::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::types::Uuid;
 
 use super::models::{
