@@ -1,11 +1,5 @@
 use std::collections::HashMap;
 
-use bollard::auth::DockerCredentials;
-use bollard::query_parameters::{CreateImageOptions, RemoveImageOptions, TagImageOptions};
-use bollard::Docker;
-use futures_lite::StreamExt;
-use thiserror::Error;
-
 use mahler::extract::{Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::Uninitialized;
@@ -17,21 +11,14 @@ use mahler::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::remote::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
+use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
+use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::types::Uuid;
-use crate::util::docker::ImageUri;
 
 use super::models::{
     App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,
     TargetDevice, TargetRelease, TargetService,
 };
-
-#[derive(Error, Debug)]
-#[error("{context}: {source}")]
-struct DockerError {
-    context: String,
-    source: bollard::errors::Error,
-}
 
 /// Make sure a cleanup happens after all tasks have been performed
 ///
@@ -212,7 +199,6 @@ fn request_registry_token_for_new_images(
         })
         .into_values()
         .map(|scope| RegistryAuth::try_from(scope).expect("auth creation should not fail"))
-        // if the i
         .filter(|scope| device.auths.iter().all(|s| !s.is_super_scope(scope)))
         .collect();
 
@@ -281,36 +267,17 @@ fn tag_image(
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
 ) -> IO<Option<Image>, DockerError> {
-    let tgt_engine_id = tgt.engine_id.clone();
+    let engine_id = tgt.engine_id.clone();
 
     with_io(image, |image| async move {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
 
-        let repo = image_name.repo();
-        let tag = image_name.tag().clone();
-
-        // catch any inconsistencies when using the task within a method. If this
-        // happens there is a bug
-        let engine_id = tgt_engine_id.expect("target image should include an engine id");
-        docker
-            .tag_image(
-                &engine_id,
-                Some(TagImageOptions {
-                    repo: Some(repo),
-                    tag,
-                }),
-            )
-            .await
-            .map_err(|source| DockerError {
-                context: format!("failed to tag image {engine_id} with {image_name}"),
-                source,
-            })?;
+        docker.image().tag(&engine_id, &image_name).await?;
 
         Ok(image)
     })
-    // set the to the target
     .map(|mut image| {
         image.replace(tgt);
         image
@@ -331,55 +298,25 @@ fn pull_image(
 ) -> IO<Option<Image>, DockerError> {
     // Initialize the image if it doesn't exist
     if image.is_none() {
-        image.get_or_insert_default();
+        image.replace(Image {
+            engine_id: image_name.to_string(),
+            labels: Default::default(),
+        });
     }
 
     with_io(image, |mut image| async move {
         let docker = docker
             .as_ref()
-            .expect("docker resource should be available");
+            .expect("docker resource should be available")
+            .clone();
 
-        // Check if the image exists first, we do this because
-        // the state may have changed from under the worker
-        match docker.inspect_image(image_name.as_str()).await {
-            Ok(img_info) => {
-                if img_info.id.is_some() {
-                    // If the image exists and has an id, skip
-                    // download
-                    debug!("image already exists, skipping");
-                    image.replace(img_info.into());
-                    return Ok(image);
-                }
-            }
-            Err(e) => {
-                if let bollard::errors::Error::DockerResponseServerError { status_code, .. } = e {
-                    if status_code != 404 {
-                        return Err(DockerError {
-                            context: format!("failed to read information for image {image_name}"),
-                            source: e,
-                        });
-                    }
-                } else {
-                    return Err(DockerError {
-                        context: format!("failed to read information for image {image_name}"),
-                        source: e,
-                    });
-                }
-            }
-        }
-
-        // Otherwise try to download the image
-        let options = Some(CreateImageOptions {
-            from_image: Some(image_name.clone().into()),
-            ..Default::default()
-        });
-
+        // FIXME: make registry auth easier to work with
         let credentials = if let Some(auth_client_rwlock) = auth_client.as_ref() {
             auth_client_rwlock
                 .read()
                 .await
                 .token(&image_name)
-                .map(|token| DockerCredentials {
+                .map(|token| Credentials {
                     registrytoken: Some(token.to_string()),
                     ..Default::default()
                 })
@@ -387,25 +324,9 @@ fn pull_image(
             None
         };
 
-        // Try to create the image
-        let mut stream = docker.create_image(options, None, credentials);
-        while let Some(progress) = stream.next().await {
-            // TODO: report progress. This requires https://github.com/balena-io-modules/mahler-rs/issues/43
-            let _ = progress.map_err(|e| DockerError {
-                context: format!("failed to download image {image_name}"),
-                source: e,
-            })?;
-        }
-
-        // Check that the image exists
-        let new_img: Image = docker
-            .inspect_image(image_name.as_str())
-            .await
-            .map_err(|e| DockerError {
-                context: format!("failed to read information for image {image_name}"),
-                source: e,
-            })?
-            .into();
+        // FIXME: progress reporting
+        docker.image().pull(&image_name, credentials).await?;
+        let new_img: Image = docker.image().inspect(&image_name).await?.into();
 
         image.replace(new_img);
 
@@ -509,19 +430,11 @@ fn remove_image(
     }
 
     with_io(img_ptr, |img_ptr| async move {
-        docker
+        let docker = docker
             .as_ref()
-            .expect("docker resource should be available")
-            .remove_image(
-                image_name.as_str(),
-                Option::<RemoveImageOptions>::None,
-                None,
-            )
-            .await
-            .map_err(|source| DockerError {
-                context: format!("failed to remove image {image_name}"),
-                source,
-            })?;
+            .expect("docker resource should be available");
+
+        docker.image().remove(&image_name).await?;
 
         Ok(img_ptr)
     })
@@ -535,7 +448,7 @@ fn remove_image(
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
     #[error("Failed to connect to Docker daemon: {0}")]
-    DockerConnection(#[from] bollard::errors::Error),
+    DockerConnection(#[from] DockerError),
 
     #[error("Failed to serialize initial state: {0}")]
     StateSerialization(#[from] mahler::errors::SerializationError),
@@ -579,11 +492,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 }),
                 task::none(tag_image).with_description(
                     |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        if let Some(engine_id) = &tgt.engine_id {
-                            format!("tag image {engine_id} with '{image_name}'")
-                        } else {
-                            format!("tag image '{image_name}'")
-                        }
+                        format!("tag image '{}' as '{image_name}'", tgt.engine_id)
                     },
                 ),
                 task::none(create_image),
@@ -870,7 +779,8 @@ mod tests {
                 "pull image 'alpine:latest'",
             )
             + par!(
-                "tag image 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+                "tag image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080' \
+                        as 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
                 "pull image 'alpine:3.20'",
             )
             + seq!(

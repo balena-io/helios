@@ -1,8 +1,6 @@
 use std::error::Error;
 use std::future::{self, Future};
 
-use bollard::Docker;
-use remote::RegistryAuthClient;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::{debug, instrument, trace, warn};
@@ -17,6 +15,7 @@ mod api;
 mod cli;
 mod config;
 mod legacy;
+mod oci;
 mod remote;
 mod state;
 mod types;
@@ -25,6 +24,7 @@ mod util;
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
+use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::remote::{
     provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
 };
@@ -107,7 +107,7 @@ async fn start_supervisor(
     );
 
     // Load the initial state
-    let docker = Docker::connect_with_defaults()?;
+    let docker = Docker::connect().await?;
     let initial_state = state::read(&docker, uuid.clone(), os).await?;
 
     let registry_auth = remote_config.clone().map(RegistryAuthClient::new);

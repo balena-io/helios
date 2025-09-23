@@ -1,7 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::util::docker::ImageUri;
+use serde::{Deserialize, Serialize};
+
+use crate::oci::ImageUri;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Service {

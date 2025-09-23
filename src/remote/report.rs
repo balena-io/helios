@@ -8,9 +8,9 @@ use tracing::{error, info, instrument, trace};
 use crate::state::LocalState;
 use crate::types::Uuid;
 use crate::util::http::Uri;
+use crate::util::request::{Patch, PatchError, RequestConfig};
 
 use super::config::RemoteConfig;
-use super::request::{Patch, PatchError, RequestConfig};
 
 #[derive(Serialize, Debug)]
 struct AppReport {

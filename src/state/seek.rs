@@ -1,4 +1,6 @@
-use bollard::Docker;
+use std::future::{self, Future};
+use std::pin::Pin;
+
 use futures_lite::StreamExt;
 use mahler::{
     worker::{SeekError as WorkerSeekError, SeekStatus},
@@ -6,20 +8,16 @@ use mahler::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    future::{self, Future},
-    pin::Pin,
-};
 use tokio::sync::{
     watch::{Receiver, Sender},
     Notify,
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::{
-    legacy::{trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError},
-    remote::RegistryAuthClient,
+use crate::legacy::{
+    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
 };
+use crate::oci::{Client as Docker, RegistryAuthClient};
 
 use super::models::{Device, TargetDevice};
 use super::read::{read as read_state, ReadStateError};

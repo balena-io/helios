@@ -1,7 +1,5 @@
-use std::{
-    collections::BTreeMap,
-    ops::{Deref, DerefMut},
-};
+use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
 
