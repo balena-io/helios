@@ -1,4 +1,40 @@
 - commits:
+    - subject: Move all use of Bollard into a new module
+      hash: 17ee7ff4a804dcff3975eb8953563c9a2b8c6854
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move Registry into OCI module
+      hash: e35be76ad1a829117c6649e39f4eedf0e92c23ed
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move Request into utils
+      hash: 91aefc6b9fe754592f56a60435488e8afa200b4a
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move ImageUri into a new module
+      hash: ea7c0d17cbeeea6747645e79322fc7a805743637
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.10.1
+  title: ""
+  date: 2025-09-23T14:25:14.518Z
+- commits:
     - subject: Ignore HELIOS_REMOTE_* credentials in the container
       hash: 2665ec76da06f4695ba3c7760763f9284db16579
       body: |
