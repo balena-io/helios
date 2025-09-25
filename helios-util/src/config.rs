@@ -128,5 +128,5 @@ fn config_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".config")
     };
-    dir.join(env!("CARGO_PKG_NAME"))
+    dir.join(env!("HELIOS_PKG_NAME"))
 }
