@@ -13,8 +13,8 @@ mod provisioning;
 mod report;
 
 pub use config::{ProvisioningConfig, RemoteConfig, RequestConfig};
-pub use poll::{start_poll, PollRequest};
-pub use provisioning::{provision, ProvisioningError};
+pub use poll::{PollRequest, start_poll};
+pub use provisioning::{ProvisioningError, provision};
 pub use report::start_report;
 
 use helios_state as state;

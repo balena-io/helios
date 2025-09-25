@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{field, instrument, warn, Span};
+use tracing::{Span, field, instrument, warn};
 
 use crate::crypto::sha256_hex_digest;
 
@@ -361,7 +361,7 @@ impl Get {
 
     /// Save cache to file
     async fn save_cache(&self) {
-        if let (Some(ref cached), Some(ref etag)) = (&self.cached, &self.etag) {
+        if let (Some(cached), Some(etag)) = (&self.cached, &self.etag) {
             let entry = CacheEntry {
                 etag: etag.clone(),
                 value: cached.clone(),

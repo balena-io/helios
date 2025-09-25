@@ -9,19 +9,19 @@ use mahler::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{
-    watch::{Receiver, Sender},
     Notify,
+    watch::{Receiver, Sender},
 };
 use tracing::{error, info, instrument, trace};
 
 use crate::legacy::{
-    trigger_update, wait_for_state_settle, LegacyConfig, ProxyState, StateUpdateError,
+    LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
 };
 use crate::oci::{Client as Docker, RegistryAuthClient};
 
 use super::models::{Device, TargetDevice};
-use super::read::{read as read_state, ReadStateError};
-use super::worker::{create, CreateError as WorkerCreateError};
+use super::read::{ReadStateError, read as read_state};
+use super::worker::{CreateError as WorkerCreateError, create};
 
 /// Represents the service update status according to
 /// https://docs.balena.io/learn/manage/device-statuses/#update-statuses

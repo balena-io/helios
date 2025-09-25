@@ -2,8 +2,8 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tracing::trace;
 

@@ -156,7 +156,7 @@ impl List {
                     Some(tag) if tag.starts_with("sha256-") => {
                         let repo = uri.repo();
                         let tag = tag.replace("sha256-", "sha256:");
-                        format!("{}@{}", repo, tag).parse()?
+                        format!("{repo}@{tag}").parse()?
                     }
                     Some(_) | None => uri,
                 };

@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use super::crypto::{pseudorandom_string, ALPHA_NUM};
+use super::crypto::{ALPHA_NUM, pseudorandom_string};
 
 /// Atomically creates a file with the given contents, overwriting
 /// it if one exists.

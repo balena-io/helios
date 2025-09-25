@@ -559,11 +559,11 @@ pub fn create(
 mod tests {
     use super::*;
 
-    use mahler::{par, seq, Dag};
+    use mahler::{Dag, par, seq};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::{self, format::FmtSpan};
-    use tracing_subscriber::{prelude::*, EnvFilter};
+    use tracing_subscriber::{EnvFilter, prelude::*};
 
     fn before() {
         // Initialize tracing subscriber with custom formatting

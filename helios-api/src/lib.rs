@@ -1,9 +1,9 @@
 use axum::{
+    Json, Router,
     body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{Request, Response, StatusCode},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
@@ -18,12 +18,12 @@ use tokio::{
 };
 use tower_http::trace::TraceLayer;
 use tracing::{
-    debug_span,
-    field::{display, Empty},
-    info, instrument, Span,
+    Span, debug_span,
+    field::{Empty, display},
+    info, instrument,
 };
 
-use helios_legacy::{proxy, ProxyConfig, ProxyState};
+use helios_legacy::{ProxyConfig, ProxyState, proxy};
 use helios_remote::PollRequest;
 use helios_state::models::{App, Device, TargetApp, TargetDevice};
 use helios_state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};

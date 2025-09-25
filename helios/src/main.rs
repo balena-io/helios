@@ -5,10 +5,10 @@ use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
 use tracing::{debug, instrument, trace, warn};
 use tracing_subscriber::{
+    EnvFilter,
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter,
 };
 
 mod cli;
@@ -26,7 +26,7 @@ use crate::cli::Cli;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::remote::{
-    provision, ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig,
+    ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
 
 fn initialize_tracing() {
@@ -269,7 +269,7 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
         Ok((uuid.clone(), Some(remote)))
     }
     // Otherwise use an existing provisioning config, if available
-    else if let Some(ref provisioning_config) = &provisioning_config {
+    else if let Some(provisioning_config) = &provisioning_config {
         if cli.uuid.is_some() && !cli.uuid.as_ref().eq(&Some(&provisioning_config.uuid)) {
             warn!("ignoring --uuid argument that is different to registered remote");
         }

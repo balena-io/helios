@@ -3,7 +3,7 @@ use std::time::Duration;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, field, instrument, Span};
+use tracing::{Span, debug, field, instrument};
 
 use crate::util::config;
 use crate::util::crypto::sha256_hex_digest;
