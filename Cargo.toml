@@ -1,75 +1,82 @@
 [workspace]
 resolver = "3"
-members = [
-  "helios",
-  "helios-api",
-  "helios-legacy",
-  "helios-oci",
-  "helios-remote",
-  "helios-state",
-  "helios-util",
-]
+members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-state", "helios-util" ]
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 rust-version = "1.87"
 edition = "2024"
-
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"
 repository = "https://github.com/balena-io/helios"
-authors = ["Balena Inc. <hello@balena.io>"]
+authors = [ "Balena Inc. <hello@balena.io>" ]
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
 
 [workspace.dependencies]
-axum = { version = "0.8.4", default-features = false, features = [
-  "tokio",
-  "http1",
-  "json",
-  "query",
-] }
-tokio = { version = "1.47.1", default-features = false, features = [
-  "rt-multi-thread",
-  "macros",
-  "time",
-  "fs",
-] }
-tower-http = { version = "0.6.6", default-features = false, features = [
-  "trace",
-] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = [
-  "env-filter",
-  "fmt",
-  "registry",
-  "ansi",
-] }
-reqwest = { version = "0.12", default-features = false, features = [
-  "json",
-  "rustls-tls",
-  "brotli",
-  "stream",
-] }
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
 rand = "0.9.2"
-clap = { version = "4.5", features = ["derive", "env"] }
 dirs = "6.0.0"
-uuid = { version = "1.18", features = ["v4"] }
-mahler = { version = "0.19.6" }
 bollard = "0.19.2"
-sha2 = { version = "0.10.9", default-features = false }
 fastrand = "2.3.0"
-futures-lite = { version = "2.6.1", default-features = false }
 regex = "1.11"
-
-# dev-only dependencies
-mockito = { version = "1.7", default-features = false }
 pretty_assertions = "1.4.1"
 
+[workspace.dependencies.axum]
+version = "0.8.4"
+default-features = false
+features = [ "tokio", "http1", "json", "query" ]
+
+[workspace.dependencies.tokio]
+version = "1.47.1"
+default-features = false
+features = [ "rt-multi-thread", "macros", "time", "fs" ]
+
+[workspace.dependencies.tower-http]
+version = "0.6.6"
+default-features = false
+features = [ "trace" ]
+
+[workspace.dependencies.tracing-subscriber]
+version = "0.3.20"
+features = [ "env-filter", "fmt", "registry", "ansi" ]
+
+[workspace.dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = [ "json", "rustls-tls", "brotli", "stream" ]
+
+[workspace.dependencies.serde]
+version = "1.0"
+features = [ "derive" ]
+
+[workspace.dependencies.clap]
+version = "4.5"
+features = [ "derive", "env" ]
+
+[workspace.dependencies.uuid]
+version = "1.18"
+features = [ "v4" ]
+
+[workspace.dependencies.mahler]
+version = "0.19.6"
+
+[workspace.dependencies.sha2]
+version = "0.10.9"
+default-features = false
+
+[workspace.dependencies.futures-lite]
+version = "2.6.1"
+default-features = false
+
+[workspace.dependencies.mockito]
+version = "1.7"
+default-features = false
+
+[profile]
 [profile.release]
 opt-level = "z"
 codegen-units = 1

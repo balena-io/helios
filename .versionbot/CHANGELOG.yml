@@ -1,4 +1,96 @@
 - commits:
+    - subject: Bump Rust version to 1.87 and edition to 2024
+      hash: 8fc2b8890148a381de53d728a17cd0cba2cc43cb
+      body: ""
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios main to a new crate
+      hash: 2398696f9deda860872504697ee113c73a805e37
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-api to a new crate
+      hash: 056630c57dedf73a08732ae8dfd01b5aa34c152c
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-remote to a new crate
+      hash: 74278be19070e5d1f5fcf809a8c0b5b65a5f7735
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-state to a new crate
+      hash: 471671f242c3cce84d2d2ad925a25a838cbd2427
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-legacy to a new crate
+      hash: 000d066c5eba4573f2eac53ce19c515dd2092b01
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-oci to a new crate
+      hash: 4628655250194af153b667493e06a22aefe22d97
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Improve registry configuration
+      hash: e776fbbd01b16bfbddd0d4dbec7ab986d9e4bb65
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move types into helios-util
+      hash: d6800f16f92952b0ed9073b439d35769d4484a49
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move config into helios-util
+      hash: a6cb2b9fb9d5ef1303e0d6e08e9eaf6c62b5ddb4
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+    - subject: Move helios-util to a new crate
+      hash: 4bcb05fc5fe03df29690ee504b04dd58fd337616
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Akis Kesoglou
+      nested: []
+  version: 0.11.0
+  title: ""
+  date: 2025-09-25T18:21:21.934Z
+- commits:
     - subject: Move all use of Bollard into a new module
       hash: 17ee7ff4a804dcff3975eb8953563c9a2b8c6854
       body: ""
