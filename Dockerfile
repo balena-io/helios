@@ -1,23 +1,29 @@
-FROM alpine:3.21 AS build
+FROM alpine:3.22 AS build
 
 # Install build dependencies
 RUN apk add --update --no-cache \
-		build-base \
-		openssl-dev \
-		rust cargo
+	build-base \
+	openssl-dev \
+	rust cargo
 
 WORKDIR /usr/src/app
 
 # Copy source files
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY helios ./helios
+COPY helios-api ./helios-api
+COPY helios-legacy ./helios-legacy
+COPY helios-oci ./helios-oci
+COPY helios-remote ./helios-remote
+COPY helios-state ./helios-state
+COPY helios-util ./helios-util
 
 # Build release
 # Unit tests are run separately by CI
 RUN cargo build --release --locked
 
 # Release target
-FROM alpine:3.21
+FROM alpine:3.22
 
 WORKDIR /opt/helios
 
@@ -28,7 +34,7 @@ LABEL org.opencontainers.image.licenses=APACHE-2.0
 
 # Install release dependencies
 RUN apk add --update --no-cache \
-		libstdc++ docker-cli jq dbus socat
+	libstdc++ docker-cli jq dbus socat
 
 COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/release/helios /usr/bin
