@@ -138,31 +138,11 @@ type ListItem = std::result::Result<(ImageUri, LocalImage), InvalidImageUriError
 
 impl List {
     pub fn iter(&self) -> impl Iterator<Item = ListItem> + '_ {
-        let iter = self.0.iter();
-
-        iter.flat_map(|image| {
-            let tags_iter = image.repo_tags.iter();
-
-            tags_iter.map(|tag| {
-                let uri: ImageUri = tag.parse()?;
-
-                // If the image name has a tag starting with 'sha256-' use it as the digest.
-                // This is needed because the digest doesn't survive when pulling with deltas
-                // https://github.com/balena-os/balena-engine/issues/283
-                //
-                // FIXME: isn't this buggy? surely the daemon doesn't think the image has that
-                // digest, so it won't find it if we ask using the digest we got from the tag.
-                let uri = match uri.tag() {
-                    Some(tag) if tag.starts_with("sha256-") => {
-                        let repo = uri.repo();
-                        let tag = tag.replace("sha256-", "sha256:");
-                        format!("{repo}@{tag}").parse()?
-                    }
-                    Some(_) | None => uri,
-                };
-
-                Ok((uri, image.into()))
-            })
+        self.0.iter().flat_map(|image| {
+            image
+                .repo_tags
+                .iter()
+                .map(|tag| Ok((tag.parse()?, image.into())))
         })
     }
 }

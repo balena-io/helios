@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     hash::{Hash, Hasher},
     str::FromStr,
+    sync::LazyLock,
 };
 
 use regex::Regex;
@@ -89,14 +90,19 @@ impl Display for ImageUri {
     }
 }
 
+static IMAGE_URI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:(localhost|.*?[.:].*?)/)?(.+?)(?::(.*?))?(?:@(.*?))?$").unwrap()
+});
+
+static IMAGE_DIGEST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-f-A-F]{32,}$").unwrap()
+});
+
 impl FromStr for ImageUri {
     type Err = InvalidImageUriError;
 
     fn from_str(uri: &str) -> Result<Self, Self::Err> {
-        let re = Regex::new(r"^(?:(localhost|.*?[.:].*?)/)?(.+?)(?::(.*?))?(?:@(.*?))?$")
-            .expect("regular expression should compile");
-
-        let caps = re
+        let caps = IMAGE_URI_RE
             .captures(uri)
             .ok_or_else(|| InvalidImageUriError(uri.into()))?;
 
@@ -105,22 +111,18 @@ impl FromStr for ImageUri {
             .get(2)
             .map(|m| m.as_str().into())
             .ok_or_else(|| InvalidImageUriError(uri.into()))?;
-        let tag = caps.get(3).map(|m| m.as_str().into());
+        let tag = caps.get(3).map(|m| m.as_str());
         let digest = caps.get(4).map(|m| m.as_str().to_owned());
 
-        let tag = if digest.is_none() && tag.is_none() {
-            Some("latest".to_owned())
+        // omit the tag if explicitely set to `latest`
+        let tag = if let Some("latest") = tag {
+            None
         } else {
-            tag
+            tag.map(|t| t.to_owned())
         };
 
         if let Some(ref d) = digest {
-            let digest_re = Regex::new(
-                r"^[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-f-A-F]{32,}$",
-            )
-            .expect("regular expression should compile");
-
-            if !digest_re.is_match(d) {
+            if !IMAGE_DIGEST_RE.is_match(d) {
                 return Err(InvalidImageUriError(uri.into()));
             }
         }
@@ -185,7 +187,7 @@ mod tests {
         let uri = ImageUri::from_static("ubuntu");
         assert_eq!(uri.registry, None);
         assert_eq!(uri.image, "ubuntu");
-        assert_eq!(uri.tag, Some("latest".to_string()));
+        assert_eq!(uri.tag, None);
         assert_eq!(uri.digest, None);
     }
 
@@ -203,7 +205,7 @@ mod tests {
         let uri = ImageUri::from_static("docker.io/library/ubuntu:latest");
         assert_eq!(uri.registry, Some("docker.io".to_string()));
         assert_eq!(uri.image, "library/ubuntu");
-        assert_eq!(uri.tag, Some("latest".to_string()));
+        assert_eq!(uri.tag, None);
         assert_eq!(uri.digest, None);
     }
 
@@ -237,7 +239,7 @@ mod tests {
         let uri = ImageUri::from_static("localhost:5000/myimage:latest");
         assert_eq!(uri.registry, Some("localhost:5000".to_string()));
         assert_eq!(uri.image, "myimage");
-        assert_eq!(uri.tag, Some("latest".to_string()));
+        assert_eq!(uri.tag, None);
         assert_eq!(uri.digest, None);
     }
 
