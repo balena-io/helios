@@ -61,13 +61,13 @@ impl Default for RequestConfig {
     }
 }
 
-impl From<RequestConfig> for request::RequestConfig {
-    fn from(value: RequestConfig) -> Self {
+impl From<RemoteConfig> for request::RequestConfig {
+    fn from(config: RemoteConfig) -> Self {
         Self {
-            timeout: value.timeout,
-            min_interval: value.poll_min_interval,
-            max_backoff: value.poll_interval,
-            auth_token: None,
+            timeout: config.request.timeout,
+            min_interval: config.request.poll_min_interval,
+            max_backoff: config.request.poll_interval,
+            auth_token: Some(config.api_key.into()),
         }
     }
 }
