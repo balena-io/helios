@@ -724,7 +724,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helios"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "clap",
  "helios-api",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "helios-api"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "axum",
  "helios-legacy",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "helios-legacy"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "axum",
  "helios-util",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "helios-oci"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bollard",
  "futures-lite",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "helios-remote"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "helios-state",
  "helios-util",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "helios-state"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "futures-lite",
  "helios-legacy",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "helios-util"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "axum",
  "dirs",

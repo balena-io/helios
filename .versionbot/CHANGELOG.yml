@@ -1,4 +1,22 @@
 - commits:
+    - subject: Fix registry auth initialization
+      hash: 630c7cc7b13c89a8cd70b41f07fe92345b18cd4c
+      body: |
+        The RegistryAuthClient was using a RequestConfig conversion that used
+        `None` as auth_token, resulting in image pull to fail every time. This
+        modifies the `From` implementation to convert from `RemoteConfig` rather
+        than `RequestConfig`. This also removes the conversion between
+        remote::config::RequestConfig and util::request::RequestConfig that
+        could lead to errors due to the name sharing.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.2
+  title: ""
+  date: 2025-09-26T15:02:48.705Z
+- commits:
     - subject: Create build script for helios-util crate
       hash: ca28b1989e32c40a961a845b1533f4233a630b5c
       body: |
