@@ -101,13 +101,13 @@ fn get_cache_path(endpoint: &str) -> PathBuf {
     let digest = sha256_hex_digest(endpoint.as_bytes());
     let filename = format!("{digest}.json");
     let cache_dir = if let Some(cache_dir) = dirs::cache_dir() {
-        cache_dir.join(env!("CARGO_PKG_NAME"))
+        cache_dir.join(env!("HELIOS_PKG_NAME"))
     } else {
         // Fallback to home directory if cache dir is not available
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".cache")
-            .join(env!("CARGO_PKG_NAME"))
+            .join(env!("HELIOS_PKG_NAME"))
     };
     cache_dir.join(filename)
 }
