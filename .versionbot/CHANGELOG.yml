@@ -1,4 +1,19 @@
 - commits:
+    - subject: Create build script for helios-util crate
+      hash: ca28b1989e32c40a961a845b1533f4233a630b5c
+      body: |
+        The script for now sets-up the `HELIOS_PKG_NAME` compile time variable
+        with the name of the main crate. This variable is used for local
+        directories instead of `CARGO_PKG_NAME`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.1
+  title: ""
+  date: 2025-09-26T04:34:57.785Z
+- commits:
     - subject: Bump Rust version to 1.87 and edition to 2024
       hash: 8fc2b8890148a381de53d728a17cd0cba2cc43cb
       body: ""
