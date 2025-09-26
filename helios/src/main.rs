@@ -111,7 +111,7 @@ async fn start_supervisor(
 
     let registry_auth = remote_config
         .clone()
-        .map(|c| RegistryAuthClient::new(c.api_endpoint, c.request.into()));
+        .map(|c| RegistryAuthClient::new(c.api_endpoint.clone(), c.into()));
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
