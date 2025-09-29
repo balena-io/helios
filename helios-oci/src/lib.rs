@@ -8,6 +8,9 @@ pub use bollard::errors::Error as ConnectionError;
 mod image;
 pub use image::{Image, LocalImage};
 
+mod container;
+pub use container::{Container, LocalContainer};
+
 mod models;
 pub use models::{ImageUri, InvalidImageUriError};
 
@@ -48,6 +51,12 @@ impl Client {
     #[inline]
     pub fn image(&self) -> Image<'_> {
         Image::new(self)
+    }
+
+    /// Exposes methods to work with containers
+    #[inline]
+    pub fn container(&self) -> Container<'_> {
+        Container::new(self)
     }
 }
 

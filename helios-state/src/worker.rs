@@ -9,7 +9,6 @@ use mahler::{
     worker::{Ready, Worker},
 };
 use tokio::sync::RwLock;
-use tracing::debug;
 
 use super::util::state;
 use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
@@ -51,7 +50,6 @@ fn perform_cleanup(
     with_io(device, |device| async move {
         // Clean up authorizations
         if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
-            debug!("clean up registry credentials");
             // Wait for write authorization
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
@@ -60,9 +58,23 @@ fn perform_cleanup(
             for app_uuid in app_uuids {
                 // remove app metadata if not in the target state
                 if !device.apps.contains_key(&app_uuid) {
-                    state::remove(&format!("/apps/{app_uuid}/id")).await?;
-                    state::remove(&format!("/apps/{app_uuid}/name")).await?;
                     state::remove_dir(&format!("/apps/{app_uuid}")).await?;
+                } else {
+                    let release_uuids: Vec<Uuid> =
+                        state::read_all(format!("/apps/{app_uuid}/releases")).await?;
+
+                    // remove release metadata if not in the target state
+                    for release_uuid in release_uuids {
+                        if !device
+                            .apps
+                            .get(&app_uuid)
+                            .map(|app| app.releases.contains_key(&release_uuid))
+                            .unwrap_or_default()
+                        {
+                            state::remove_dir(&format!("/apps/{app_uuid}/releases/{release_uuid}"))
+                                .await?;
+                        }
+                    }
                 }
             }
         }
@@ -428,16 +440,22 @@ fn install_service(
     mut svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<TargetService>,
-) -> View<Option<Service>> {
+    Path(job_path): Path,
+) -> IO<Option<Service>, state::ReadWriteError> {
     // Skip the task if the image for the service doesn't exist yet
     if device.images.keys().all(|img| img != &tgt.image) {
-        return svc;
+        return svc.into();
     }
 
-    let TargetService { id, image, .. } = tgt;
-
+    let TargetService { id, image } = tgt;
     svc.replace(Service { id, image });
-    svc
+
+    with_io(svc, async move |svc| {
+        if let Some(s) = svc.as_ref() {
+            state::store_with_name(&job_path, "image", &s.image).await?;
+        }
+        Ok(svc)
+    })
 }
 
 /// Remove an image

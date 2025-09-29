@@ -1,11 +1,15 @@
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::oci::{Client as Docker, Error as DockerError, InvalidImageUriError, WithContext};
+use crate::oci::{
+    Client as Docker, Error as DockerError, ImageUri, InvalidImageUriError, WithContext,
+};
 use crate::util::state;
 use crate::util::types::{OperatingSystem, Uuid};
 
-use super::models::{App, Device};
+use super::models::{App, Device, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -39,23 +43,73 @@ pub async fn read(
         device.images.insert(uri, image.into());
     }
 
-    // Read the state of apps
-    let app_uuids: Vec<Uuid> = state::read_all("/apps").await?;
-    for app_uuid in app_uuids {
-        let id: Option<u32> = state::read(&format!("/apps/{app_uuid}/id")).await?;
-        if let Some(id) = id {
-            let name: Option<String> = state::read(&format!("/apps/{app_uuid}/name")).await?;
+    let apps = &mut device.apps;
 
-            // FIXME: we probably don't want to read all apps in the local dir
-            // but read containers and infer apps from there, but we'll do this for now
-            device.apps.insert(
-                app_uuid,
-                App {
-                    id,
-                    name,
-                    ..Default::default()
-                },
-            );
+    // Read the state of apps from containers
+    let containers = docker
+        .container()
+        .list_with_labels(vec!["io.baleena.supervised"])
+        .await
+        .context("failed to read state of containers")?;
+
+    for (container_name, local_container) in containers.iter() {
+        let ServiceContainerName {
+            service_name,
+            release_uuid,
+        } = container_name
+            .parse()
+            // this should not happen
+            .expect("invalid container name");
+
+        let labels = local_container.labels;
+
+        let app_uuid: Uuid = labels
+            .get("io.balena.app-uuid")
+            .map(|uuid| uuid.as_str().into())
+            .unwrap_or(UNKNOWN_APP_UUID.into());
+
+        // Create the app if it doesn't exist yet
+        let app = apps.entry(app_uuid.clone()).or_insert_with(|| {
+            let id: u32 = labels
+                .get("io.balena.app-id")
+                .and_then(|id| id.parse().ok())
+                .unwrap_or(0);
+
+            App {
+                id,
+                name: None,
+                releases: BTreeMap::new(),
+            }
+        });
+
+        // Read the app name from the local state
+        if app.name.is_none() {
+            app.name = state::read(&format!("/apps/{app_uuid}/name")).await?;
+        }
+
+        // Create the release for the uuid if it doesn't exist
+        let release = app.releases.entry(release_uuid.clone()).or_insert(Release {
+            services: BTreeMap::new(),
+        });
+
+        let svc_img: Option<ImageUri> = state::read(&format!(
+            "/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}/image"
+        ))
+        .await?;
+
+        // Insert the service and link it to the image if there is state
+        // metadata about the image
+        // FIXME: the in-memory service should exist if the container exists so
+        // we need to use an image reference if the state variable does not exist
+        if let Some(image) = svc_img {
+            let svc_id: u32 = labels
+                .get("io.balena.service-id")
+                .and_then(|id| id.parse().ok())
+                .unwrap_or(0);
+
+            release
+                .services
+                .insert(service_name, Service { id: svc_id, image });
         }
     }
 

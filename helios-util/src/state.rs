@@ -141,5 +141,5 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
 pub async fn remove_dir<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
     let local_path = with_state_dir(path);
     trace!("removing local state {}", local_path.display());
-    fs::remove_dir(local_path).await
+    fs::remove_dir_all(local_path).await
 }
