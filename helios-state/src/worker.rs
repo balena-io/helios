@@ -17,7 +17,7 @@ use crate::util::types::Uuid;
 
 use super::models::{
     App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
-    TargetRelease, TargetService,
+    TargetService,
 };
 
 /// Make sure a cleanup happens after all tasks have been performed
@@ -212,6 +212,18 @@ fn request_registry_token_for_new_images(
                     .services
                     .iter()
                     .filter_map(|(svc_name, svc)| {
+                        if device
+                            .apps
+                            .get(app_uuid)
+                            .and_then(|app| app.releases.get(commit))
+                            .and_then(|release| release.services.get(svc_name))
+                            .is_some()
+                        {
+                            // the service already exists, ignore it
+                            return None;
+                        }
+
+                        // only use the target image if it is a Uri
                         if let ImageRef::Uri(img_uri) = &svc.image {
                             Some((svc_name, img_uri))
                         } else {
@@ -242,11 +254,12 @@ fn request_registry_token_for_new_images(
     let tgt_auths: RegistryAuthSet = images_to_install
         .iter()
         .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
-            if let Some(service) = img.registry().clone() {
-                if let Some(scope) = acc.get_mut(&service) {
-                    scope.push((*img).clone());
+            let img = (*img).clone();
+            if let Some(service) = img.registry().as_ref() {
+                if let Some(scope) = acc.get_mut(service) {
+                    scope.push(img);
                 } else {
-                    acc.insert(service, vec![(*img).clone()]);
+                    acc.insert(service.clone(), vec![img]);
                 }
             }
             acc
@@ -263,36 +276,54 @@ fn request_registry_token_for_new_images(
     Some(request_registry_credentials.with_target(tgt_auths))
 }
 
-/// Install all new images for a release
-fn fetch_release_images(
+/// Install all new images for all target apps
+fn fetch_apps_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<TargetRelease>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    Target(tgt_apps): Target<TargetAppMap>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
-    let images_to_install: Vec<ImageUri> = tgt_release
-        .services
-        .into_iter()
-        .filter_map(|(svc_name, svc)| {
-            if let ImageRef::Uri(img_uri) = svc.image {
-                Some((svc_name, img_uri))
-            } else {
-                None
-            }
-        })
-        .filter(|(svc_name, svc_img)| {
-            // ignore the image if it already exists
-            if device.images.contains_key(svc_img) {
-                return false;
-            }
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release
+                    .services
+                    .iter()
+                    .filter_map(|(svc_name, svc)| {
+                        if device
+                            .apps
+                            .get(app_uuid)
+                            .and_then(|app| app.releases.get(commit))
+                            .and_then(|release| release.services.get(svc_name))
+                            .is_some()
+                        {
+                            // the service already exists, ignore it
+                            return None;
+                        }
 
-            find_installed_service(&device, &app_uuid, &commit, svc_name)
-                // select the image if it is for a new service or the existing service image has the
-                // same digest (which means we are just re-tagging)
-                .is_none_or(|s| s.image.digest().is_some() && svc_img.digest() == s.image.digest())
+                        // only use the target image if it is a Uri
+                        if let ImageRef::Uri(svc_img) = &svc.image {
+                            return Some((svc_name, svc_img));
+                        }
+                        None
+                    })
+                    .filter(|(svc_name, svc_img)| {
+                        // ignore the image if it already exists
+                        if device.images.contains_key(svc_img) {
+                            return false;
+                        }
+
+                        find_installed_service(&device, app_uuid, commit, svc_name)
+                            // select the image if it is for a new service or the existing service image has the
+                            // same digest (which means we are just re-tagging)
+                            .is_none_or(|s| {
+                                s.image.digest().is_some() && svc_img.digest() == s.image.digest()
+                            })
+                    })
+            })
         })
         // remove duplicate digests
-        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc_img)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc_img)| {
             if acc
                 .iter()
                 .all(|img| img.digest().is_none() || img.digest() != svc_img.digest())
@@ -305,13 +336,13 @@ fn fetch_release_images(
     // only download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image))
+        tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
 }
 
 /// Initialize an empty release
-fn init_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
+fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release.replace(Release::default());
     release
 }
@@ -569,7 +600,13 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::none(create_image),
             ],
         )
-        .job("/apps", task::update(request_registry_token_for_new_images))
+        .jobs(
+            "/apps",
+            [
+                task::update(request_registry_token_for_new_images),
+                task::update(fetch_apps_images),
+            ],
+        )
         .job(
             "/apps/{app_uuid}",
             task::create(init_app).with_description(|Args(uuid): Args<Uuid>| {
@@ -584,14 +621,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(init_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
+            [task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                },
+            )],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
