@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::oci::ImageUri;
+use crate::oci::ImageRef;
 use crate::util::types::Uuid;
 
 // We don't want to fail if the service is supervised but it doesn't have an app-uuid,
@@ -92,7 +92,7 @@ impl FromStr for ServiceContainerName {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Service {
     pub id: u32,
-    pub image: ImageUri,
+    pub image: ImageRef,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -101,8 +101,8 @@ pub struct TargetService {
     #[serde(default)]
     pub id: u32,
 
-    /// Service image URI
-    pub image: ImageUri,
+    /// Service image
+    pub image: ImageRef,
 }
 
 impl From<Service> for TargetService {

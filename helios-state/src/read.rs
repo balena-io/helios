@@ -4,7 +4,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 use crate::oci::{
-    Client as Docker, Error as DockerError, ImageUri, InvalidImageUriError, WithContext,
+    Client as Docker, Error as DockerError, ImageRef, ImageUri, InvalidImageUriError, WithContext,
 };
 use crate::util::state;
 use crate::util::types::{OperatingSystem, Uuid};
@@ -99,18 +99,19 @@ pub async fn read(
 
         // Insert the service and link it to the image if there is state
         // metadata about the image
-        // FIXME: the in-memory service should exist if the container exists so
-        // we need to use an image reference if the state variable does not exist
-        if let Some(image) = svc_img {
-            let svc_id: u32 = labels
-                .get("io.balena.service-id")
-                .and_then(|id| id.parse().ok())
-                .unwrap_or(0);
+        let image = if let Some(svc_img) = svc_img {
+            ImageRef::Uri(svc_img)
+        } else {
+            ImageRef::Id(local_container.image_id)
+        };
 
-            release
-                .services
-                .insert(service_name, Service { id: svc_id, image });
-        }
+        let svc_id: u32 = labels
+            .get("io.balena.service-id")
+            .and_then(|id| id.parse().ok())
+            .unwrap_or(0);
+        release
+            .services
+            .insert(service_name, Service { id: svc_id, image });
     }
 
     Ok(device)

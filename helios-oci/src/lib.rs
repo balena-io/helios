@@ -12,7 +12,7 @@ mod container;
 pub use container::{Container, LocalContainer};
 
 mod models;
-pub use models::{ImageUri, InvalidImageUriError};
+pub use models::{ImageRef, ImageUri, InvalidImageUriError};
 
 mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};

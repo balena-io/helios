@@ -138,7 +138,8 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
     fs::remove_file(local_path).await
 }
 
-pub async fn remove_dir<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
+/// Remove a state directory after removing all its contents
+pub async fn remove_dir_all<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
     let local_path = with_state_dir(path);
     trace!("removing local state {}", local_path.display());
     fs::remove_dir_all(local_path).await
