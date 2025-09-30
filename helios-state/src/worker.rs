@@ -157,17 +157,17 @@ fn set_app_name(
 }
 
 /// Find an installed service for a different commit
-fn find_installed_service(
-    device: &Device,
-    app_uuid: Uuid,
-    commit: Uuid,
-    service_name: String,
-) -> Option<&Service> {
-    device.apps.get(&app_uuid).and_then(|app| {
+fn find_installed_service<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    svc_name: &'a String,
+) -> Option<&'a Service> {
+    device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()
-            .filter(|(c, _)| c != &&commit)
-            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &&service_name))
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &svc_name))
             .map(|(_, s)| s)
             .next()
     })
@@ -224,18 +224,13 @@ fn request_registry_token_for_new_images(
                             return false;
                         }
 
-                        find_installed_service(
-                            &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*svc_name).clone(),
-                        )
-                        // if the image is for a new service or the existing service has a
-                        // different digest (which means a new download), then add it to the
-                        // authorization list
-                        .is_none_or(|s| {
-                            s.image.digest().is_none() || s.image.digest() != svc_img.digest()
-                        })
+                        find_installed_service(&device, app_uuid, commit, svc_name)
+                            // if the image is for a new service or the existing service has a
+                            // different digest (which means a new download), then add it to the
+                            // authorization list
+                            .is_none_or(|s| {
+                                s.image.digest().is_none() || s.image.digest() != svc_img.digest()
+                            })
                     })
                     // then select the image
                     .map(|(_, svc_img)| svc_img)
@@ -291,15 +286,10 @@ fn fetch_release_images(
                 return false;
             }
 
-            find_installed_service(
-                &device,
-                app_uuid.clone(),
-                commit.clone(),
-                (*svc_name).clone(),
-            )
-            // select the image if it is for a new service or the existing service image has the
-            // same digest (which means we are just re-tagging)
-            .is_none_or(|s| s.image.digest().is_some() && svc_img.digest() == s.image.digest())
+            find_installed_service(&device, &app_uuid, &commit, svc_name)
+                // select the image if it is for a new service or the existing service image has the
+                // same digest (which means we are just re-tagging)
+                .is_none_or(|s| s.image.digest().is_some() && svc_img.digest() == s.image.digest())
         })
         // remove duplicate digests
         .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc_img)| {
@@ -433,7 +423,7 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
 fn fetch_service_image(
     System(device): System<Device>,
     Target(tgt): Target<TargetService>,
-    Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
     let tgt_img = if let ImageRef::Uri(img) = tgt.image {
         // Skip this task if the image already exists
@@ -449,7 +439,7 @@ fn fetch_service_image(
     // If there is a service with the same name in any other releases of the service
     // and the service image has as different digest then we skip the fetch as
     // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, app_uuid, commit, service_name)
+    if find_installed_service(&device, &app_uuid, &commit, &svc_name)
         .is_none_or(|svc| svc.image.digest().is_some() && tgt_img.digest() == svc.image.digest())
     {
         return Some(create_image.with_arg("image_name", tgt_img));
