@@ -2,7 +2,7 @@ version: '2.4'
 
 services:
   sut:
-    build: ./integration
+    build: ./helios-integration-tests
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
     volumes:
