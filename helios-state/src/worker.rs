@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mahler::extract::{Res, System, Target, View};
+use mahler::extract::{Path, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::Uninitialized;
 use mahler::{
@@ -9,15 +9,15 @@ use mahler::{
     worker::{Ready, Worker},
 };
 use tokio::sync::RwLock;
-use tracing::debug;
 
-use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
+use super::util::state;
+use crate::oci::{Client as Docker, Error as DockerError, ImageRef, ImageUri};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::util::types::Uuid;
 
 use super::models::{
     App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
-    TargetRelease, TargetService,
+    TargetService,
 };
 
 /// Make sure a cleanup happens after all tasks have been performed
@@ -35,7 +35,7 @@ fn perform_cleanup(
     device: View<Device>,
     Target(tgt_device): Target<TargetDevice>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
-) -> IO<Device> {
+) -> IO<Device, state::ReadWriteError> {
     // skip the task if we have not reached the target state
     // (outside the needs_cleanup property)
     if TargetDevice::from(Device {
@@ -50,10 +50,35 @@ fn perform_cleanup(
     with_io(device, |device| async move {
         // Clean up authorizations
         if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
-            debug!("clean up registry credentials");
             // Wait for write authorization
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
+
+            let app_uuids: Vec<Uuid> = state::read_all("/apps").await?;
+            for app_uuid in app_uuids {
+                // remove app metadata if not in the target state
+                if !device.apps.contains_key(&app_uuid) {
+                    state::remove_dir_all(&format!("/apps/{app_uuid}")).await?;
+                } else {
+                    let release_uuids: Vec<Uuid> =
+                        state::read_all(format!("/apps/{app_uuid}/releases")).await?;
+
+                    // remove release metadata if not in the target state
+                    for release_uuid in release_uuids {
+                        if !device
+                            .apps
+                            .get(&app_uuid)
+                            .map(|app| app.releases.contains_key(&release_uuid))
+                            .unwrap_or_default()
+                        {
+                            state::remove_dir_all(&format!(
+                                "/apps/{app_uuid}/releases/{release_uuid}"
+                            ))
+                            .await?;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(device)
@@ -65,50 +90,84 @@ fn perform_cleanup(
     })
 }
 
-/// Update the in-memory device name
+/// Update the device name
 fn set_device_name(
-    mut name: View<Option<String>>,
+    name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
-    *name = tgt;
-    name
+) -> IO<Option<String>, state::ReadWriteError> {
+    let tgt_name = tgt.clone();
+    with_io(name, |name| async move {
+        if let Some(name) = tgt_name {
+            state::store("/name", &name).await?;
+        }
+
+        Ok(name)
+    })
+    .map(|mut name| {
+        *name = tgt;
+        name
+    })
 }
 
-/// Initialize the app in memory
-fn prepare_app(
-    mut app: View<Option<App>>,
+/// Initialize the app and store its local data
+fn init_app(
+    app: View<Option<App>>,
     Target(tgt_app): Target<TargetApp>,
-) -> View<Option<App>> {
-    let TargetApp { id, name, .. } = tgt_app;
-    app.replace(App {
-        id,
-        name,
-        ..Default::default()
-    });
-    app
+    Path(job_path): Path,
+) -> IO<Option<App>, state::ReadWriteError> {
+    let tgt_app_id = tgt_app.id;
+    let tgt_app_name = tgt_app.name.clone();
+
+    with_io(app, move |app| async move {
+        // store id and name as local state
+        state::store_with_name(&job_path, "id", &tgt_app_id).await?;
+        if let Some(app_name) = tgt_app_name {
+            state::store_with_name(&job_path, "name", &app_name).await?;
+        }
+        Ok(app)
+    })
+    .map(move |mut app| {
+        let TargetApp { id, name, .. } = tgt_app;
+        app.replace(App {
+            id,
+            name,
+            ..Default::default()
+        });
+        app
+    })
 }
 
-/// Update the in-memory app name
+/// Update the app local name
 fn set_app_name(
-    mut name: View<Option<String>>,
+    app_name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
-    *name = tgt;
-    name
+    Path(job_path): Path,
+) -> IO<Option<String>, state::ReadWriteError> {
+    let tgt_app_name = tgt.clone();
+    with_io(app_name, |app_name| async move {
+        if let Some(app_name) = tgt_app_name {
+            state::store(&job_path, &app_name).await?;
+        }
+        Ok(app_name)
+    })
+    .map(|mut name| {
+        *name = tgt;
+        name
+    })
 }
 
 /// Find an installed service for a different commit
-fn find_installed_service(
-    device: &Device,
-    app_uuid: Uuid,
-    commit: Uuid,
-    service_name: String,
-) -> Option<&Service> {
-    device.apps.get(&app_uuid).and_then(|app| {
+fn find_installed_service<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    svc_name: &'a String,
+) -> Option<&'a Service> {
+    device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()
-            .filter(|(c, _)| c != &&commit)
-            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &&service_name))
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &svc_name))
             .map(|(_, s)| s)
             .next()
     })
@@ -152,23 +211,41 @@ fn request_registry_token_for_new_images(
                 release
                     .services
                     .iter()
-                    .filter(|(service_name, svc)| {
-                        // if the service image has not been downloaded
-                        !device.images.contains_key(&svc.image) &&
-                        // and there is no service from a different release
-                        find_installed_service(
-                            &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*service_name).clone(),
-                        )
-                        // or there is a service and the digest doesn't match the target digest
-                        .is_none_or(|s| {
-                            s.image.digest().is_none() || s.image.digest() != svc.image.digest()
-                        })
+                    .filter_map(|(svc_name, svc)| {
+                        if device
+                            .apps
+                            .get(app_uuid)
+                            .and_then(|app| app.releases.get(commit))
+                            .and_then(|release| release.services.get(svc_name))
+                            .is_some()
+                        {
+                            // the service already exists, ignore it
+                            return None;
+                        }
+
+                        // only use the target image if it is a Uri
+                        if let ImageRef::Uri(img_uri) = &svc.image {
+                            Some((svc_name, img_uri))
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|(svc_name, svc_img)| {
+                        // ignore the image if it already exists
+                        if device.images.contains_key(svc_img) {
+                            return false;
+                        }
+
+                        find_installed_service(&device, app_uuid, commit, svc_name)
+                            // if the image is for a new service or the existing service has a
+                            // different digest (which means a new download), then add it to the
+                            // authorization list
+                            .is_none_or(|s| {
+                                s.image.digest().is_none() || s.image.digest() != svc_img.digest()
+                            })
                     })
                     // then select the image
-                    .map(|(_, svc)| &svc.image)
+                    .map(|(_, svc_img)| svc_img)
             })
         })
         .collect();
@@ -177,11 +254,12 @@ fn request_registry_token_for_new_images(
     let tgt_auths: RegistryAuthSet = images_to_install
         .iter()
         .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
-            if let Some(service) = img.registry().clone() {
-                if let Some(scope) = acc.get_mut(&service) {
-                    scope.push((*img).clone());
+            let img = (*img).clone();
+            if let Some(service) = img.registry().as_ref() {
+                if let Some(scope) = acc.get_mut(service) {
+                    scope.push(img);
                 } else {
-                    acc.insert(service, vec![(*img).clone()]);
+                    acc.insert(service.clone(), vec![img]);
                 }
             }
             acc
@@ -198,39 +276,59 @@ fn request_registry_token_for_new_images(
     Some(request_registry_credentials.with_target(tgt_auths))
 }
 
-/// Install all new images for a release
-fn fetch_release_images(
+/// Install all new images for all target apps
+fn fetch_apps_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<TargetRelease>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    Target(tgt_apps): Target<TargetAppMap>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
-    let images_to_install: Vec<ImageUri> = tgt_release
-        .services
-        .into_iter()
-        .filter(|(service_name, svc)| {
-            // if the service image has not been downloaded
-            !device.images.contains_key(&svc.image) &&
-            // and there is no service from a different release
-            find_installed_service(
-                    &device,
-                    app_uuid.clone(),
-                    commit.clone(),
-                    (*service_name).clone(),
-                )
-                // or if there is a service, then only chose it if it has the same digest
-                // as the target service
-                .is_none_or(|s| {
-                    s.image.digest().is_some() && svc.image.digest() == s.image.digest()
-                })
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release
+                    .services
+                    .iter()
+                    .filter_map(|(svc_name, svc)| {
+                        if device
+                            .apps
+                            .get(app_uuid)
+                            .and_then(|app| app.releases.get(commit))
+                            .and_then(|release| release.services.get(svc_name))
+                            .is_some()
+                        {
+                            // the service already exists, ignore it
+                            return None;
+                        }
+
+                        // only use the target image if it is a Uri
+                        if let ImageRef::Uri(svc_img) = &svc.image {
+                            return Some((svc_name, svc_img));
+                        }
+                        None
+                    })
+                    .filter(|(svc_name, svc_img)| {
+                        // ignore the image if it already exists
+                        if device.images.contains_key(svc_img) {
+                            return false;
+                        }
+
+                        find_installed_service(&device, app_uuid, commit, svc_name)
+                            // select the image if it is for a new service or the existing service image has the
+                            // same digest (which means we are just re-tagging)
+                            .is_none_or(|s| {
+                                s.image.digest().is_some() && svc_img.digest() == s.image.digest()
+                            })
+                    })
+            })
         })
         // remove duplicate digests
-        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc_img)| {
             if acc
                 .iter()
-                .all(|img| img.digest().is_none() || img.digest() != svc.image.digest())
+                .all(|img| img.digest().is_none() || img.digest() != svc_img.digest())
             {
-                acc.push(svc.image);
+                acc.push(svc_img);
             }
             acc
         });
@@ -238,7 +336,7 @@ fn fetch_release_images(
     // only download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image))
+        tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
 }
@@ -356,20 +454,26 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
 fn fetch_service_image(
     System(device): System<Device>,
     Target(tgt): Target<TargetService>,
-    Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
-    // tell the planner to skip this task if the image already exists
-    if device.images.contains_key(&tgt.image) {
+    let tgt_img = if let ImageRef::Uri(img) = tgt.image {
+        // Skip this task if the image already exists
+        if device.images.contains_key(&img) {
+            return None;
+        }
+        img
+    } else {
+        // also skip if the target image is not a Uri
         return None;
-    }
+    };
 
     // If there is a service with the same name in any other releases of the service
     // and the service image has as different digest then we skip the fetch as
     // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, app_uuid, commit, service_name)
-        .is_none_or(|svc| svc.image.digest().is_some() && tgt.image.digest() == svc.image.digest())
+    if find_installed_service(&device, &app_uuid, &commit, &svc_name)
+        .is_none_or(|svc| svc.image.digest().is_some() && tgt_img.digest() == svc.image.digest())
     {
-        return Some(create_image.with_arg("image_name", tgt.image));
+        return Some(create_image.with_arg("image_name", tgt_img));
     }
 
     None
@@ -383,16 +487,26 @@ fn install_service(
     mut svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<TargetService>,
-) -> View<Option<Service>> {
+    Path(job_path): Path,
+) -> IO<Option<Service>, state::ReadWriteError> {
     // Skip the task if the image for the service doesn't exist yet
-    if device.images.keys().all(|img| img != &tgt.image) {
-        return svc;
+    if let ImageRef::Uri(tgt_img) = &tgt.image {
+        if !device.images.contains_key(tgt_img) {
+            return svc.into();
+        }
+    } else {
+        return svc.into();
     }
 
-    let TargetService { id, image, .. } = tgt;
-
+    let TargetService { id, image } = tgt;
     svc.replace(Service { id, image });
-    svc
+
+    with_io(svc, async move |svc| {
+        if let Some(s) = svc.as_ref() {
+            state::store_with_name(&job_path, "image", &s.image).await?;
+        }
+        Ok(svc)
+    })
 }
 
 /// Remove an image
@@ -409,10 +523,13 @@ fn remove_image(
     // only remove the image if it not being used by any service
     if device.apps.values().any(|app| {
         app.releases.values().any(|release| {
-            release
-                .services
-                .values()
-                .any(|s| s.image == image_name.clone())
+            release.services.values().any(|s| {
+                if let ImageRef::Uri(s_img) = &s.image {
+                    s_img == &image_name
+                } else {
+                    false
+                }
+            })
         })
     }) {
         return img_ptr.into();
@@ -483,10 +600,16 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
                 task::none(create_image),
             ],
         )
-        .job("/apps", task::update(request_registry_token_for_new_images))
+        .jobs(
+            "/apps",
+            [
+                task::update(request_registry_token_for_new_images),
+                task::update(fetch_apps_images),
+            ],
+        )
         .job(
             "/apps/{app_uuid}",
-            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            task::create(init_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
@@ -498,14 +621,11 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
+            [task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                },
+            )],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",

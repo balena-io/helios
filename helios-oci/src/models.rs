@@ -178,6 +178,45 @@ impl<'de> Deserialize<'de> for ImageUri {
     }
 }
 
+/// An image reference is either a image URI or a content addressable image ID
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ImageRef {
+    /// A URI reference
+    Uri(ImageUri),
+
+    /// A content addressable image id
+    Id(String),
+}
+
+impl ImageRef {
+    /// Convenience method to get the digest of an image ref
+    ///
+    /// Returns None if the image is not a Uri or the Uri does not have a digest
+    pub fn digest(&self) -> &Option<String> {
+        if let Self::Uri(uri) = self {
+            uri.digest()
+        } else {
+            &None
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = String::deserialize(deserializer)?;
+        if s.starts_with("sha256:") {
+            return Ok(ImageRef::Id(s));
+        }
+
+        let uri: ImageUri = s.parse().map_err(serde::de::Error::custom)?;
+        Ok(ImageRef::Uri(uri))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

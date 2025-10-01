@@ -206,6 +206,7 @@ impl RegistryAuthClient {
 
     /// Clear the client cache
     pub fn clear(&mut self) {
+        debug!("clean up registry credentials");
         self.cached.clear();
     }
 }
