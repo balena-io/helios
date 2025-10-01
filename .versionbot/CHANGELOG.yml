@@ -1,4 +1,78 @@
 - commits:
+    - subject: Do not validate target release count
+      hash: b92ae8095aebebbdb4f6a678f84725f0ea9a5f4f
+      body: |
+        The planner converts intermediate states to the target type
+        while running so this validation will cause planning to fail with
+        serialization errors.
+
+        We should do this validation at some point, but it should be through a
+        separate type.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Stop checking digest tag
+      hash: b3d72688096c4ad0fdea386468e47c1b50b586bd
+      body: |
+        There is no need to rely on a `sha256-` tag for now (and it is not being
+        added by anything). A future commit
+        will deal with image management.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Remove support for config vars
+      hash: 7ccf19a7ede6a4ab8257a562202bc5eedf4fdbb0
+      body: |
+        Config vars were only being consumed, but not used in any way.
+
+        We can re-add support once we figure out how we will support those
+        variables.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Statically build Regex for ImageUri
+      hash: 23f3a903532b6b5ff298336776aee9da3af516ad
+      body: |
+        `Regex::new` can be pretty expensive and ImageUri is used a lot.
+        Pre-compiling the regular expressions allows to significantly reduce
+        planning time.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Omit the `latest` tag when parsing image Uris
+      hash: 3478abdbf955c04e39e4418a1c7b47c423a99544
+      body: |
+        The tag was always being stored as `Some("latest")`. This updates the
+        type to store a `latest` tag as `None`. The URI normalization still will
+        use `latest`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Send empty report
+      hash: debf37234c2bc586cd54317bd330574a19d55d9a
+      body: |
+        Report conversion was not working yet and resulted in the backend
+        removing the service installs reported by the legacy supervisor, we'll
+        fix this in a future PR.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.3
+  title: ""
+  date: 2025-10-01T12:37:09.199Z
+- commits:
     - subject: Fix registry auth initialization
       hash: 630c7cc7b13c89a8cd70b41f07fe92345b18cd4c
       body: |
