@@ -16,8 +16,8 @@ use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthErro
 use crate::util::types::Uuid;
 
 use super::models::{
-    App, Device, DeviceConfig, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap,
-    TargetDevice, TargetRelease, TargetService,
+    App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
+    TargetRelease, TargetService,
 };
 
 /// Make sure a cleanup happens after all tasks have been performed
@@ -72,17 +72,6 @@ fn set_device_name(
 ) -> View<Option<String>> {
     *name = tgt;
     name
-}
-
-/// Store configuration in memory
-fn store_config(
-    mut config: View<DeviceConfig>,
-    Target(tgt_config): Target<DeviceConfig>,
-) -> View<DeviceConfig> {
-    // If a new config received, just update the in-memory state, the config will be handled
-    // by the legacy supervisor
-    *config = tgt_config;
-    config
 }
 
 /// Initialize the app in memory
@@ -477,10 +466,6 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
             task::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
-        .job(
-            "/config",
-            task::update(store_config).with_description(|| "store device configuration"),
-        )
         .jobs(
             "/images/{image_name}",
             [
@@ -622,17 +607,12 @@ mod tests {
                     "name": "my-app"
                 }
             },
-            "config": {
-                "SOME_VAR": "one",
-                "OTHER_VAR": "two"
-            }
         }))
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
-                "store device configuration",
                 "update device name",
                 "initialize app with uuid 'my-app-uuid'",
             )
@@ -664,17 +644,12 @@ mod tests {
                     "name": "my-app"
                 }
             },
-            "config": {
-                "SOME_VAR": "one",
-                "OTHER_VAR": "two"
-            }
         }))
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
-                "store device configuration",
                 "update device name",
                 "update name for app with uuid 'my-app-uuid'",
             )
@@ -798,5 +773,67 @@ mod tests {
             expected.to_string(),
             "unexpected plan:\n{workflow}"
         );
+    }
+
+    // The worker doesn't have any tasks to update services or delete releases
+    // so this plan should fail
+    #[tokio::test]
+    async fn it_fails_to_find_a_workflow_for_updating_services() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "old-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<TargetDevice>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-new-app-name",
+                    "releases": {
+                        "new-release": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "service2":  {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222"
+                                },
+
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        // this should return Err(NotFound) and not panic
+        let workflow = worker().find_workflow(initial_state, target);
+        assert!(workflow.is_err(), "unexpected plan:\n{}", workflow.unwrap());
     }
 }
