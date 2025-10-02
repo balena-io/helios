@@ -1,3 +1,4 @@
+use mahler::State;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::{fmt::Display, str::FromStr};
@@ -8,7 +9,7 @@ use crate::crypto::{ALPHA_NUM, pseudorandom_string};
 // Just an alias for more descriptive code
 pub type DeviceType = String;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uuid(String);
 
 impl Deref for Uuid {

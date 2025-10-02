@@ -1,35 +1,11 @@
+use mahler::State;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::util::types::Uuid;
+use super::service::Service;
 
-use super::service::{ServiceMap, TargetServiceMap};
-
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(State, Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct Release {
     #[serde(default)]
-    pub services: ServiceMap,
+    pub services: BTreeMap<String, Service>,
 }
-
-pub type ReleaseMap = BTreeMap<Uuid, Release>;
-
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
-pub struct TargetRelease {
-    #[serde(default)]
-    pub services: TargetServiceMap,
-}
-
-impl From<Release> for TargetRelease {
-    fn from(r: Release) -> Self {
-        let Release { services } = r;
-
-        Self {
-            services: services
-                .into_iter()
-                .map(|(name, svc)| (name, svc.into()))
-                .collect(),
-        }
-    }
-}
-
-pub type TargetReleaseMap = BTreeMap<Uuid, TargetRelease>;

@@ -7,7 +7,7 @@ use tokio::sync::watch::{Receiver, Sender};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::state::models::TargetDevice;
+use crate::state::models::DeviceTarget;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::util::http::Uri;
 use crate::util::request::{self, Get};
@@ -70,7 +70,7 @@ async fn poll_remote(
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct TargetState(HashMap<Uuid, TargetDevice>);
+struct TargetState(HashMap<Uuid, DeviceTarget>);
 
 /// An update request coming from the API.
 ///

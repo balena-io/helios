@@ -19,7 +19,7 @@ use crate::legacy::{
 };
 use crate::oci::{Client as Docker, RegistryAuthClient};
 
-use super::models::{Device, TargetDevice};
+use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};
 use super::worker::{CreateError as WorkerCreateError, create};
 
@@ -94,7 +94,7 @@ impl Default for UpdateOpts {
 /// A request to reach a target state.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SeekRequest {
-    pub target: TargetDevice,
+    pub target: DeviceTarget,
     pub raw_target: Option<Value>,
     pub opts: UpdateOpts,
 }

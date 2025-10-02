@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use mahler::State;
 use serde::{Deserialize, Serialize};
 
 use crate::oci::LocalImage;
@@ -12,6 +13,10 @@ pub struct Image {
     /// Image labels
     #[serde(default)]
     pub labels: HashMap<String, String>,
+}
+
+impl State for Image {
+    type Target = Self;
 }
 
 impl From<LocalImage> for Image {

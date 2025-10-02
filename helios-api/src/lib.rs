@@ -25,7 +25,7 @@ use tracing::{
 
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
 use helios_remote::PollRequest;
-use helios_state::models::{App, Device, TargetApp, TargetDevice};
+use helios_state::models::{App, AppTarget, Device, DeviceTarget};
 use helios_state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
 use helios_util::types::Uuid;
 
@@ -207,7 +207,7 @@ async fn set_app_tgt_state(
     State(state_rx): State<LocalStateRx>,
     Path(app_uuid): Path<Uuid>,
     Query(opts): Query<UpdateOpts>,
-    Json(app): Json<TargetApp>,
+    Json(app): Json<AppTarget>,
 ) -> StatusCode {
     // Every endpoint to interact with the device state will be written in the same way:
     // - read the current state
@@ -216,7 +216,7 @@ async fn set_app_tgt_state(
     // - send the full target to the channel
     let state = state_rx.borrow();
     let device = state.device.clone();
-    let mut target: TargetDevice = device.into();
+    let mut target: DeviceTarget = device.into();
     target.apps.insert(app_uuid, app);
 
     if seek_request_tx
@@ -246,7 +246,7 @@ mod tests {
         watch::Receiver<SeekRequest>,
     ) {
         let (seek_request_tx, seek_rx) = watch::channel(SeekRequest {
-            target: TargetDevice::default(),
+            target: DeviceTarget::default(),
             opts: UpdateOpts::default(),
             raw_target: None,
         });
@@ -323,7 +323,7 @@ mod tests {
         let client = reqwest::Client::new();
 
         let app_uuid = Uuid::default();
-        let target_app = TargetApp::default();
+        let target_app = AppTarget::default();
         let response = client
             .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
             .json(&target_app)
@@ -346,7 +346,7 @@ mod tests {
         let client = reqwest::Client::new();
 
         let app_uuid = Uuid::default();
-        let target_app = TargetApp::default();
+        let target_app = AppTarget::default();
         let response = client
             .post(format!(
                 "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true",
