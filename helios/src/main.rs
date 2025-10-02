@@ -38,8 +38,8 @@ fn initialize_tracing() {
             EnvFilter::try_from_default_env().unwrap_or(
                 EnvFilter::default()
                     .add_directive("trace".parse().unwrap())
-                    .add_directive("mahler::planner=warn".parse().unwrap())
-                    .add_directive("mahler::worker=debug".parse().unwrap())
+                    .add_directive("mahler_core::planner=warn".parse().unwrap())
+                    .add_directive("mahler_core::worker=debug".parse().unwrap())
                     .add_directive("hyper=error".parse().unwrap())
                     .add_directive("reqwest=debug".parse().unwrap())
                     .add_directive("bollard=error".parse().unwrap()),
