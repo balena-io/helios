@@ -15,6 +15,7 @@ COPY helios-api ./helios-api
 COPY helios-legacy ./helios-legacy
 COPY helios-oci ./helios-oci
 COPY helios-remote ./helios-remote
+COPY helios-remote-types ./helios-remote-types
 COPY helios-state ./helios-state
 COPY helios-util ./helios-util
 

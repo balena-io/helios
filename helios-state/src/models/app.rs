@@ -2,6 +2,7 @@ use mahler::State;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::remote_types::AppTarget as RemoteAppTarget;
 use crate::util::types::Uuid;
 
 use super::release::Release;
@@ -23,3 +24,20 @@ pub struct App {
 }
 
 pub type TargetAppMap = BTreeMap<Uuid, AppTarget>;
+
+impl From<RemoteAppTarget> for AppTarget {
+    fn from(tgt: RemoteAppTarget) -> Self {
+        let RemoteAppTarget {
+            id, name, releases, ..
+        } = tgt;
+
+        AppTarget {
+            id,
+            name: Some(name),
+            releases: releases
+                .into_iter()
+                .map(|(uuid, rel)| (uuid, rel.into()))
+                .collect(),
+        }
+    }
+}

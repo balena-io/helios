@@ -5,7 +5,6 @@ use std::{
     sync::LazyLock,
 };
 
-use mahler::State;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -14,7 +13,7 @@ use thiserror::Error;
 #[error("invalid uri format, expected [domain.tld/]repo/image[:tag][@digest] format, got: {0}")]
 pub struct InvalidImageUriError(String);
 
-#[derive(State, Debug, Clone, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct ImageUri {
     registry: Option<String>,
     image: String,

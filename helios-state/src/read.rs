@@ -29,7 +29,7 @@ pub async fn read(
     let images = res.context("failed to read state of images")?;
     for res in images.iter() {
         let (uri, image) = res?;
-        device.images.insert(uri, image.into());
+        device.images.insert(uri.into(), image.into());
     }
 
     // TODO: read state of apps

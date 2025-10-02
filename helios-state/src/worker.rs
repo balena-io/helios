@@ -11,13 +11,13 @@ use mahler::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
+use crate::oci::{Client as Docker, Error as DockerError};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
 use crate::util::types::Uuid;
 
 use super::models::{
-    App, AppTarget, Device, DeviceTarget, Image, RegistryAuthSet, Release, ReleaseTarget, Service,
-    ServiceTarget, TargetAppMap,
+    App, AppTarget, Device, DeviceTarget, Image, ImageUri, RegistryAuthSet, Release, ReleaseTarget,
+    Service, ServiceTarget, TargetAppMap,
 };
 
 /// Make sure a cleanup happens after all tasks have been performed

@@ -54,13 +54,15 @@ pub enum RegistryAuthConversionError {
     NoRegistry,
 }
 
-impl TryFrom<Vec<ImageUri>> for RegistryAuth {
+impl<T: Into<ImageUri>> TryFrom<Vec<T>> for RegistryAuth {
     type Error = RegistryAuthConversionError;
 
-    fn try_from(images: Vec<ImageUri>) -> Result<Self, Self::Error> {
+    fn try_from(images: Vec<T>) -> Result<Self, Self::Error> {
         if images.is_empty() {
             return Err(RegistryAuthConversionError::EmptyImageList);
         }
+
+        let images: Vec<ImageUri> = images.into_iter().map(|i| i.into()).collect();
 
         let service = images[0]
             .registry()

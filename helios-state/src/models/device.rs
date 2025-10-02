@@ -3,11 +3,12 @@ use std::collections::{BTreeMap, HashSet};
 use mahler::State;
 use serde::{Deserialize, Serialize};
 
-use crate::oci::{ImageUri, RegistryAuth};
+use crate::oci::RegistryAuth;
+use crate::remote_types::DeviceTarget as RemoteDeviceTarget;
 use crate::util::types::{OperatingSystem, Uuid};
 
 use super::app::App;
-use super::image::Image;
+use super::image::{Image, ImageUri};
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
@@ -70,6 +71,24 @@ impl From<Device> for DeviceTarget {
             name,
             apps,
             needs_cleanup,
+        }
+    }
+}
+
+impl From<RemoteDeviceTarget> for DeviceTarget {
+    fn from(tgt: RemoteDeviceTarget) -> Self {
+        let RemoteDeviceTarget { name, apps, .. } = tgt;
+
+        Self {
+            name: Some(name),
+            apps: apps
+                .into_iter()
+                // filter host apps for now
+                // FIXME: implement hostapp support
+                .filter(|(_, app)| !app.is_host)
+                .map(|(uuid, app)| (uuid, app.into()))
+                .collect(),
+            needs_cleanup: false,
         }
     }
 }

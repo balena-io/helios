@@ -769,7 +769,6 @@ dependencies = [
  "bollard",
  "futures-lite",
  "helios-util",
- "mahler",
  "regex",
  "serde",
  "serde_json",
@@ -781,6 +780,7 @@ dependencies = [
 name = "helios-remote"
 version = "0.11.4"
 dependencies = [
+ "helios-remote-types",
  "helios-state",
  "helios-util",
  "mahler",
@@ -794,12 +794,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "helios-remote-types"
+version = "0.11.4"
+dependencies = [
+ "helios-oci",
+ "helios-util",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "helios-state"
 version = "0.11.4"
 dependencies = [
  "futures-lite",
  "helios-legacy",
  "helios-oci",
+ "helios-remote-types",
  "helios-util",
  "mahler",
  "pretty_assertions",
