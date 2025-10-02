@@ -17,6 +17,8 @@ pub use poll::{PollRequest, start_poll};
 pub use provisioning::{ProvisioningError, provision};
 pub use report::start_report;
 
-use helios_remote_types as types;
+// re-export the crate for use in dependent crates
+pub use helios_remote_types as types;
+
 use helios_state as state;
 use helios_util as util;
