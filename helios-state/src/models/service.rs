@@ -1,7 +1,7 @@
 use mahler::State;
 use serde::{Deserialize, Serialize};
 
-use super::image::ImageUri;
+use crate::common_types::ImageUri;
 use crate::remote_types::ServiceTarget as RemoteServiceTarget;
 
 #[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -16,9 +16,6 @@ pub struct Service {
 impl From<RemoteServiceTarget> for ServiceTarget {
     fn from(service: RemoteServiceTarget) -> Self {
         let RemoteServiceTarget { id, image, .. } = service;
-        ServiceTarget {
-            id,
-            image: image.into(),
-        }
+        ServiceTarget { id, image }
     }
 }

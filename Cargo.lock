@@ -752,7 +752,6 @@ version = "0.11.4"
 dependencies = [
  "axum",
  "helios-util",
- "mahler",
  "mockito",
  "reqwest",
  "serde",
@@ -769,7 +768,6 @@ dependencies = [
  "bollard",
  "futures-lite",
  "helios-util",
- "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -783,7 +781,6 @@ dependencies = [
  "helios-remote-types",
  "helios-state",
  "helios-util",
- "mahler",
  "rand",
  "reqwest",
  "serde",
@@ -797,7 +794,6 @@ dependencies = [
 name = "helios-remote-types"
 version = "0.11.4"
 dependencies = [
- "helios-oci",
  "helios-util",
  "serde",
  "serde_json",
@@ -831,6 +827,7 @@ dependencies = [
  "fastrand",
  "mahler",
  "mockito",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

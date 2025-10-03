@@ -10,3 +10,4 @@ use helios_legacy as legacy;
 use helios_oci as oci;
 use helios_remote_types as remote_types;
 use helios_util as util;
+use helios_util::types as common_types;

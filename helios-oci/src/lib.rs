@@ -8,9 +8,6 @@ pub use bollard::errors::Error as ConnectionError;
 mod image;
 pub use image::{Image, LocalImage};
 
-mod models;
-pub use models::{ImageUri, InvalidImageUriError};
-
 mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 

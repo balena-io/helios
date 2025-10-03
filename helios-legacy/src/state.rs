@@ -1,4 +1,3 @@
-use mahler::workflow::Interrupt;
 use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
@@ -6,6 +5,7 @@ use thiserror::Error;
 use tracing::{debug, field, instrument, trace, warn};
 
 use crate::util::http::Uri;
+use crate::util::interrupt::Interrupt;
 use crate::util::types::ApiKey;
 
 use super::error::UpstreamError;

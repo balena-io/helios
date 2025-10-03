@@ -1,4 +1,3 @@
-use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -9,6 +8,7 @@ use tracing::{error, info, instrument, trace, warn};
 
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::util::http::Uri;
+use crate::util::interrupt::Interrupt;
 use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 

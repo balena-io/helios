@@ -17,7 +17,6 @@ helios-util = { path = "../helios-util", version = "0" }
 
 bollard.workspace = true
 futures-lite.workspace = true
-regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

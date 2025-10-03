@@ -4,14 +4,13 @@
 //!
 //! the types are based  from https://github.com/balena-io/open-balena-api/blob/master/src/features/device-state/routes/state-get-v3.ts#L48
 
-use helios_oci::ImageUri;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
 };
 
-use helios_util::types::Uuid;
+use helios_util::types::{ImageUri, Uuid};
 
 /// Target device as defined by the remote backend
 #[derive(Deserialize, Clone, Debug)]

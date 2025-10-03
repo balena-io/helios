@@ -17,8 +17,6 @@ helios-state = { path = "../helios-state", version = "0" }
 helios-util = { path = "../helios-util", version = "0" }
 helios-remote-types = { path = "../helios-remote-types", version = "0" }
 
-
-mahler.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

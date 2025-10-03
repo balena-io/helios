@@ -2,10 +2,7 @@ use std::future::{self, Future};
 use std::pin::Pin;
 
 use futures_lite::StreamExt;
-use mahler::{
-    worker::{SeekError as WorkerSeekError, SeekStatus},
-    workflow::Interrupt,
-};
+use mahler::worker::{SeekError as WorkerSeekError, SeekStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{
@@ -18,6 +15,7 @@ use crate::legacy::{
     LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
 };
 use crate::oci::{Client as Docker, RegistryAuthClient};
+use crate::util::interrupt::Interrupt;
 
 use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};

@@ -13,7 +13,6 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-oci = { path = "../helios-oci", version = "0" }
 helios-util = { path = "../helios-util", version = "0" }
 
 serde.workspace = true

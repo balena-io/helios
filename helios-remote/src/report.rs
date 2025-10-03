@@ -1,4 +1,3 @@
-use mahler::workflow::Interrupt;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -7,6 +6,7 @@ use tracing::{error, info, instrument, trace};
 
 use crate::state::LocalState;
 use crate::util::http::Uri;
+use crate::util::interrupt::Interrupt;
 use crate::util::request::{Patch, PatchError, RequestConfig};
 use crate::util::types::Uuid;
 

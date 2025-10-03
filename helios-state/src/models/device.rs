@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, HashSet};
 use mahler::State;
 use serde::{Deserialize, Serialize};
 
+use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
 use crate::remote_types::DeviceTarget as RemoteDeviceTarget;
-use crate::util::types::{OperatingSystem, Uuid};
 
 use super::app::App;
-use super::image::{Image, ImageUri};
+use super::image::Image;
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 

@@ -1,8 +1,8 @@
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::oci::{Client as Docker, Error as DockerError, InvalidImageUriError, WithContext};
-use crate::util::types::{OperatingSystem, Uuid};
+use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::oci::{Client as Docker, Error as DockerError, WithContext};
 
 use super::models::Device;
 
@@ -29,7 +29,7 @@ pub async fn read(
     let images = res.context("failed to read state of images")?;
     for res in images.iter() {
         let (uri, image) = res?;
-        device.images.insert(uri.into(), image.into());
+        device.images.insert(uri, image.into());
     }
 
     // TODO: read state of apps
