@@ -1,4 +1,17 @@
 - commits:
+    - subject: Rename integration folder to `helios-integration-tests`
+      hash: 3c8c9663809e399f99dc706fa60330196912e955
+      body: |
+        Just for consistency
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.4
+  title: ""
+  date: 2025-10-03T13:44:12.673Z
+- commits:
     - subject: Do not validate target release count
       hash: b92ae8095aebebbdb4f6a678f84725f0ea9a5f4f
       body: |

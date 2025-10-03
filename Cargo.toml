@@ -3,7 +3,7 @@ resolver = "3"
 members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-state", "helios-util" ]
 
 [workspace.package]
-version = "0.11.3"
+version = "0.11.4"
 rust-version = "1.87"
 edition = "2024"
 description = "Balena's on-device agent"
