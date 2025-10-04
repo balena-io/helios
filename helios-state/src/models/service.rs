@@ -1,31 +1,21 @@
-use std::collections::BTreeMap;
-
+use mahler::State;
 use serde::{Deserialize, Serialize};
 
-use crate::oci::ImageUri;
+use crate::common_types::ImageUri;
+use crate::remote_types::ServiceTarget as RemoteServiceTarget;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Service {
-    pub id: u32,
-    pub image: ImageUri,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct TargetService {
     /// Service ID on the remote backend
-    #[serde(default)]
     pub id: u32,
 
     /// Service image URI
     pub image: ImageUri,
 }
 
-impl From<Service> for TargetService {
-    fn from(s: Service) -> Self {
-        let Service { id, image } = s;
-        Self { id, image }
+impl From<RemoteServiceTarget> for ServiceTarget {
+    fn from(service: RemoteServiceTarget) -> Self {
+        let RemoteServiceTarget { id, image, .. } = service;
+        ServiceTarget { id, image }
     }
 }
-
-pub type ServiceMap = BTreeMap<String, Service>;
-pub type TargetServiceMap = BTreeMap<String, TargetService>;

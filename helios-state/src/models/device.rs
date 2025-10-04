@@ -1,33 +1,40 @@
 use std::collections::{BTreeMap, HashSet};
 
+use mahler::State;
 use serde::{Deserialize, Serialize};
 
-use crate::oci::{ImageUri, RegistryAuth};
-use crate::util::types::{OperatingSystem, Uuid};
+use crate::common_types::{ImageUri, OperatingSystem, Uuid};
+use crate::oci::RegistryAuth;
+use crate::remote_types::DeviceTarget as RemoteDeviceTarget;
 
-use super::app::{App, TargetAppMap};
+use super::app::App;
 use super::image::Image;
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
 /// The current state of a device that will be stored
 /// by the worker
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(State, Serialize, Deserialize, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq, Default))]
 pub struct Device {
     /// The device UUID
+    #[mahler(internal)]
     pub uuid: Uuid,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[mahler(internal)]
     pub os: Option<OperatingSystem>,
 
     #[serde(default)]
+    #[mahler(internal)]
     pub auths: RegistryAuthSet,
 
     /// List of docker images on the device
     #[serde(default)]
+    #[mahler(internal)]
     pub images: BTreeMap<ImageUri, Image>,
 
     /// Apps on the device
@@ -52,24 +59,7 @@ impl Device {
     }
 }
 
-/// Target state of a device
-///
-/// For Mahler, the target must be a structural subtype of the internal
-/// state, meaning the state should be serializable into the target.
-/// If they don't, planning will fail
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
-pub struct TargetDevice {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-
-    #[serde(default)]
-    pub apps: TargetAppMap,
-
-    #[serde(default)]
-    pub needs_cleanup: bool,
-}
-
-impl From<Device> for TargetDevice {
+impl From<Device> for DeviceTarget {
     fn from(device: Device) -> Self {
         let Device {
             name,
@@ -79,11 +69,26 @@ impl From<Device> for TargetDevice {
         } = device;
         Self {
             name,
+            apps,
+            needs_cleanup,
+        }
+    }
+}
+
+impl From<RemoteDeviceTarget> for DeviceTarget {
+    fn from(tgt: RemoteDeviceTarget) -> Self {
+        let RemoteDeviceTarget { name, apps, .. } = tgt;
+
+        Self {
+            name: Some(name),
             apps: apps
                 .into_iter()
+                // filter host apps for now
+                // FIXME: implement hostapp support
+                .filter(|(_, app)| !app.is_host)
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
-            needs_cleanup,
+            needs_cleanup: false,
         }
     }
 }
@@ -122,7 +127,7 @@ mod tests {
         let device: Device = serde_json::from_value(json).unwrap();
 
         // this should not panic
-        let _target: TargetDevice =
+        let _target: DeviceTarget =
             serde_json::from_value(serde_json::to_value(device).unwrap()).unwrap();
     }
 }

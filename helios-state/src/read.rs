@@ -1,8 +1,8 @@
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::oci::{Client as Docker, Error as DockerError, InvalidImageUriError, WithContext};
-use crate::util::types::{OperatingSystem, Uuid};
+use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::oci::{Client as Docker, Error as DockerError, WithContext};
 
 use super::models::Device;
 

@@ -1,6 +1,6 @@
 [package]
-name = "helios-oci"
-description = "Helios support for OCI container engines"
+name = "helios-remote-types"
+description = "Helios support for balenaCloud target types"
 readme = "README.md"
 
 authors.workspace = true
@@ -15,9 +15,7 @@ version.workspace = true
 [dependencies]
 helios-util = { path = "../helios-util", version = "0" }
 
-bollard.workspace = true
-futures-lite.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true
-thiserror.workspace = true
-tracing.workspace = true

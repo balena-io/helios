@@ -76,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_app_target() {
         let client = reqwest::Client::new();
-        let target = json!({"name": "my-app"});
+        let target = json!({"id": 0, "name": "my-app"});
         let body = client
             .post(format!("{HELIOS_URL}/v3/device/apps/test-app"))
             .json(&target)
@@ -105,6 +105,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let target = json!({
+            "id": 0,
             "name": "my-new-app-name",
             "releases": {
                 "my-release-uuid": {

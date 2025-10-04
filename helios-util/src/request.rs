@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
-use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{Span, field, instrument, warn};
 
 use crate::crypto::sha256_hex_digest;
+use crate::interrupt::Interrupt;
 
 /// Base configuration for HTTP request behavior including timeouts, rate
 /// limiting, and backoff.

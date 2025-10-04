@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-state", "helios-util" ]
+members = [
+  "helios",
+  "helios-api",
+  "helios-legacy",
+  "helios-oci",
+  "helios-remote",
+  "helios-remote-types",
+  "helios-state",
+  "helios-util",
+]
 
 [workspace.package]
 version = "0.11.4"
@@ -9,7 +18,7 @@ edition = "2024"
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"
 repository = "https://github.com/balena-io/helios"
-authors = [ "Balena Inc. <hello@balena.io>" ]
+authors = ["Balena Inc. <hello@balena.io>"]
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
@@ -20,49 +29,49 @@ serde_json = "1.0"
 thiserror = "2"
 rand = "0.9.2"
 dirs = "6.0.0"
-bollard = "0.19.2"
+bollard = "0.19.3"
 fastrand = "2.3.0"
 regex = "1.11"
 pretty_assertions = "1.4.1"
 
 [workspace.dependencies.axum]
-version = "0.8.4"
+version = "0.8.6"
 default-features = false
-features = [ "tokio", "http1", "json", "query" ]
+features = ["tokio", "http1", "json", "query"]
 
 [workspace.dependencies.tokio]
 version = "1.47.1"
 default-features = false
-features = [ "rt-multi-thread", "macros", "time", "fs" ]
+features = ["rt-multi-thread", "macros", "time", "fs"]
 
 [workspace.dependencies.tower-http]
 version = "0.6.6"
 default-features = false
-features = [ "trace" ]
+features = ["trace"]
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3.20"
-features = [ "env-filter", "fmt", "registry", "ansi" ]
+features = ["env-filter", "fmt", "registry", "ansi"]
 
 [workspace.dependencies.reqwest]
 version = "0.12"
 default-features = false
-features = [ "json", "rustls-tls", "brotli", "stream" ]
+features = ["json", "rustls-tls", "brotli", "stream"]
 
 [workspace.dependencies.serde]
 version = "1.0"
-features = [ "derive" ]
+features = ["derive"]
 
 [workspace.dependencies.clap]
 version = "4.5"
-features = [ "derive", "env" ]
+features = ["derive", "env"]
 
 [workspace.dependencies.uuid]
 version = "1.18"
-features = [ "v4" ]
+features = ["v4"]
 
 [workspace.dependencies.mahler]
-version = "0.20"
+version = "0.21"
 
 [workspace.dependencies.sha2]
 version = "0.10.9"

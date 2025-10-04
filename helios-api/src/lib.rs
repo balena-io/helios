@@ -25,9 +25,16 @@ use tracing::{
 
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
 use helios_remote::PollRequest;
-use helios_state::models::{App, Device, TargetApp, TargetDevice};
+use helios_state::models::{App, Device, DeviceTarget as LocalDeviceTarget};
 use helios_state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
 use helios_util::types::Uuid;
+
+// NOTE: we use the target from the remote backend as input for the API
+// to take advantage of validations and conversions defined for that type.
+// However that means that if at some point we want to support a new target state endpoint version,
+// the local API will change.
+// FIXME: define API specific input types and validations
+use helios_remote::types::AppTarget;
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -207,7 +214,7 @@ async fn set_app_tgt_state(
     State(state_rx): State<LocalStateRx>,
     Path(app_uuid): Path<Uuid>,
     Query(opts): Query<UpdateOpts>,
-    Json(app): Json<TargetApp>,
+    Json(app): Json<AppTarget>,
 ) -> StatusCode {
     // Every endpoint to interact with the device state will be written in the same way:
     // - read the current state
@@ -216,8 +223,8 @@ async fn set_app_tgt_state(
     // - send the full target to the channel
     let state = state_rx.borrow();
     let device = state.device.clone();
-    let mut target: TargetDevice = device.into();
-    target.apps.insert(app_uuid, app);
+    let mut target: LocalDeviceTarget = device.into();
+    target.apps.insert(app_uuid, app.into());
 
     if seek_request_tx
         .send(SeekRequest {
@@ -246,7 +253,7 @@ mod tests {
         watch::Receiver<SeekRequest>,
     ) {
         let (seek_request_tx, seek_rx) = watch::channel(SeekRequest {
-            target: TargetDevice::default(),
+            target: LocalDeviceTarget::default(),
             opts: UpdateOpts::default(),
             raw_target: None,
         });
@@ -323,7 +330,7 @@ mod tests {
         let client = reqwest::Client::new();
 
         let app_uuid = Uuid::default();
-        let target_app = TargetApp::default();
+        let target_app = json!({"id": 0, "name": "my-app"});
         let response = client
             .post(format!("http://127.0.0.1:{port}/v3/device/apps/{app_uuid}",))
             .json(&target_app)
@@ -346,7 +353,7 @@ mod tests {
         let client = reqwest::Client::new();
 
         let app_uuid = Uuid::default();
-        let target_app = TargetApp::default();
+        let target_app = json!({"id": 0, "name": "my-app"});
         let response = client
             .post(format!(
                 "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true",

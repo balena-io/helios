@@ -11,13 +11,13 @@ use mahler::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::oci::{Client as Docker, Error as DockerError, ImageUri};
+use crate::common_types::{ImageUri, Uuid};
+use crate::oci::{Client as Docker, Error as DockerError};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
-use crate::util::types::Uuid;
 
 use super::models::{
-    App, Device, Image, RegistryAuthSet, Release, Service, TargetApp, TargetAppMap, TargetDevice,
-    TargetRelease, TargetService,
+    App, AppTarget, Device, DeviceTarget, Image, RegistryAuthSet, Release, ReleaseTarget, Service,
+    ServiceTarget, TargetAppMap,
 };
 
 /// Make sure a cleanup happens after all tasks have been performed
@@ -33,12 +33,12 @@ fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
 /// This should be the final task for every workflow
 fn perform_cleanup(
     device: View<Device>,
-    Target(tgt_device): Target<TargetDevice>,
+    Target(tgt_device): Target<DeviceTarget>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
 ) -> IO<Device> {
     // skip the task if we have not reached the target state
     // (outside the needs_cleanup property)
-    if TargetDevice::from(Device {
+    if DeviceTarget::from(Device {
         needs_cleanup: false,
         ..device.clone()
     }) != tgt_device
@@ -77,9 +77,9 @@ fn set_device_name(
 /// Initialize the app in memory
 fn prepare_app(
     mut app: View<Option<App>>,
-    Target(tgt_app): Target<TargetApp>,
+    Target(tgt_app): Target<AppTarget>,
 ) -> View<Option<App>> {
-    let TargetApp { id, name, .. } = tgt_app;
+    let AppTarget { id, name, .. } = tgt_app;
     app.replace(App {
         id,
         name,
@@ -201,7 +201,7 @@ fn request_registry_token_for_new_images(
 /// Install all new images for a release
 fn fetch_release_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<TargetRelease>,
+    Target(tgt_release): Target<ReleaseTarget>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
@@ -355,7 +355,7 @@ fn create_image(Args(image_name): Args<ImageUri>, System(device): System<Device>
 /// Do the initial pull for a new service
 fn fetch_service_image(
     System(device): System<Device>,
-    Target(tgt): Target<TargetService>,
+    Target(tgt): Target<ServiceTarget>,
     Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
     // tell the planner to skip this task if the image already exists
@@ -382,14 +382,14 @@ fn fetch_service_image(
 fn install_service(
     mut svc: View<Option<Service>>,
     System(device): System<Device>,
-    Target(tgt): Target<TargetService>,
+    Target(tgt): Target<ServiceTarget>,
 ) -> View<Option<Service>> {
     // Skip the task if the image for the service doesn't exist yet
     if device.images.keys().all(|img| img != &tgt.image) {
         return svc;
     }
 
-    let TargetService { id, image, .. } = tgt;
+    let ServiceTarget { id, image, .. } = tgt;
 
     svc.replace(Service { id, image });
     svc
@@ -446,7 +446,7 @@ pub enum CreateError {
 /// Configure the worker jobs
 ///
 /// This is mostly used for tests
-fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
+fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
     Worker::new()
         .job(
             "/name",
@@ -520,7 +520,7 @@ fn worker() -> Worker<Device, Uninitialized, TargetDevice> {
         )
 }
 
-type LocalWorker = Worker<Device, Ready, TargetDevice>;
+type LocalWorker = Worker<Device, Ready, DeviceTarget>;
 
 /// Create and initialize the worker
 pub fn create(
@@ -572,10 +572,11 @@ mod tests {
             "uuid": "my-device-uuid",
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "uuid": "my-device-uuid",
             "apps": {
                 "my-app-uuid": {
+                    "id": 0,
                     "name": "my-app"
                 }
             }
@@ -599,11 +600,12 @@ mod tests {
             "uuid": "my-device-uuid",
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
             "apps": {
                 "my-app-uuid": {
+                    "id": 0,
                     "name": "my-app"
                 }
             },
@@ -635,7 +637,7 @@ mod tests {
             },
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
             "apps": {
@@ -672,7 +674,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "uuid": "my-device-uuid",
             "name": "device-name",
             "apps": {
@@ -707,7 +709,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "uuid": "my-device-uuid",
             "apps": {
                 "my-app-uuid": {
@@ -806,7 +808,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let target = serde_json::from_value::<TargetDevice>(json!({
+        let target = serde_json::from_value::<DeviceTarget>(json!({
             "uuid": "my-device-uuid",
             "apps": {
                 "my-app-uuid": {

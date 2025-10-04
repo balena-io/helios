@@ -5,7 +5,7 @@ use bollard::query_parameters::{
 };
 use futures_lite::StreamExt;
 
-use super::models::{ImageUri, InvalidImageUriError};
+use super::util::types::{ImageUri, InvalidImageUriError};
 use super::{Client, Credentials, Error, Result, WithContext};
 
 use bollard::secret::{ImageInspect, ImageSummary};

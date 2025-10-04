@@ -1,4 +1,3 @@
-use mahler::workflow::Interrupt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -7,13 +6,14 @@ use tokio::sync::watch::{Receiver, Sender};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::state::models::TargetDevice;
 use crate::state::{SeekRequest, UpdateOpts};
 use crate::util::http::Uri;
+use crate::util::interrupt::Interrupt;
 use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
+use super::types::DeviceTarget;
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
@@ -69,8 +69,8 @@ async fn poll_remote(
     (value, req.opts, Instant::now() + next_poll(config))
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct TargetState(HashMap<Uuid, TargetDevice>);
+#[derive(Deserialize, Clone, Debug)]
+struct TargetState(HashMap<Uuid, DeviceTarget>);
 
 /// An update request coming from the API.
 ///
@@ -222,7 +222,7 @@ pub async fn start_poll(
                         Ok(TargetState(mut map)) => {
                             if let Some(target) = map.remove(&uuid) {
                                 let _ = seek_tx.send(SeekRequest {
-                                    target,
+                                    target: target.into(),
                                     raw_target: Some(target_state),
                                     opts,
                                 });
