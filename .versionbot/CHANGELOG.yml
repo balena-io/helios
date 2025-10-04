@@ -1,4 +1,43 @@
 - commits:
+    - subject: Remove helios-remote-types dependency on helios-oci
+      hash: a42cf1bf19b2a686b6aff4488ee193795bc5b32c
+      body: |
+        It achieves this by moving ImageUri to helios_util::types which should
+        be the main place for common types.
+
+        It also removes the dependency of legacy and remote crates on mahler by
+        just re-exporting mahler::Interrupt from the helios-util crate
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use remote_input::AppTarget for local API
+      hash: 25ace5d7bb1657ba4d7e5d1d8de5c1f6773f866d
+      body: |
+        This allows to take advantage of input validation from this type
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Create helios-remote-types with validation types
+      hash: 0f2ab7c8d2f69d3308fe7f38e320bfe5eb60d0ee
+      body: |
+        The new crate defines `DeviceTarget`, `AppTarget`, etc., as defined by
+        the remote backend. Input validations should happen at this crate.
+
+        The types are defined in an new crate to avoid a circular dependency
+        between the `helios-remote` and `helios-state` crates.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.5
+  title: ""
+  date: 2025-10-04T04:39:02.177Z
+- commits:
     - subject: Rename integration folder to `helios-integration-tests`
       hash: 3c8c9663809e399f99dc706fa60330196912e955
       body: |
