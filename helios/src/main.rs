@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = cli::parse();
 
     // make sure our config directory exists
-    util::config::ensure_config_dir()?;
+    util::config::ensure_config_dir().await?;
 
     let api_config = cli
         .local_api_address
@@ -231,7 +231,7 @@ where
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
 async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
     // Load our provisioning config, if one exists
-    let provisioning_config = util::config::get::<ProvisioningConfig>()?;
+    let provisioning_config = util::config::get::<ProvisioningConfig>().await?;
 
     // See if the triplet (uuid, remote_api_endpoint, remote_api_key) is provided.
     // If so, we have everything we need to assume an identity.

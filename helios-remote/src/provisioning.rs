@@ -60,21 +60,22 @@ pub async fn provision(
     // return an HTTP 409 Conflict error. If it does, we can assume
     // provisioning is complete, store our config and get rid of the
     // recovered file.
-    let config =
-        if let Some(config) = config::get_with_name::<ProvisioningConfig>(&recovery_filename)? {
-            config
-        } else {
-            // Before attempting to call remote, backup the registration request
-            config::store_with_name(provisioning_config, &recovery_filename)?;
-            provisioning_config.clone()
-        };
+    let config = if let Some(config) =
+        config::get_with_name::<ProvisioningConfig>(&recovery_filename).await?
+    {
+        config
+    } else {
+        // Before attempting to call remote, backup the registration request
+        config::store_with_name(provisioning_config, &recovery_filename).await?;
+        provisioning_config.clone()
+    };
 
     let timeout = &config.remote.request.timeout;
     let request: RegisterRequest = config.clone().into();
 
     match register(provisioning_key, api_endpoint, timeout, &request).await {
         Ok(_) | Err(ProvisioningError::Status(StatusCode::CONFLICT, _)) => {
-            config::store(&config).map(|_| {
+            config::store(&config).await.map(|_| {
                 // remove recovery config ignoring any errors
                 _ = config::remove_with_name::<ProvisioningConfig>(&recovery_filename);
             })?;
