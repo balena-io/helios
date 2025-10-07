@@ -60,9 +60,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let cli = cli::parse();
 
-    // make sure our config directory exists
-    util::config::ensure_config_dir().await?;
-
     let api_config = cli
         .local_api_address
         .as_ref()
