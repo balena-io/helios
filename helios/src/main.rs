@@ -28,6 +28,9 @@ use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
+use crate::util::config::StoredConfig;
+use crate::util::dirs::config_dir;
+use crate::util::store::Store;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -60,6 +63,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let cli = cli::parse();
 
+    // Create a new configuration store instance
+    let config_store = Store::new(config_dir());
+
     let api_config = cli
         .local_api_address
         .as_ref()
@@ -78,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .expect("not nil because legacy_api_endpoint isn't nil"),
         });
 
-    let (uuid, remote_config) = maybe_provision(&cli).await?;
+    let (uuid, remote_config) = maybe_provision(&cli, &config_store).await?;
     let os = cli.os.clone();
 
     start_supervisor(uuid, os, api_config, remote_config, legacy_config).await?;
@@ -226,9 +232,14 @@ where
 /// If `remote_config` is not nil, then we are registered with a remote.
 /// If `remote_config` is nil, then we aren't registered and need to provision.
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
-async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
+async fn maybe_provision(
+    cli: &Cli,
+    config_store: &Store,
+) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
     // Load our provisioning config, if one exists
-    let provisioning_config = util::config::get::<ProvisioningConfig>().await?;
+    let provisioning_config: Option<ProvisioningConfig> = config_store
+        .read("/", ProvisioningConfig::default_name())
+        .await?;
 
     // See if the triplet (uuid, remote_api_endpoint, remote_api_key) is provided.
     // If so, we have everything we need to assume an identity.
@@ -351,7 +362,8 @@ async fn maybe_provision(cli: &Cli) -> Result<(Uuid, Option<RemoteConfig>), Prov
             },
         };
 
-        let (uuid, remote, _) = provision(provisioning_key, &provisioning_config).await?;
+        let (uuid, remote, _) =
+            provision(provisioning_key, &provisioning_config, config_store).await?;
 
         Ok((uuid, Some(remote)))
     }
