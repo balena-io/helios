@@ -64,7 +64,7 @@ pub async fn provision(
     } else {
         // Before attempting to call remote, backup the registration request
         config_store
-            .store("/", &recovery_filename, provisioning_config)
+            .write("/", &recovery_filename, provisioning_config)
             .await?;
         provisioning_config.clone()
     };
@@ -75,7 +75,7 @@ pub async fn provision(
     match register(provisioning_key, api_endpoint, timeout, &request).await {
         Ok(_) | Err(ProvisioningError::Status(StatusCode::CONFLICT, _)) => {
             config_store
-                .store("/", ProvisioningConfig::default_name(), &config)
+                .write("/", ProvisioningConfig::default_name(), &config)
                 .await
                 .map(|_| {
                     // remove recovery config ignoring any errors

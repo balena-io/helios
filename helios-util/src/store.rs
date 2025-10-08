@@ -16,6 +16,8 @@ use super::fs::safe_write_all;
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    // NOTE: we might want to restrict concurrent writes at some point with
+    // something like locks: Arc<DashMap<PathBuf, Arc<RwLock<()>>>>
 }
 
 #[derive(Debug, Error)]
@@ -55,7 +57,7 @@ impl Store {
     ///
     /// Note that while writes are atomic, concurrent usage of a store may result in
     /// data-loss. Same with two different stores on the same base path.
-    pub async fn store<P: AsRef<Path>, V: Serialize>(
+    pub async fn write<P: AsRef<Path>, V: Serialize>(
         &self,
         path: P,
         key: &str,

@@ -75,7 +75,7 @@ fn set_device_name(
     *name = tgt;
     with_io(name, |name| async move {
         if let (Some(local_store), Some(name)) = (store.as_ref(), name.as_ref()) {
-            local_store.store("/", "device_name", name).await?;
+            local_store.write("/", "device_name", name).await?;
         }
 
         Ok(name)
