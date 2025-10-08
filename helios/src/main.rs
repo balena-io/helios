@@ -29,7 +29,7 @@ use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
 use crate::util::config::StoredConfig;
-use crate::util::dirs::config_dir;
+use crate::util::dirs::{config_dir, state_dir};
 use crate::util::store::Store;
 
 fn initialize_tracing() {
@@ -108,9 +108,12 @@ async fn start_supervisor(
         "using config:"
     );
 
+    // Create a store for local state
+    let local_store = Store::new(state_dir());
+
     // Load the initial state
     let docker = Docker::connect().await?;
-    let initial_state = state::read(&docker, uuid.clone(), os).await?;
+    let initial_state = state::read(&docker, &local_store, uuid.clone(), os).await?;
 
     let registry_auth = remote_config
         .clone()
@@ -192,6 +195,7 @@ async fn start_supervisor(
         res = state::start_seek(
             &docker,
             &registry_auth,
+            &local_store,
             initial_state,
             proxy_state.clone(),
             legacy_config,

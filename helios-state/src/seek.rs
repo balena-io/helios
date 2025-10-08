@@ -16,6 +16,7 @@ use crate::legacy::{
 };
 use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::util::interrupt::Interrupt;
+use crate::util::store::Store;
 
 use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};
@@ -122,7 +123,6 @@ enum SeekState {
 type SeekResult = Result<SeekState, SeekError>;
 
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 enum SeekAction {
     Terminate,
     Apply(SeekRequest),
@@ -175,9 +175,11 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 }
 
 #[instrument(name = "seek", skip_all, err)]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_seek(
     docker: &Docker,
     registry_auth_client: &Option<RegistryAuthClient>,
+    local_store: &Store,
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
@@ -195,6 +197,7 @@ pub async fn start_seek(
     // Create a mahler worker and start following changes
     let mut worker = create(
         docker.clone(),
+        local_store.clone(),
         registry_auth_client.clone(),
         initial_state.clone(),
     )?;
@@ -391,9 +394,15 @@ pub async fn start_seek(
                 else if matches!(state, SeekState::Reset) {
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
-                    let initial_state = read_state(docker, uuid.clone(), os.clone()).await?;
+                    let initial_state =
+                        read_state(docker, local_store, uuid.clone(), os.clone()).await?;
 
-                    worker = create(docker.clone(), registry_auth_client.clone(), initial_state)?;
+                    worker = create(
+                        docker.clone(),
+                        local_store.clone(),
+                        registry_auth_client.clone(),
+                        initial_state,
+                    )?;
                     worker_stream = worker.follow();
 
                     UpdateStatus::Done

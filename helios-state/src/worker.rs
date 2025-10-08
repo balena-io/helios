@@ -14,6 +14,7 @@ use tracing::debug;
 use crate::common_types::{ImageUri, Uuid};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
+use crate::util::store::{Store, StoreError};
 
 use super::models::{
     App, AppTarget, Device, DeviceTarget, Image, RegistryAuthSet, Release, ReleaseTarget, Service,
@@ -65,13 +66,20 @@ fn perform_cleanup(
     })
 }
 
-/// Update the in-memory device name
+/// Update the device name
 fn set_device_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
+    store: Res<Store>,
+) -> IO<Option<String>, StoreError> {
     *name = tgt;
-    name
+    with_io(name, |name| async move {
+        if let (Some(local_store), Some(name)) = (store.as_ref(), name.as_ref()) {
+            local_store.store("/", "device_name", name).await?;
+        }
+
+        Ok(name)
+    })
 }
 
 /// Initialize the app in memory
@@ -525,6 +533,7 @@ type LocalWorker = Worker<Device, Ready, DeviceTarget>;
 /// Create and initialize the worker
 pub fn create(
     docker: Docker,
+    local_store: Store,
     registry_auth_client: Option<RegistryAuthClient>,
     initial: Device,
 ) -> Result<LocalWorker, CreateError> {
@@ -536,6 +545,8 @@ pub fn create(
         // tasks to modify it
         worker.use_resource(RwLock::new(auth_client));
     }
+
+    worker.use_resource(local_store);
 
     Ok(worker)
 }
