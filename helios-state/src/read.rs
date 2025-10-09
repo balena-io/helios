@@ -39,7 +39,7 @@ pub async fn read(
         device.images.insert(uri, image.into());
     }
 
-    // TODO: read state of apps
+    // TODO: read state of apps if the `userapps` feature is enabled
 
     Ok(device)
 }

@@ -79,15 +79,22 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
-        Self {
-            name: Some(name),
-            apps: apps
-                .into_iter()
+        // This makes user app support optional while the feature is being developed
+        let apps = if cfg!(feature = "userapps") {
+            apps.into_iter()
                 // filter host apps for now
-                // FIXME: implement hostapp support
                 .filter(|(_, app)| !app.is_host)
                 .map(|(uuid, app)| (uuid, app.into()))
-                .collect(),
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+
+        // TODO: process the hostapp target separately
+
+        Self {
+            name: Some(name),
+            apps,
             needs_cleanup: false,
         }
     }

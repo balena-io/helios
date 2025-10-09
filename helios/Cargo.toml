@@ -17,12 +17,17 @@ helios-api = { path = "../helios-api", version = "0" }
 helios-legacy = { path = "../helios-legacy", version = "0" }
 helios-oci = { path = "../helios-oci", version = "0" }
 helios-remote = { path = "../helios-remote", version = "0" }
-helios-state = { path = "../helios-state", version = "0" }
+helios-state = { path = "../helios-state", version = "0", default-features = false }
 helios-util = { path = "../helios-util", version = "0" }
 
 clap.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
+
+[features]
+default = ["userapps", "balenahup"]
+userapps = ["helios-state/userapps"]
+balenahup = ["helios-state/balenahup"]
 
 [dev-dependencies]
