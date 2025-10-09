@@ -14,7 +14,10 @@ services:
         condition: service_started
 
   helios-api:
-    build: ./
+    build:
+      context: ./
+      args:
+        HELIOS_FEATURES: all
     image: helios
     command: socat TCP-LISTEN:80,reuseaddr,fork UNIX-CONNECT:/tmp/run/helios.sock
     depends_on:
@@ -27,6 +30,11 @@ services:
 
   # Override default configurations
   helios:
+    build:
+      context: ./
+      args:
+        HELIOS_FEATURES: all
+    image: helios
     # Set-up required variables
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'

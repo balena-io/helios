@@ -1,4 +1,9 @@
+# Comma-separated list of features
+ARG HELIOS_FEATURES=all
+
 FROM alpine:3.22 AS build
+
+ARG HELIOS_FEATURES
 
 # Install build dependencies
 RUN apk add --update --no-cache \
@@ -21,7 +26,7 @@ COPY helios-util ./helios-util
 
 # Build release
 # Unit tests are run separately by CI
-RUN cargo build --release --locked
+RUN cargo build --no-default-features --features $HELIOS_FEATURES --release --locked
 
 # Release target
 FROM alpine:3.22

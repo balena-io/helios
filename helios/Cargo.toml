@@ -26,7 +26,8 @@ tracing-subscriber.workspace = true
 tracing.workspace = true
 
 [features]
-default = ["userapps", "balenahup", "v3-api"]
+default = ["all"]
+all = ["userapps", "balenahup", "v3-api"]
 userapps = ["helios-state/userapps"]
 balenahup = ["helios-state/balenahup"]
 v3-api = ["helios-api/v3"]
