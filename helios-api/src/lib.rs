@@ -34,7 +34,7 @@ use helios_util::types::Uuid;
 // However that means that if at some point we want to support a new target state endpoint version,
 // the local API will change.
 // FIXME: define API specific input types and validations
-use helios_remote::types::AppTarget;
+use helios_remote::types::UserAppTarget as AppTarget;
 
 pub enum Listener {
     Tcp(TcpListener),

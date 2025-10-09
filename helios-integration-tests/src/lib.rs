@@ -121,8 +121,7 @@ mod tests {
                     }
                 }
             }
-        }
-        );
+        });
         let body = client
             .post(format!("{HELIOS_URL}/v3/device/apps/test-app"))
             .json(&target)

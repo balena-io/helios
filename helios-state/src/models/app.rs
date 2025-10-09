@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::common_types::Uuid;
-use crate::remote_types::AppTarget as RemoteAppTarget;
+use crate::remote_types::UserAppTarget as RemoteAppTarget;
 
 use super::release::Release;
 

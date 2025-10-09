@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
-use crate::remote_types::DeviceTarget as RemoteDeviceTarget;
+use crate::remote_types::{AppTarget as RemoteAppTarget, DeviceTarget as RemoteDeviceTarget};
 
 use super::app::App;
+use super::hostapp::HostApp;
 use super::image::Image;
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
@@ -41,6 +42,11 @@ pub struct Device {
     #[serde(default)]
     pub apps: BTreeMap<Uuid, App>,
 
+    /// The hostapp configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub hostapp: Option<HostApp>,
+
     #[serde(default)]
     pub needs_cleanup: bool,
 }
@@ -54,6 +60,7 @@ impl Device {
             auths: RegistryAuthSet::new(),
             images: BTreeMap::new(),
             apps: BTreeMap::new(),
+            hostapp: None,
             needs_cleanup: false,
         }
     }
@@ -64,12 +71,14 @@ impl From<Device> for DeviceTarget {
         let Device {
             name,
             apps,
+            hostapp,
             needs_cleanup,
             ..
         } = device;
         Self {
             name,
             apps,
+            hostapp,
             needs_cleanup,
         }
     }
@@ -79,22 +88,32 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
-        // This makes user app support optional while the feature is being developed
-        let apps = if cfg!(feature = "userapps") {
-            apps.into_iter()
-                // filter host apps for now
-                .filter(|(_, app)| !app.is_host)
-                .map(|(uuid, app)| (uuid, app.into()))
-                .collect()
-        } else {
-            BTreeMap::new()
-        };
+        let mut userapps = BTreeMap::new();
+        let mut hostapps = Vec::new();
+        for (app_uuid, app) in apps {
+            match app {
+                // Read the hostapp info if it exists and the feature is enabled
+                RemoteAppTarget::Host(hostapp) => {
+                    if cfg!(feature = "balenahup") {
+                        hostapps.push((app_uuid, hostapp).into());
+                    }
+                }
+                // Read the userapp info if it exists and the feature is enabled
+                RemoteAppTarget::User(userapp) => {
+                    if cfg!(feature = "userapps") {
+                        userapps.insert(app_uuid, userapp.into());
+                    }
+                }
+            };
+        }
 
-        // TODO: process the hostapp target separately
+        // Get only the first hostapp if any
+        let hostapp = hostapps.pop();
 
         Self {
             name: Some(name),
-            apps,
+            apps: userapps,
+            hostapp,
             needs_cleanup: false,
         }
     }
