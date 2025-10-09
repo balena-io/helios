@@ -15,7 +15,7 @@ services:
   #   volumes:
   #     - runtime:/tmp/run
   #   healthcheck:
-  #     test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/v3/ping']
+  #     test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/ping']
 
   helios:
     build: ./

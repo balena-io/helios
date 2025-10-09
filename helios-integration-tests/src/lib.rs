@@ -40,7 +40,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_running() {
-        let body = reqwest::get(format!("{HELIOS_URL}/v3/ping"))
+        let body = reqwest::get(format!("{HELIOS_URL}/ping"))
             .await
             .unwrap()
             .text()

@@ -13,7 +13,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-api = { path = "../helios-api", version = "0" }
+helios-api = { path = "../helios-api", version = "0", default-features = false }
 helios-legacy = { path = "../helios-legacy", version = "0" }
 helios-oci = { path = "../helios-oci", version = "0" }
 helios-remote = { path = "../helios-remote", version = "0" }
@@ -26,8 +26,9 @@ tracing-subscriber.workspace = true
 tracing.workspace = true
 
 [features]
-default = ["userapps", "balenahup"]
+default = ["userapps", "balenahup", "v3-api"]
 userapps = ["helios-state/userapps"]
 balenahup = ["helios-state/balenahup"]
+v3-api = ["helios-api/v3"]
 
 [dev-dependencies]
