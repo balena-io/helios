@@ -1,4 +1,61 @@
 - commits:
+    - subject: Rename Store::store to Store::write
+      hash: 50453e47e5ba6e1165b69d1d9adef62b42ffdc4c
+      body: |
+        Better name and consistent with Store::read
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Read device name from local store
+      hash: 99294617a1fbb2a9cdb1659b66b23b722d08d30a
+      body: |
+        The device name is now stored by the `set_device_name` task and
+        retrieved while reading the device state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use a Store instance for loading config and provisioning
+      hash: bbe3b3a516d8922bbf627dacfc93636a4a2eafc2
+      body: |
+        Instead of hiding the implementation details in helios_util::config
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Implement `store` module in helios-util
+      hash: 8ce4381e835c6bf77994a654531e5b21a8bd8135
+      body: |
+        This module provides a simple implementation for a filesystem backed
+        store for serializable data. This store will be used to store data
+        coming from the backend that doesn't have a counterpart on the local
+        state of the system.
+
+        This commit modifies the `config` implementation in helios-util to use
+        the filesystem Store.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Make helios-util config functions async
+      hash: dafaa73ebaa1d0bb1148fddb6139eb21df5d6e8e
+      body: |
+        This makes it more flexible to use in contexts where the main thread
+        cannot be blocked.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.11.6
+  title: ""
+  date: 2025-10-12T06:52:08.924Z
+- commits:
     - subject: Remove helios-remote-types dependency on helios-oci
       hash: a42cf1bf19b2a686b6aff4488ee193795bc5b32c
       body: |
