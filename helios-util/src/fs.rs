@@ -1,6 +1,6 @@
-use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 use super::crypto::{ALPHA_NUM, pseudorandom_string};
 
@@ -14,18 +14,21 @@ use super::crypto::{ALPHA_NUM, pseudorandom_string};
 /// be reasonably sure the write completed durably.
 ///
 /// Read: [Ensuring data reaches to disk](https://lwn.net/Articles/457667/).
-pub fn safe_write_all<P: AsRef<Path>, B: AsRef<[u8]>>(path: P, buf: B) -> io::Result<()> {
+pub async fn safe_write_all<P: AsRef<Path>, B: AsRef<[u8]>>(
+    path: P,
+    buf: B,
+) -> std::io::Result<()> {
     // create temp file
     let tmp_ext = "sync-".to_owned() + &pseudorandom_string(ALPHA_NUM, 6);
     let tmp_path = path.as_ref().with_extension(tmp_ext);
-    let mut tmp_file = fs::File::create(tmp_path.clone())?;
+    let mut tmp_file = fs::File::create(tmp_path.clone()).await?;
 
     // write given contents and sync to disk
-    tmp_file.write_all(buf.as_ref())?;
-    tmp_file.flush()?;
-    tmp_file.sync_all()?;
+    tmp_file.write_all(buf.as_ref()).await?;
+    tmp_file.flush().await?;
+    tmp_file.sync_all().await?;
     drop(tmp_file);
 
     // rename tmp file to destination
-    fs::rename(&tmp_path, path.as_ref())
+    fs::rename(&tmp_path, path.as_ref()).await
 }

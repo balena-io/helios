@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{Span, debug, field, instrument};
 
-use crate::util::config;
+use crate::util::config::StoredConfig;
 use crate::util::crypto::sha256_hex_digest;
 use crate::util::http::{InvalidUriError, Uri};
+use crate::util::store;
 use crate::util::types::{ApiKey, DeviceType, Uuid};
 
 use super::config::{ProvisioningConfig, RemoteConfig};
@@ -23,11 +24,8 @@ pub enum ProvisioningError {
     #[error("Response decoding failed: {0}")]
     ResponseDecoding(#[from] reqwest::Error),
 
-    #[error("Failed to recover provisioning config: {0}")]
-    RecoverConfig(#[from] config::GetConfigError),
-
-    #[error("Failed to store provisioning config: {0}")]
-    StoreConfig(#[from] config::StoreConfigError),
+    #[error("Failed to read/write provisioning config: {0}")]
+    ReadWriteConfig(#[from] store::StoreError),
 
     #[error("Remote returned error: ({0}) {1}")]
     Status(StatusCode, String),
@@ -36,6 +34,7 @@ pub enum ProvisioningError {
 pub async fn provision(
     provisioning_key: &String,
     provisioning_config: &ProvisioningConfig,
+    config_store: &store::Store,
 ) -> Result<(Uuid, RemoteConfig, DeviceType), ProvisioningError> {
     // Remote expects us to provide a UUID and API key during registration,
     // and we comply by auto-generating random values if they aren't provided
@@ -60,24 +59,28 @@ pub async fn provision(
     // return an HTTP 409 Conflict error. If it does, we can assume
     // provisioning is complete, store our config and get rid of the
     // recovered file.
-    let config =
-        if let Some(config) = config::get_with_name::<ProvisioningConfig>(&recovery_filename)? {
-            config
-        } else {
-            // Before attempting to call remote, backup the registration request
-            config::store_with_name(provisioning_config, &recovery_filename)?;
-            provisioning_config.clone()
-        };
+    let config = if let Some(config) = config_store.read("/", &recovery_filename).await? {
+        config
+    } else {
+        // Before attempting to call remote, backup the registration request
+        config_store
+            .write("/", &recovery_filename, provisioning_config)
+            .await?;
+        provisioning_config.clone()
+    };
 
     let timeout = &config.remote.request.timeout;
     let request: RegisterRequest = config.clone().into();
 
     match register(provisioning_key, api_endpoint, timeout, &request).await {
         Ok(_) | Err(ProvisioningError::Status(StatusCode::CONFLICT, _)) => {
-            config::store(&config).map(|_| {
-                // remove recovery config ignoring any errors
-                _ = config::remove_with_name::<ProvisioningConfig>(&recovery_filename);
-            })?;
+            config_store
+                .write("/", ProvisioningConfig::default_name(), &config)
+                .await
+                .map(|_| {
+                    // remove recovery config ignoring any errors
+                    _ = config_store.delete("/", &recovery_filename);
+                })?;
             Ok((
                 config.uuid.clone(),
                 config.remote.clone(),

@@ -86,8 +86,8 @@ pub struct ProvisioningConfig {
 }
 
 impl StoredConfig for ProvisioningConfig {
-    fn kind() -> String {
-        "provisioning".to_owned()
+    fn kind() -> &'static str {
+        "provisioning"
     }
 }
 
