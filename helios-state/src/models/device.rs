@@ -78,7 +78,7 @@ impl From<Device> for DeviceTarget {
         Self {
             name,
             apps,
-            hostapp,
+            hostapp: hostapp.map(|a| a.into()),
             needs_cleanup,
         }
     }

@@ -4,8 +4,12 @@ use std::ops::Deref;
 
 use mahler::State;
 
-#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uuid(String);
+
+impl State for Uuid {
+    type Target = Self;
+}
 
 impl Deref for Uuid {
     type Target = String;
