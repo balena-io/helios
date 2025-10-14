@@ -1,16 +1,19 @@
-FROM alpine:3.21
+FROM alpine:3.22
 
-# Install build dependencies
+# Install build dependencies and dbus
 RUN apk add --update --no-cache \
 		build-base \
 		openssl-dev \
-		rust cargo
+		rust cargo \
+		dbus
 
 WORKDIR /usr/src/app
 
-# Copy source files
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+# Copy workspace files
+COPY helios-integration-tests ./
+
+# Copy helios-util as a sub-folder on the integration workspace
+COPY helios-util ./helios-util
 
 # Run integration tests
 CMD ["cargo", "test", "--", "--test-threads", "1"]
