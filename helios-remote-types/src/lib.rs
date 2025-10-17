@@ -95,6 +95,17 @@ impl<'de> Deserialize<'de> for AppTargetMap {
                 // labels were added. If that's the case we won't be able to update to it so
                 // we remove it from the target state
                 if let Some(mut svc) = hostapp {
+                    // The hostapp must provide an updater artifact
+                    let updater = if let Some(updater) =
+                        svc.labels.remove("io.balena.private.hostapp.updater")
+                    {
+                        updater.parse().map_err(serde::de::Error::custom)?
+                    } else {
+                        return Err(serde::de::Error::custom(
+                            "the hostapp must provide an updater artifact reference",
+                        ));
+                    };
+
                     if let Some(board_rev) =
                         svc.labels.remove("io.balena.private.hostapp.board-rev")
                     {
@@ -104,6 +115,7 @@ impl<'de> Deserialize<'de> for AppTargetMap {
                                 release_uuid,
                                 image: svc.image,
                                 board_rev,
+                                updater,
                             }),
                         );
                     }
@@ -130,6 +142,7 @@ pub struct HostAppTarget {
     pub release_uuid: Uuid,
     pub image: ImageUri,
     pub board_rev: String,
+    pub updater: ImageUri,
 }
 
 /// Target app as defined by the remote backend

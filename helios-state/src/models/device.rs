@@ -8,7 +8,7 @@ use crate::oci::RegistryAuth;
 use crate::remote_types::{AppTarget as RemoteAppTarget, DeviceTarget as RemoteDeviceTarget};
 
 use super::app::App;
-use super::hostapp::HostApp;
+use super::host::Host;
 use super::image::Image;
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
@@ -42,10 +42,10 @@ pub struct Device {
     #[serde(default)]
     pub apps: BTreeMap<Uuid, App>,
 
-    /// The hostapp configuration
+    /// The "hostapp" configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    pub hostapp: Option<HostApp>,
+    pub host: Option<Host>,
 
     #[serde(default)]
     pub needs_cleanup: bool,
@@ -60,7 +60,7 @@ impl Device {
             auths: RegistryAuthSet::new(),
             images: BTreeMap::new(),
             apps: BTreeMap::new(),
-            hostapp: None,
+            host: None,
             needs_cleanup: false,
         }
     }
@@ -71,14 +71,14 @@ impl From<Device> for DeviceTarget {
         let Device {
             name,
             apps,
-            hostapp,
+            host,
             needs_cleanup,
             ..
         } = device;
         Self {
             name,
             apps,
-            hostapp: hostapp.map(|a| a.into()),
+            host: host.map(|r| r.into()),
             needs_cleanup,
         }
     }
@@ -113,7 +113,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
         Self {
             name: Some(name),
             apps: userapps,
-            hostapp,
+            host: hostapp,
             needs_cleanup: false,
         }
     }
