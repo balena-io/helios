@@ -38,6 +38,12 @@ unset HELIOS_REMOTE_API_KEY
 
 if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
   HELIOS_OS_VERSION="${BALENA_HOST_OS_VERSION}"
+
+  # Append the board revision to the OS version if available
+  if [ -n "${BALENA_HOST_OS_BOARD_REV}" ]; then
+    HELIOS_OS_VERSION="$HELIOS_OS_VERSION@${BALENA_HOST_OS_BOARD_REV}"
+  fi
+
   export HELIOS_OS_VERSION
 fi
 
