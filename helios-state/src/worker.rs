@@ -14,6 +14,9 @@ use crate::tasks::app::{
     set_app_name,
 };
 use crate::tasks::device::{ensure_cleanup, perform_cleanup, set_device_name};
+use crate::tasks::host::{
+    fetch_updater_and_install_hostapp, init_hostapp, install_hostapp_release,
+};
 use crate::tasks::image::{
     create_image, pull_image, remove_image, request_registry_credentials,
     request_registry_token_for_new_images, tag_image,
@@ -47,6 +50,21 @@ fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
             [
                 task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
                 task::update(perform_cleanup).with_description(|| "perform clean-up"),
+            ],
+        )
+        .job(
+            "/host",
+            task::create(init_hostapp).with_description(|| "initialize host app"),
+        )
+        .jobs(
+            "/host/{release_uuid}",
+            [
+                task::create(fetch_updater_and_install_hostapp),
+                task::none(install_hostapp_release).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("install hostOS release '{release_uuid}'")
+                    },
+                ),
             ],
         )
         .job(

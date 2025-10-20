@@ -5,7 +5,7 @@ use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::oci::{Client as Docker, Error as DockerError, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::models::Device;
+use super::models::{Device, Host};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -29,7 +29,17 @@ pub async fn read(
 ) -> Result<Device, ReadStateError> {
     let mut device = Device::new(uuid, os);
 
+    // read the device name from the local store
     device.name = local_store.read("/", "device_name").await?;
+
+    // Read the host app information from the local store
+    device.host = local_store
+        .read("/host", "app_uuid")
+        .await?
+        .map(|app_uuid| Host {
+            app_uuid,
+            releases: Default::default(),
+        });
 
     // Read the state of images
     let res = docker.image().list().await;

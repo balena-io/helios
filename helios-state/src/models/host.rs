@@ -13,7 +13,7 @@ pub struct Host {
     ///
     /// The value will not be available on first boot (it's not provided by the host OS)
     /// so it will be read from local storage
-    pub uuid: Uuid,
+    pub app_uuid: Uuid,
 
     /// The hostapp releases. While only one release is expected on the target state, the
     /// device may be in-between releases, in which case there may still be clean-up steps to
@@ -23,9 +23,11 @@ pub struct Host {
 
 impl From<Host> for HostTarget {
     fn from(app: Host) -> Self {
-        let Host { uuid, releases, .. } = app;
+        let Host {
+            app_uuid, releases, ..
+        } = app;
         HostTarget {
-            uuid,
+            app_uuid,
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
         }
     }
@@ -44,39 +46,19 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
         releases.insert(
             release_uuid,
             HostReleaseTarget {
-                root: RootOSTarget {
-                    image,
-                    build: board_rev,
-                    updater,
-                },
+                image,
+                build: board_rev,
+                updater,
             },
         );
 
-        HostTarget {
-            uuid: app_uuid,
-            releases,
-        }
+        HostTarget { app_uuid, releases }
     }
 }
 
 #[derive(State, Serialize, Deserialize, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct HostRelease {
-    root: RootOS,
-    // NOTE: here we'll add host extensions and perhaps other system services
-}
-
-impl From<HostRelease> for HostReleaseTarget {
-    fn from(rel: HostRelease) -> Self {
-        let HostRelease { root } = rel;
-        HostReleaseTarget { root: root.into() }
-    }
-}
-
-/// Root fileset for the host: kernel, essential drivers and services. Updated via HUP
-#[derive(State, Serialize, Deserialize, Debug, Clone)]
-#[mahler(derive(PartialEq, Eq))]
-pub struct RootOS {
     /// The fileset image
     /// This is needed for reporting and will be stored on local storage
     pub image: ImageUri,
@@ -95,18 +77,34 @@ pub struct RootOS {
     pub install_attempts: usize,
 }
 
-impl From<RootOS> for RootOSTarget {
-    fn from(rel: RootOS) -> Self {
-        let RootOS {
+impl From<HostRelease> for HostReleaseTarget {
+    fn from(rel: HostRelease) -> Self {
+        let HostRelease {
             image,
             build,
             updater,
             ..
         } = rel;
-        RootOSTarget {
+        HostReleaseTarget {
             image,
             build,
             updater,
+        }
+    }
+}
+
+impl From<HostReleaseTarget> for HostRelease {
+    fn from(rel: HostReleaseTarget) -> Self {
+        let HostReleaseTarget {
+            image,
+            build,
+            updater,
+        } = rel;
+        HostRelease {
+            image,
+            build,
+            updater,
+            install_attempts: 0,
         }
     }
 }
