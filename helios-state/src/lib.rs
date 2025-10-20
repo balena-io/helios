@@ -1,5 +1,6 @@
 mod read;
 mod seek;
+mod tasks;
 mod worker;
 
 pub mod models;
