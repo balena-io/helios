@@ -1,18 +1,19 @@
-use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
-use tokio::sync::RwLock;
+use mahler::{
+    task,
+    worker::{Uninitialized, Worker},
+};
 
 use crate::common_types::ImageUri;
-use crate::models::{Device, Image, RegistryAuthSet, TargetAppMap};
+use crate::models::{Device, Image, RegistryAuthSet};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
-use super::utils::find_installed_service;
-
 /// Request registry tokens
-pub fn request_registry_credentials(
+pub(super) fn request_registry_credentials(
     mut auths: View<RegistryAuthSet>,
     Target(tgt_auths): Target<RegistryAuthSet>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
@@ -36,67 +37,8 @@ pub fn request_registry_credentials(
     })
 }
 
-/// Request authorization for new image installs
-pub fn request_registry_token_for_new_images(
-    System(device): System<Device>,
-    Target(tgt_apps): Target<TargetAppMap>,
-) -> Option<Task> {
-    // Find all images for new services in the target state
-    let images_to_install: Vec<&ImageUri> = tgt_apps
-        .iter()
-        .flat_map(|(app_uuid, app)| {
-            app.releases.iter().flat_map(|(commit, release)| {
-                release
-                    .services
-                    .iter()
-                    .filter(|(service_name, svc)| {
-                        // if the service image has not been downloaded
-                        !device.images.contains_key(&svc.image) &&
-                        // and there is no service from a different release
-                        find_installed_service(
-                            &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*service_name).clone(),
-                        )
-                        // or there is a service and the digest doesn't match the target digest
-                        .is_none_or(|s| {
-                            s.image.digest().is_none() || s.image.digest() != svc.image.digest()
-                        })
-                    })
-                    // then select the image
-                    .map(|(_, svc)| &svc.image)
-            })
-        })
-        .collect();
-
-    // Group images to install by registry
-    let tgt_auths: RegistryAuthSet = images_to_install
-        .iter()
-        .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
-            if let Some(service) = img.registry().clone() {
-                if let Some(scope) = acc.get_mut(&service) {
-                    scope.push((*img).clone());
-                } else {
-                    acc.insert(service, vec![(*img).clone()]);
-                }
-            }
-            acc
-        })
-        .into_values()
-        .map(|scope| RegistryAuth::try_from(scope).expect("auth creation should not fail"))
-        .filter(|scope| device.auths.iter().all(|s| !s.is_super_scope(scope)))
-        .collect();
-
-    if tgt_auths.is_empty() {
-        return None;
-    }
-
-    Some(request_registry_credentials.with_target(tgt_auths))
-}
-
 /// Tag an existing image with a new name
-pub fn tag_image(
+fn tag_image(
     image: View<Option<Image>>,
     Target(tgt): Target<Image>,
     Args(image_name): Args<ImageUri>,
@@ -125,7 +67,7 @@ pub fn tag_image(
 /// Condition: the image is not already present in the device
 /// Effect: add the image to the list of images
 /// Action: pull the image from the registry and add it to the images local registry
-pub fn pull_image(
+pub(super) fn pull_image(
     mut image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
@@ -173,7 +115,7 @@ pub fn pull_image(
 ///
 /// Depending on whether the image has a digest or there is another matching image, a different
 /// operation will be chosen
-pub fn create_image(
+pub(super) fn create_image(
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,
 ) -> Option<Task> {
@@ -206,7 +148,7 @@ pub fn create_image(
 /// Condition: the image exists (and there are no services referencing it?)
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
-pub fn remove_image(
+fn remove_image(
     img_ptr: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,
@@ -238,4 +180,31 @@ pub fn remove_image(
         img.take();
         img
     })
+}
+
+/// Update worker with image tasks
+pub fn with_image_tasks<O, I>(worker: Worker<O, Uninitialized, I>) -> Worker<O, Uninitialized, I> {
+    worker
+        .job(
+            "/auths",
+            task::none(request_registry_credentials)
+                .with_description(|| "request registry credentials"),
+        )
+        .jobs(
+            "/images/{image_name}",
+            [
+                task::none(pull_image).with_description(|Args(image_name): Args<String>| {
+                    format!("pull image '{image_name}'")
+                }),
+                task::none(remove_image).with_description(|Args(image_name): Args<String>| {
+                    format!("delete image '{image_name}'")
+                }),
+                task::none(tag_image).with_description(
+                    |Args(image_name): Args<String>, tgt: Target<Image>| {
+                        format!("tag image '{}' as '{image_name}'", tgt.engine_id)
+                    },
+                ),
+                task::none(create_image),
+            ],
+        )
 }

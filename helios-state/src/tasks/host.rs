@@ -1,5 +1,9 @@
-use mahler::extract::{Res, System, Target, View};
+use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
+use mahler::{
+    task,
+    worker::{Uninitialized, Worker},
+};
 
 use crate::models::{Device, Host, HostRelease, HostReleaseTarget, HostTarget};
 use crate::tasks::image::pull_image;
@@ -8,7 +12,7 @@ use crate::util::store::{Store, StoreError};
 /// Initialize the hostapp and store the app uuid
 ///
 /// Applies to `create(/host)` operation
-pub fn init_hostapp(
+fn init_hostapp(
     mut maybe_host: View<Option<Host>>,
     Target(tgt): Target<HostTarget>,
     store: Res<Store>,
@@ -32,7 +36,7 @@ pub fn init_hostapp(
 /// Fetch the updater artifact from the registry and install the hostapp release
 ///
 /// Applies to `create(/host/releases/<commit>)`
-pub fn fetch_updater_and_install_hostapp(
+fn fetch_updater_and_install_hostapp(
     System(device): System<Device>,
     Target(tgt): Target<HostReleaseTarget>,
 ) -> Vec<Task> {
@@ -58,7 +62,7 @@ pub fn fetch_updater_and_install_hostapp(
 ///
 /// Applies to `none(/host/releases/<commit>)` as this is only called in the context of
 /// fetch_updater
-pub fn install_hostapp_release(
+fn install_hostapp_release(
     mut maybe_rel: View<Option<HostRelease>>,
     Target(tgt): Target<HostReleaseTarget>,
     System(device): System<Device>,
@@ -86,4 +90,25 @@ pub fn install_hostapp_release(
         }
         Ok(rel)
     })
+}
+
+pub fn with_hostapp_tasks<O, I>(
+    worker: Worker<O, Uninitialized, I>,
+) -> Worker<O, Uninitialized, I> {
+    worker
+        .job(
+            "/host",
+            task::create(init_hostapp).with_description(|| "initialize host app"),
+        )
+        .jobs(
+            "/host/{release_uuid}",
+            [
+                task::create(fetch_updater_and_install_hostapp),
+                task::none(install_hostapp_release).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("install hostOS release '{release_uuid}'")
+                    },
+                ),
+            ],
+        )
 }

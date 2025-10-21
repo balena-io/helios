@@ -1,29 +1,12 @@
-use mahler::extract::Target;
 use mahler::worker::Uninitialized;
-use mahler::{
-    extract::Args,
-    task,
-    worker::{Ready, Worker},
-};
+use mahler::worker::{Ready, Worker};
 use tokio::sync::RwLock;
 
-use crate::common_types::Uuid;
 use crate::oci::{Client as Docker, Error as DockerError, RegistryAuthClient};
-use crate::tasks::app::{
-    fetch_release_images, fetch_service_image, install_service, prepare_app, prepare_release,
-    set_app_name,
-};
-use crate::tasks::device::{ensure_cleanup, perform_cleanup, set_device_name};
-use crate::tasks::host::{
-    fetch_updater_and_install_hostapp, init_hostapp, install_hostapp_release,
-};
-use crate::tasks::image::{
-    create_image, pull_image, remove_image, request_registry_credentials,
-    request_registry_token_for_new_images, tag_image,
-};
+use crate::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
 use crate::util::store::Store;
 
-use super::models::{Device, DeviceTarget, Image};
+use super::models::{Device, DeviceTarget};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
@@ -38,92 +21,20 @@ pub enum CreateError {
 ///
 /// This is mostly used for tests
 fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
-    Worker::new()
-        .job(
-            "/name",
-            task::any(set_device_name).with_description(|| "update device name"),
-        )
-        // XXX: this is not added first because of
-        // https://github.com/balena-io-modules/mahler-rs/pull/50
-        .jobs(
-            "",
-            [
-                task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
-                task::update(perform_cleanup).with_description(|| "perform clean-up"),
-            ],
-        )
-        .job(
-            "/host",
-            task::create(init_hostapp).with_description(|| "initialize host app"),
-        )
-        .jobs(
-            "/host/{release_uuid}",
-            [
-                task::create(fetch_updater_and_install_hostapp),
-                task::none(install_hostapp_release).with_description(
-                    |Args(release_uuid): Args<String>| {
-                        format!("install hostOS release '{release_uuid}'")
-                    },
-                ),
-            ],
-        )
-        .job(
-            "/auths",
-            task::none(request_registry_credentials)
-                .with_description(|| "request registry credentials"),
-        )
-        .jobs(
-            "/images/{image_name}",
-            [
-                task::none(pull_image).with_description(|Args(image_name): Args<String>| {
-                    format!("pull image '{image_name}'")
-                }),
-                task::none(remove_image).with_description(|Args(image_name): Args<String>| {
-                    format!("delete image '{image_name}'")
-                }),
-                task::none(tag_image).with_description(
-                    |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        format!("tag image '{}' as '{image_name}'", tgt.engine_id)
-                    },
-                ),
-                task::none(create_image),
-            ],
-        )
-        .job("/apps", task::update(request_registry_token_for_new_images))
-        .job(
-            "/apps/{app_uuid}",
-            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
-                format!("initialize app with uuid '{uuid}'")
-            }),
-        )
-        .job(
-            "/apps/{app_uuid}/name",
-            task::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
-                format!("update name for app with uuid '{uuid}'")
-            }),
-        )
-        .jobs(
-            "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
-        )
-        .jobs(
-            "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
-            [
-                task::create(fetch_service_image),
-                task::create(install_service).with_description(
-                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("initialize service '{service_name}' for release '{commit}'")
-                    },
-                ),
-            ],
-        )
+    let mut worker = Worker::new();
+
+    worker = with_device_tasks(worker);
+
+    if cfg!(feature = "balenahup") {
+        worker = with_hostapp_tasks(worker);
+    }
+    worker = with_image_tasks(worker);
+
+    if cfg!(feature = "userapps") {
+        worker = with_userapp_tasks(worker);
+    }
+
+    worker
 }
 
 type LocalWorker = Worker<Device, Ready, DeviceTarget>;

@@ -1,7 +1,12 @@
-use mahler::extract::{Res, Target, View};
-use mahler::task::prelude::*;
 use tokio::sync::RwLock;
 use tracing::debug;
+
+use mahler::extract::{Res, Target, View};
+use mahler::task::prelude::*;
+use mahler::{
+    task,
+    worker::{Uninitialized, Worker},
+};
 
 use crate::models::{Device, DeviceTarget};
 use crate::oci::RegistryAuthClient;
@@ -10,7 +15,7 @@ use crate::util::store::{Store, StoreError};
 /// Make sure a cleanup happens after all tasks have been performed
 ///
 /// This should be the first task for every workflow
-pub fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
+fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
     device.needs_cleanup = true;
     device
 }
@@ -18,7 +23,7 @@ pub fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
 /// Clean up the device state after the target has been reached
 ///
 /// This should be the final task for every workflow
-pub fn perform_cleanup(
+fn perform_cleanup(
     device: View<Device>,
     Target(tgt_device): Target<DeviceTarget>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
@@ -53,7 +58,7 @@ pub fn perform_cleanup(
 }
 
 /// Update the device name
-pub fn set_device_name(
+fn set_device_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
     store: Res<Store>,
@@ -66,4 +71,21 @@ pub fn set_device_name(
 
         Ok(name)
     })
+}
+
+pub fn with_device_tasks<O, I>(worker: Worker<O, Uninitialized, I>) -> Worker<O, Uninitialized, I> {
+    worker
+        .job(
+            "/name",
+            task::any(set_device_name).with_description(|| "update device name"),
+        )
+        // XXX: this is not added first because of
+        // https://github.com/balena-io-modules/mahler-rs/pull/50
+        .jobs(
+            "",
+            [
+                task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
+                task::update(perform_cleanup).with_description(|| "perform clean-up"),
+            ],
+        )
 }

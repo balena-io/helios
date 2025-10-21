@@ -1,14 +1,83 @@
+use std::collections::HashMap;
+
 use mahler::extract::{Args, System, Target, View};
 use mahler::task::prelude::*;
+use mahler::{
+    task,
+    worker::{Uninitialized, Worker},
+};
 
 use crate::common_types::{ImageUri, Uuid};
-use crate::models::{App, AppTarget, Device, Release, ReleaseTarget, Service, ServiceTarget};
+use crate::models::{
+    App, AppTarget, Device, RegistryAuthSet, Release, ReleaseTarget, Service, ServiceTarget,
+    TargetAppMap,
+};
+use crate::oci::RegistryAuth;
 
-use super::image::create_image;
+use super::image::{create_image, request_registry_credentials};
 use super::utils::find_installed_service;
 
+/// Request authorization for new image installs
+fn request_registry_token_for_new_images(
+    System(device): System<Device>,
+    Target(tgt_apps): Target<TargetAppMap>,
+) -> Option<Task> {
+    // Find all images for new services in the target state
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release
+                    .services
+                    .iter()
+                    .filter(|(service_name, svc)| {
+                        // if the service image has not been downloaded
+                        !device.images.contains_key(&svc.image) &&
+                        // and there is no service from a different release
+                        find_installed_service(
+                            &device,
+                            app_uuid.clone(),
+                            commit.clone(),
+                            (*service_name).clone(),
+                        )
+                        // or there is a service and the digest doesn't match the target digest
+                        .is_none_or(|s| {
+                            s.image.digest().is_none() || s.image.digest() != svc.image.digest()
+                        })
+                    })
+                    // then select the image
+                    .map(|(_, svc)| &svc.image)
+            })
+        })
+        .collect();
+
+    // Group images to install by registry
+    let tgt_auths: RegistryAuthSet = images_to_install
+        .iter()
+        .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
+            if let Some(service) = img.registry().clone() {
+                if let Some(scope) = acc.get_mut(&service) {
+                    scope.push((*img).clone());
+                } else {
+                    acc.insert(service, vec![(*img).clone()]);
+                }
+            }
+            acc
+        })
+        .into_values()
+        .map(|scope| RegistryAuth::try_from(scope).expect("auth creation should not fail"))
+        .filter(|scope| device.auths.iter().all(|s| !s.is_super_scope(scope)))
+        .collect();
+
+    if tgt_auths.is_empty() {
+        return None;
+    }
+
+    Some(request_registry_credentials.with_target(tgt_auths))
+}
+
 /// Initialize the app in memory
-pub fn prepare_app(
+fn prepare_app(
     mut app: View<Option<App>>,
     Target(tgt_app): Target<AppTarget>,
 ) -> View<Option<App>> {
@@ -22,7 +91,7 @@ pub fn prepare_app(
 }
 
 /// Update the in-memory app name
-pub fn set_app_name(
+fn set_app_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
 ) -> View<Option<String>> {
@@ -31,7 +100,7 @@ pub fn set_app_name(
 }
 
 /// Install all new images for a release
-pub fn fetch_release_images(
+fn fetch_release_images(
     System(device): System<Device>,
     Target(tgt_release): Target<ReleaseTarget>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
@@ -76,13 +145,13 @@ pub fn fetch_release_images(
 }
 
 /// Initialize an empty release
-pub fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
+fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release.replace(Release::default());
     release
 }
 
 /// Do the initial pull for a new service
-pub fn fetch_service_image(
+fn fetch_service_image(
     System(device): System<Device>,
     Target(tgt): Target<ServiceTarget>,
     Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
@@ -108,7 +177,7 @@ pub fn fetch_service_image(
 ///
 /// FIXME: this only creates the service in memory for now, as we add features, this will also
 /// create the service container
-pub fn install_service(
+fn install_service(
     mut svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<ServiceTarget>,
@@ -122,4 +191,46 @@ pub fn install_service(
 
     svc.replace(Service { id, image });
     svc
+}
+
+/// Update worker with user app tasks
+pub fn with_userapp_tasks<O, I>(
+    worker: Worker<O, Uninitialized, I>,
+) -> Worker<O, Uninitialized, I> {
+    worker
+        .job("/apps", task::update(request_registry_token_for_new_images))
+        .job(
+            "/apps/{app_uuid}",
+            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+                format!("initialize app with uuid '{uuid}'")
+            }),
+        )
+        .job(
+            "/apps/{app_uuid}/name",
+            task::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
+                format!("update name for app with uuid '{uuid}'")
+            }),
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}",
+            [
+                task::create(fetch_release_images),
+                task::create(prepare_release).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+            ],
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
+            [
+                task::create(fetch_service_image),
+                task::create(install_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+            ],
+        )
 }
