@@ -366,10 +366,12 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "os": {
-                "name": "balenaOS",
-                "version": "5.7.3",
-                "build": "abcd1234",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                }
             }
         }))
         .unwrap();
@@ -377,12 +379,13 @@ mod tests {
             "name": "device-name",
             "uuid": "my-device-uuid",
             "host": {
-                "app_uuid": "hostapp-uuid",
                 "releases": {
                     "target-release": {
+                        "app": "hostapp-uuid",
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354"
+                        "build": "cde2354",
+                        "status": "running",
                     }
                 }
             },
@@ -392,8 +395,9 @@ mod tests {
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!(
             "ensure clean-up",
-            "set-up host metadata",
+            "initialize hostOS release 'target-release'",
             "install hostOS release 'target-release'",
+            "complete hostOS release install for 'target-release'",
             "perform clean-up"
         );
         assert_eq!(workflow.to_string(), expected.to_string());
@@ -406,18 +410,19 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "os": {
-                "name": "balenaOS",
-                "version": "5.7.3",
-                "build": "abcd1234",
-            },
             "host": {
-                "app_uuid": "hostapp-uuid",
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
                 "releases": {
                     "old-release": {
+                        "app": "hostapp-uuid",
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
-                        "build": "abcd1234"
+                        "build": "abcd1234",
+                        "status": "running",
                     }
                 }
             },
@@ -427,12 +432,13 @@ mod tests {
             "name": "device-name",
             "uuid": "my-device-uuid",
             "host": {
-                "app_uuid": "hostapp-uuid",
                 "releases": {
                     "new-release": {
+                        "app": "hostapp-uuid",
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354"
+                        "build": "cde2354",
+                        "status": "running"
                     }
                 }
             },
@@ -440,12 +446,16 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!(
-            "ensure clean-up",
-            "install hostOS release 'new-release'",
-            "clean up metadata for hostOS release 'old-release'",
-            "perform clean-up"
-        );
+        let expected: Dag<&str> =
+            seq!("ensure clean-up", "initialize hostOS release 'new-release'",)
+                + par!(
+                    "install hostOS release 'new-release'",
+                    "clean up metadata for previous hostOS release 'old-release'",
+                )
+                + seq!(
+                    "complete hostOS release install for 'new-release'",
+                    "perform clean-up"
+                );
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 }

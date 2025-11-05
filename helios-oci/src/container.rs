@@ -57,6 +57,7 @@ impl Container<'_> {
 
         let config = ContainerCreateBody {
             image: Some(image.to_string()),
+            cmd: Some(vec!["/bin/false".to_string()]),
             ..Default::default()
         };
 

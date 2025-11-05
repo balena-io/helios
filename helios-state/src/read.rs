@@ -1,11 +1,14 @@
 use thiserror::Error;
+use tokio::fs;
 use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError, WithContext};
+use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::{Device, Host};
+use super::models::Device;
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -17,6 +20,9 @@ pub enum ReadStateError {
 
     #[error(transparent)]
     StoreReadFailed(#[from] StoreError),
+
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
 }
 
 /// Read the state of system
@@ -32,22 +38,27 @@ pub async fn read(
     // read the device name from the local store
     device.name = local_store.read("/", "device_name").await?;
 
-    // Read the host app information from the local store
-    device.host = local_store
-        .read("/host", "app_uuid")
-        .await?
-        .map(|app_uuid| Host {
-            app_uuid,
-            releases: Default::default(),
-        });
-
+    // Read the hostapp information from the local store
     if let Some(host) = &mut device.host {
         let host_releases: Vec<Uuid> = local_store.list("/host/releases").await?;
         for release_uuid in host_releases {
-            if let Some(hostapp) = local_store
-                .read(format!("/host/releases/{release_uuid}"), "hostapp")
+            if let Some(mut hostapp) = local_store
+                .read::<_, HostRelease>(format!("/host/releases/{release_uuid}"), "hostapp")
                 .await?
             {
+                // ignore the status on the store and deduce it instead
+                hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
+                    HostReleaseStatus::Running
+                } else if fs::try_exists(
+                    runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
+                )
+                .await?
+                {
+                    HostReleaseStatus::Installed
+                } else {
+                    HostReleaseStatus::Created
+                };
+
                 host.releases.insert(release_uuid, hostapp);
             }
         }

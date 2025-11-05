@@ -76,29 +76,47 @@ impl From<LocalState> for DeviceReport {
         let mut apps = HashMap::new();
 
         let LocalState {
-            device: Device { os, host, .. },
+            device: Device { host, .. },
             ..
         } = state;
 
         // Convert the host data into an app report if any
-        if let (Some(host_state), Some(cur_os)) = (host, os) {
-            let app_uuid = host_state.app_uuid;
+        if let Some(host_state) = host {
+            // Get the current release
             let release_uuid = host_state
                 .releases
                 .iter()
-                .find(|(_, rel)| cur_os.build.as_ref() == Some(&rel.build))
+                .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
                 .map(|(uuid, _)| uuid.clone());
 
-            let mut releases = HashMap::new();
-            for (uuid, release) in host_state.releases {
-                let (update_status, service_status) = if Some(&uuid) == release_uuid.as_ref() {
-                    (UpdateStatus::Done, ServiceStatus::Running)
-                } else {
-                    (UpdateStatus::ApplyingChanges, ServiceStatus::Installing)
-                };
+            for (rel_uuid, release) in host_state.releases {
+                // Get the status of the app as services based on
+                // whether the running release is the current release
+                let (update_status, service_status, app_release) =
+                    if Some(&rel_uuid) == release_uuid.as_ref() {
+                        (
+                            UpdateStatus::Done,
+                            ServiceStatus::Running,
+                            Some(rel_uuid.clone()),
+                        )
+                    } else {
+                        (
+                            UpdateStatus::ApplyingChanges,
+                            ServiceStatus::Installing,
+                            None,
+                        )
+                    };
 
-                releases.insert(
-                    uuid,
+                // Get the app that corresponds to the current release
+                // or create one
+                let app = apps.entry(release.app).or_insert(AppReport {
+                    release_uuid: app_release,
+                    releases: HashMap::new(),
+                });
+
+                // Update the releases
+                app.releases.insert(
+                    rel_uuid,
                     ReleaseReport {
                         update_status,
                         services: [(
@@ -114,14 +132,6 @@ impl From<LocalState> for DeviceReport {
                     },
                 );
             }
-
-            apps.insert(
-                app_uuid,
-                AppReport {
-                    release_uuid,
-                    releases,
-                },
-            );
         }
 
         // TODO: convert the rest of the apps to an accepted report

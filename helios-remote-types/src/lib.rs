@@ -85,7 +85,8 @@ impl<'de> Deserialize<'de> for AppTargetMap {
             // Only select the hostapp if it has the appropriate metadata
             } else if let Some((release_uuid, release)) = releases.into_iter().next() {
                 let hostapp = release.services.into_values().find(|svc| {
-                    svc.labels
+                    svc.composition
+                        .labels
                         .get("io.balena.image.class")
                         .map(|value| value == "hostapp")
                         .is_some()
@@ -94,20 +95,26 @@ impl<'de> Deserialize<'de> for AppTargetMap {
                 // The target OS may be before v6.1.18 where the hostapp and board-rev
                 // labels were added. If that's the case we won't be able to update to it so
                 // we remove it from the target state
-                if let Some(mut svc) = hostapp {
-                    // The hostapp must provide an updater artifact
-                    let updater =
-                        if let Some(updater) = svc.labels.remove("io.balena.private.updater") {
-                            updater.parse().map_err(serde::de::Error::custom)?
-                        } else {
-                            return Err(serde::de::Error::custom(
-                                "the hostapp must provide an updater artifact reference",
-                            ));
-                        };
+                if let Some(svc) = hostapp {
+                    // merge top level labels with those in the composition
+                    let mut labels: HashMap<String, String> = svc
+                        .composition
+                        .labels
+                        .into_iter()
+                        .chain(svc.labels)
+                        .collect();
 
-                    if let Some(board_rev) =
-                        svc.labels.remove("io.balena.private.hostapp.board-rev")
+                    // The hostapp must provide an updater artifact
+                    let updater = if let Some(updater) = labels.remove("io.balena.private.updater")
                     {
+                        updater.parse().map_err(serde::de::Error::custom)?
+                    } else {
+                        return Err(serde::de::Error::custom(
+                            "the hostapp must provide an updater artifact reference",
+                        ));
+                    };
+
+                    if let Some(board_rev) = labels.remove("io.balena.private.hostapp.board-rev") {
                         apps.insert(
                             app_uuid,
                             AppTarget::Host(HostAppTarget {
@@ -216,15 +223,26 @@ pub struct ServiceTarget {
 
     #[serde(default)]
     pub labels: HashMap<String, String>,
+
+    #[serde(default)]
+    pub composition: ServiceTargetComposition,
+}
+
+// TODO: replace this type with Service from https://crates.io/crates/docker-compose-types
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ServiceTargetComposition {
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
 }
 
 // FIXME: add remaining fields
 #[derive(Deserialize, Clone, Debug)]
-pub struct VolumeTarget;
+pub struct VolumeTarget {}
 
 // FIXME: add remaining fields
 #[derive(Deserialize, Clone, Debug)]
-pub struct NetworkTarget;
+pub struct NetworkTarget {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +317,88 @@ mod tests {
                 |e| e.to_string() == "the hostapp must have at least one target release"
             )
         );
+    }
+
+    #[test]
+    fn test_accepts_single_release_with_volumes_and_networks() {
+        let json = json!({
+            "release-one": {
+                "services": {},
+                "networks": {
+                    "my-net": {},
+                },
+                "volumes": {
+                    "cache": {},
+                    "runtime": {
+                        "driver": "local",
+                        "driver_opts": {
+                            "o": "bind",
+                            "type": "none",
+                            "device": "/tmp/helios"
+                        }
+                    }
+                }
+
+            }
+        });
+
+        let releases: ReleaseTargetMap = serde_json::from_value(json).unwrap();
+        assert_eq!(releases.len(), 1);
+        assert!(releases.contains_key(&"release-one".into()));
+    }
+
+    #[test]
+    fn test_accepts_hostapp_target() {
+        // use a target from a real hostapp to test
+        let json = json!({
+            "ea8013b1a82540b59bc8b109b45739ab": {
+                "id": 3,
+                "name": "generic-aarch64",
+                "is_host": true,
+                "class": "app",
+                "releases": {
+                    "c8b48659434e80a8b3adc0c5ad1e347a": {
+                        "id": 7,
+                        "services": {
+                            "hostapp": {
+                                "id": 3,
+                                "image_id": 4,
+                                "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                "environment": {},
+                                "labels": {
+                                    "io.balena.image.store": "root",
+                                    "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110"
+                                },
+                                "composition": {
+                                    "image": "sha256:f7746a3c289a1ba5818ec6dab298ea7a399f15f9459fac9a89b371bec46ad2ac",
+                                    "labels": {
+                                        "io.balena.image.class": "hostapp",
+                                        "io.balena.image.store": "root",
+                                        "io.balena.update.requires-reboot": "1",
+                                        "io.balena.private.hostapp.board-rev": "7de0f0f"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+        });
+
+        let apps: AppTargetMap = serde_json::from_value(json).unwrap();
+        assert_eq!(apps.len(), 1);
+
+        let app = apps
+            .get(&"ea8013b1a82540b59bc8b109b45739ab".into())
+            .unwrap();
+
+        if let AppTarget::Host(hostapp) = app {
+            assert_eq!(
+                hostapp.release_uuid,
+                "c8b48659434e80a8b3adc0c5ad1e347a".into()
+            );
+        } else {
+            panic!("expected hostapp");
+        }
     }
 }

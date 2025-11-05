@@ -25,10 +25,6 @@ pub struct Device {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[mahler(internal)]
-    pub os: Option<OperatingSystem>,
-
     #[serde(default)]
     #[mahler(internal)]
     pub auths: RegistryAuthSet,
@@ -56,11 +52,10 @@ impl Device {
         Self {
             uuid,
             name: None,
-            os,
             auths: RegistryAuthSet::new(),
             images: BTreeMap::new(),
             apps: BTreeMap::new(),
-            host: None,
+            host: os.map(Host::new),
             needs_cleanup: false,
         }
     }
@@ -128,9 +123,11 @@ mod tests {
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
             "uuid": "device-uuid",
-            "os": {
-                "name": "balenaOS",
-                "version": "6.5.4",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "6.5.4",
+                }
             },
             "apps": {
                 "aaa": {

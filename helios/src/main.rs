@@ -45,6 +45,7 @@ fn initialize_tracing() {
                     .add_directive("mahler_core::worker=debug".parse().unwrap())
                     .add_directive("hyper=error".parse().unwrap())
                     .add_directive("reqwest=debug".parse().unwrap())
+                    .add_directive("zbus=error".parse().unwrap())
                     .add_directive("bollard=error".parse().unwrap()),
             ),
         )

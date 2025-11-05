@@ -3,31 +3,36 @@ use std::collections::BTreeMap;
 use mahler::State;
 use serde::{Deserialize, Serialize};
 
-use crate::common_types::{ImageUri, Uuid};
+use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::remote_types::HostAppTarget as RemoteHostAppTarget;
 
 #[derive(State, Serialize, Deserialize, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct Host {
-    /// The host app uuid
-    ///
-    /// The value will not be available on first boot (it's not provided by the host OS)
-    /// so it will be read from local storage
-    pub app_uuid: Uuid,
+    /// Internal host metadata obtained from the hostOS
+    #[mahler(internal)]
+    pub meta: OperatingSystem,
 
     /// The hostapp releases. While only one release is expected on the target state, the
     /// device may be in-between releases, in which case there may still be clean-up steps to
     /// perform.
+    #[serde(default)]
     pub releases: BTreeMap<Uuid, HostRelease>,
+}
+
+impl Host {
+    pub fn new(meta: OperatingSystem) -> Self {
+        Host {
+            meta,
+            releases: BTreeMap::new(),
+        }
+    }
 }
 
 impl From<Host> for HostTarget {
     fn from(app: Host) -> Self {
-        let Host {
-            app_uuid, releases, ..
-        } = app;
+        let Host { releases, .. } = app;
         HostTarget {
-            app_uuid,
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
         }
     }
@@ -46,19 +51,37 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
         releases.insert(
             release_uuid,
             HostReleaseTarget {
+                app: app_uuid,
                 image,
                 build: board_rev,
                 updater,
+                // the release should be running (target)
+                status: HostReleaseStatus::Running,
             },
         );
 
-        HostTarget { app_uuid, releases }
+        HostTarget { releases }
     }
+}
+
+#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostReleaseStatus {
+    Created,
+    Installed,
+    Running,
 }
 
 #[derive(State, Serialize, Deserialize, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct HostRelease {
+    /// The host app uuid
+    ///
+    /// There can only be one hostOS app runnning at a time, but the uuid
+    /// may change when moving between compatible device types or between
+    /// non-esr and esr
+    pub app: Uuid,
+
     /// The fileset image
     /// This is needed for reporting and will be stored on local storage
     pub image: ImageUri,
@@ -71,6 +94,9 @@ pub struct HostRelease {
     /// The updater artifact
     pub updater: ImageUri,
 
+    /// The release is running/should be running
+    pub status: HostReleaseStatus,
+
     /// How many installs have been attempted for this release
     #[serde(default)]
     #[mahler(internal)]
@@ -80,31 +106,19 @@ pub struct HostRelease {
 impl From<HostRelease> for HostReleaseTarget {
     fn from(rel: HostRelease) -> Self {
         let HostRelease {
+            app,
             image,
             build,
             updater,
+            status,
             ..
         } = rel;
         HostReleaseTarget {
+            app,
             image,
             build,
             updater,
-        }
-    }
-}
-
-impl From<HostReleaseTarget> for HostRelease {
-    fn from(rel: HostReleaseTarget) -> Self {
-        let HostReleaseTarget {
-            image,
-            build,
-            updater,
-        } = rel;
-        HostRelease {
-            image,
-            build,
-            updater,
-            install_attempts: 0,
+            status,
         }
     }
 }
