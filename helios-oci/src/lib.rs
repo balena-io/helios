@@ -11,6 +11,9 @@ pub use image::{Image, LocalImage};
 mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
+mod container;
+pub use container::Container;
+
 use helios_util as util;
 
 #[derive(Debug, Clone)]
@@ -45,6 +48,12 @@ impl Client {
     #[inline]
     pub fn image(&self) -> Image<'_> {
         Image::new(self)
+    }
+
+    /// Exposes methods to work with container
+    #[inline]
+    pub fn container(&self) -> Container<'_> {
+        Container::new(self)
     }
 }
 

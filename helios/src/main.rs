@@ -61,6 +61,9 @@ fn initialize_tracing() {
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
+    // make sure the runtime dir exists
+    util::dirs::ensure_runtime_dir()?;
+
     let cli = cli::parse();
 
     // Create a new configuration store instance

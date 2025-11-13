@@ -26,3 +26,18 @@ pub fn state_dir() -> PathBuf {
     };
     dir.join(env!("HELIOS_PKG_NAME"))
 }
+
+/// Return the runtime directory for temporary files
+pub fn runtime_dir() -> PathBuf {
+    if let Some(runtime_dir) = dirs::runtime_dir() {
+        runtime_dir
+    } else {
+        // Fallback to the OS temp dir
+        std::env::temp_dir().join(env!("HELIOS_PKG_NAME"))
+    }
+}
+
+pub fn ensure_runtime_dir() -> std::io::Result<()> {
+    std::fs::create_dir_all(runtime_dir())?;
+    Ok(())
+}

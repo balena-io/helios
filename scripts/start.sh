@@ -66,6 +66,7 @@ export HELIOS_REMOTE_POLL_INTERVAL_MS
 export XDG_CACHE_HOME=/cache
 export XDG_CONFIG_HOME=/local
 export XDG_STATE_HOME=/local
+export XDG_RUNTIME_DIR=/tmp/run
 
 # Remove the socket if it exists (we will need some proper handover at some point)
 rm /tmp/run/helios.sock 2>/dev/null || true

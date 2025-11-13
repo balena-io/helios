@@ -96,15 +96,14 @@ impl<'de> Deserialize<'de> for AppTargetMap {
                 // we remove it from the target state
                 if let Some(mut svc) = hostapp {
                     // The hostapp must provide an updater artifact
-                    let updater = if let Some(updater) =
-                        svc.labels.remove("io.balena.private.hostapp.updater")
-                    {
-                        updater.parse().map_err(serde::de::Error::custom)?
-                    } else {
-                        return Err(serde::de::Error::custom(
-                            "the hostapp must provide an updater artifact reference",
-                        ));
-                    };
+                    let updater =
+                        if let Some(updater) = svc.labels.remove("io.balena.private.updater") {
+                            updater.parse().map_err(serde::de::Error::custom)?
+                        } else {
+                            return Err(serde::de::Error::custom(
+                                "the hostapp must provide an updater artifact reference",
+                            ));
+                        };
 
                     if let Some(board_rev) =
                         svc.labels.remove("io.balena.private.hostapp.board-rev")

@@ -41,6 +41,18 @@ pub async fn read(
             releases: Default::default(),
         });
 
+    if let Some(host) = &mut device.host {
+        let host_releases: Vec<Uuid> = local_store.list("/host/releases").await?;
+        for release_uuid in host_releases {
+            if let Some(hostapp) = local_store
+                .read(format!("/host/releases/{release_uuid}"), "hostapp")
+                .await?
+            {
+                host.releases.insert(release_uuid, hostapp);
+            }
+        }
+    }
+
     // Read the state of images
     let res = docker.image().list().await;
     let images = res.context("failed to read state of images")?;

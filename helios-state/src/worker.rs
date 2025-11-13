@@ -3,10 +3,10 @@ use mahler::worker::{Ready, Worker};
 use tokio::sync::RwLock;
 
 use crate::oci::{Client as Docker, Error as DockerError, RegistryAuthClient};
-use crate::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
 use crate::util::store::Store;
 
 use super::models::{Device, DeviceTarget};
+use super::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
@@ -24,11 +24,11 @@ fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
     let mut worker = Worker::new();
 
     worker = with_device_tasks(worker);
+    worker = with_image_tasks(worker);
 
     if cfg!(feature = "balenahup") {
         worker = with_hostapp_tasks(worker);
     }
-    worker = with_image_tasks(worker);
 
     if cfg!(feature = "userapps") {
         worker = with_userapp_tasks(worker);
@@ -357,5 +357,95 @@ mod tests {
         // this should return Err(NotFound) and not panic
         let workflow = worker().find_workflow(initial_state, target);
         assert!(workflow.is_err(), "unexpected plan:\n{}", workflow.unwrap());
+    }
+
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "os": {
+                "name": "balenaOS",
+                "version": "5.7.3",
+                "build": "abcd1234",
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app_uuid": "hostapp-uuid",
+                "releases": {
+                    "target-release": {
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354"
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = seq!(
+            "ensure clean-up",
+            "set-up host metadata",
+            "install hostOS release 'target-release'",
+            "perform clean-up"
+        );
+        assert_eq!(workflow.to_string(), expected.to_string());
+    }
+
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_update_the_hostapp() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "os": {
+                "name": "balenaOS",
+                "version": "5.7.3",
+                "build": "abcd1234",
+            },
+            "host": {
+                "app_uuid": "hostapp-uuid",
+                "releases": {
+                    "old-release": {
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "abcd1234"
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app_uuid": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354"
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = seq!(
+            "ensure clean-up",
+            "install hostOS release 'new-release'",
+            "clean up metadata for hostOS release 'old-release'",
+            "perform clean-up"
+        );
+        assert_eq!(workflow.to_string(), expected.to_string());
     }
 }

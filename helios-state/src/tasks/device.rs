@@ -47,7 +47,6 @@ fn perform_cleanup(
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
         }
-
         Ok(device)
     })
     .map(|mut device| {

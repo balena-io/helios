@@ -53,7 +53,7 @@ async fn test_systemd_run_failing_command() {
     assert!(result.is_err(), "systemd run should fail for non-zero exit");
 
     match result {
-        Err(helios_util::systemd::SystemdError::ExitStatus(code)) => {
+        Err(helios_util::systemd::Error::ExitStatus(code)) => {
             assert_eq!(code, 1, "exit code should be 1");
         }
         Err(e) => panic!("expected ExitStatus error, got {e}"),
@@ -70,7 +70,7 @@ async fn test_systemd_run_with_args() {
     assert!(result.is_err(), "command with non-zero exit should fail");
 
     match result {
-        Err(helios_util::systemd::SystemdError::ExitStatus(code)) => {
+        Err(helios_util::systemd::Error::ExitStatus(code)) => {
             assert_eq!(code, 42, "exit code should match");
         }
         Err(e) => panic!("expected ExitStatus error, got {e}"),
