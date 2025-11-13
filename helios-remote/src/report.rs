@@ -1,6 +1,6 @@
 use helios_state::models::Device;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
@@ -168,6 +168,7 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
 // Return type from send_report
 type LastReport = Option<Value>;
 
+#[allow(dead_code)]
 fn calculate_report_diff(
     device_uuid: String,
     last_report: &Option<Value>,
@@ -226,7 +227,12 @@ async fn send_report(
         .expect("report cannot be empty")
         .clone();
 
-    let new_report: Value = calculate_report_diff(device_uuid, &last_report, report.into());
+    // FIXME: this is disabled because reporting here and in the legacy supervisor causes
+    // conflicts with service installs on the backend.
+    // Once we implement user app reporting we can report all apps from helios
+    // and block report calls from the legacy supervisor to the backend
+    // let new_report: Value = calculate_report_diff(device_uuid, &last_report, report.into());
+    let new_report = json!({ device_uuid: {} });
 
     match client.patch(new_report.clone(), Some(interrupt)).await {
         Ok(_) => Some(new_report),
