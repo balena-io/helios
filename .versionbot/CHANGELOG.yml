@@ -1,4 +1,145 @@
 - commits:
+    - subject: Disable hostapp reporting
+      hash: 46a85fb00db0f38bfd210516f587723cb52e6390
+      body: |
+        Reporting both from helios and the supervisor causes issues with service
+        installs on the backend. Once we are reporting user apps from helios we
+        can block reporting on the supervisor and avoid the issue.
+
+        This disables the reporting code for now.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Refactor device host model
+      hash: 87781d174c63bfe4c8d9c5dc30fd00ab69c39700
+      body: |
+        Merges host and os properties of device which simplifies task
+        implementations. This also adds a status property to release to
+        reconstruct the status of the host release.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add hostapp reporting
+      hash: 2c1dc057c58bab00f466845f0dd71c284ab291f8
+      body: |
+        Report image installs for the host
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Implement HostOS update tasks
+      hash: 1b3b816e2af399153e8485b5938a84bd01f26469
+      body: |
+        This creates the HUP tasks on the worker, performing all operations
+        needed to do a HUP, including creating a container from the updater
+        artifact and copying the files.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Split helios-state/worker tasks into separate tasks module
+      hash: f9e1efffa99332fc8074857662b2dd5dd5660825
+      body: |
+        This makes the code easier to follow.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Parse build identifier in the OperatingSystem type
+      hash: 3c054d9969d9f0026fe26f50a27db398a816d522
+      body: |
+        In balenaOS this will be used to identify the board revision and use
+        that to compare when performing HUP
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Refactor integration tests to test utils
+      hash: 998b03deebf5f92d7a3c1f6137a2a5c675c41c31
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add systemd module in helios-util
+      hash: 1e9e978bdafbca374377c79d27da62c686668f37
+      body: |
+        This module provides functionality to run a transient unit as
+        systemd-run does
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Update models to work with mahler@0.21.4
+      hash: 855b84491e955264cf885e54eb9407d4aaa5eb72
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add initial HostApp model
+      hash: 0ed18e663f74a518a7a9f13dbe5ea22cc9b514a8
+      body: |
+        This also extracts the hostapp information from the target state and
+        converts it to a target hostapp.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Make features configurable on Docker build
+      hash: 786b1e014e45a2e9366bb6a72a41d95479fb0a5b
+      body: |
+        Default to 'all' features on dockerfile, but publish only hostapps
+        support on the default image and add an 'unstable' tag with additional
+        features
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Make /v3 API endpoints an optional feature of helios-api
+      hash: fd1a4863dcf5195190a32a48de1a25b6f4b7ac51
+      body: |
+        We don't want to release this feature in production devices until the
+        API has the right shape and we have figured out authentication. This
+        allows to disable the feature via the main `helios` crate
+
+        This also puts the `/v3/ping` endpoint at `/ping`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Create `userapps` and `balenahup` features in helios-state
+      hash: 395682edf14d263e8e1bbcd97723635abf1849b9
+      body: >
+        These optional features allow to enable and disable support for user app
+
+        management and balenaOS updates via the main `helios` crate. This will
+        be useful on the initial
+
+        release of Helios with the balena supervisor.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.12.0
+  title: ""
+  date: 2025-11-27T19:47:23.058Z
+- commits:
     - subject: Rename Store::store to Store::write
       hash: 50453e47e5ba6e1165b69d1d9adef62b42ffdc4c
       body: |
