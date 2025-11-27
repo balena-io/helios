@@ -7,4 +7,5 @@ pub mod interrupt;
 pub mod json;
 pub mod request;
 pub mod store;
+pub mod systemd;
 pub mod types;

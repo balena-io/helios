@@ -1,0 +1,90 @@
+use tokio::sync::RwLock;
+use tracing::debug;
+
+use mahler::extract::{Res, Target, View};
+use mahler::task::prelude::*;
+use mahler::{
+    task,
+    worker::{Uninitialized, Worker},
+};
+
+use crate::models::{Device, DeviceTarget};
+use crate::oci::RegistryAuthClient;
+use crate::util::store::{Store, StoreError};
+
+/// Make sure a cleanup happens after all tasks have been performed
+///
+/// This should be the first task for every workflow
+fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
+    device.needs_cleanup = true;
+    device
+}
+
+/// Clean up the device state after the target has been reached
+///
+/// This should be the final task for every workflow
+fn perform_cleanup(
+    device: View<Device>,
+    Target(tgt_device): Target<DeviceTarget>,
+    auth_client_res: Res<RwLock<RegistryAuthClient>>,
+) -> IO<Device> {
+    // skip the task if we have not reached the target state
+    // (outside the needs_cleanup property)
+    if DeviceTarget::from(Device {
+        needs_cleanup: false,
+        ..device.clone()
+    }) != tgt_device
+        || !device.needs_cleanup
+    {
+        return device.into();
+    }
+
+    with_io(device, |device| async move {
+        // Clean up authorizations
+        if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
+            debug!("clean up registry credentials");
+            // Wait for write authorization
+            let mut auth_client = auth_client_rwlock.write().await;
+            auth_client.clear();
+        }
+        Ok(device)
+    })
+    .map(|mut device| {
+        device.auths.clear();
+        device.needs_cleanup = false;
+        device
+    })
+}
+
+/// Update the device name
+fn set_device_name(
+    mut name: View<Option<String>>,
+    Target(tgt): Target<Option<String>>,
+    store: Res<Store>,
+) -> IO<Option<String>, StoreError> {
+    *name = tgt;
+    with_io(name, |name| async move {
+        if let (Some(local_store), Some(name)) = (store.as_ref(), name.as_ref()) {
+            local_store.write("/", "device_name", name).await?;
+        }
+
+        Ok(name)
+    })
+}
+
+pub fn with_device_tasks<O, I>(worker: Worker<O, Uninitialized, I>) -> Worker<O, Uninitialized, I> {
+    worker
+        .job(
+            "/name",
+            task::any(set_device_name).with_description(|| "update device name"),
+        )
+        // XXX: this is not added first because of
+        // https://github.com/balena-io-modules/mahler-rs/pull/50
+        .jobs(
+            "",
+            [
+                task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
+                task::update(perform_cleanup).with_description(|| "perform clean-up"),
+            ],
+        )
+}

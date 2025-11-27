@@ -1,8 +1,11 @@
 use thiserror::Error;
+use tokio::fs;
 use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError, WithContext};
+use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
 use super::models::Device;
@@ -17,6 +20,9 @@ pub enum ReadStateError {
 
     #[error(transparent)]
     StoreReadFailed(#[from] StoreError),
+
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
 }
 
 /// Read the state of system
@@ -29,7 +35,34 @@ pub async fn read(
 ) -> Result<Device, ReadStateError> {
     let mut device = Device::new(uuid, os);
 
+    // read the device name from the local store
     device.name = local_store.read("/", "device_name").await?;
+
+    // Read the hostapp information from the local store
+    if let Some(host) = &mut device.host {
+        let host_releases: Vec<Uuid> = local_store.list("/host/releases").await?;
+        for release_uuid in host_releases {
+            if let Some(mut hostapp) = local_store
+                .read::<_, HostRelease>(format!("/host/releases/{release_uuid}"), "hostapp")
+                .await?
+            {
+                // ignore the status on the store and deduce it instead
+                hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
+                    HostReleaseStatus::Running
+                } else if fs::try_exists(
+                    runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
+                )
+                .await?
+                {
+                    HostReleaseStatus::Installed
+                } else {
+                    HostReleaseStatus::Created
+                };
+
+                host.releases.insert(release_uuid, hostapp);
+            }
+        }
+    }
 
     // Read the state of images
     let res = docker.image().list().await;
@@ -39,7 +72,7 @@ pub async fn read(
         device.images.insert(uri, image.into());
     }
 
-    // TODO: read state of apps
+    // TODO: read state of apps if the `userapps` feature is enabled
 
     Ok(device)
 }

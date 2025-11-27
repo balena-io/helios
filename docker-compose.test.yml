@@ -2,19 +2,28 @@ version: '2.4'
 
 services:
   sut:
-    build: ./helios-integration-tests
+    build:
+      context: .
+      dockerfile: ./helios-integration-tests/Dockerfile
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
+      DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
     volumes:
       - dind:/var/run
+      - dbus:/shared/dbus
     depends_on:
       docker:
         condition: service_healthy
       helios-api:
         condition: service_started
+      systemd:
+        condition: service_healthy
 
   helios-api:
-    build: ./
+    build:
+      context: ./
+      args:
+        HELIOS_FEATURES: all
     image: helios
     command: socat TCP-LISTEN:80,reuseaddr,fork UNIX-CONNECT:/tmp/run/helios.sock
     depends_on:
@@ -23,10 +32,15 @@ services:
     volumes:
       - runtime:/tmp/run
     healthcheck:
-      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/v3/ping']
+      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/ping']
 
   # Override default configurations
   helios:
+    build:
+      context: ./
+      args:
+        HELIOS_FEATURES: all
+    image: helios
     # Set-up required variables
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
@@ -49,10 +63,35 @@ services:
       retries: 5
       timeout: 5s
 
+  systemd:
+    image: ghcr.io/balena-os/mock-systemd-bus
+    privileged: true
+    environment:
+      DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
+    volumes:
+      - dbus:/shared/dbus
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'dbus-send',
+          '--system',
+          '--print-reply',
+          '--dest=org.freedesktop.systemd1',
+          '/org/freedesktop/systemd1',
+          'org.freedesktop.DBus.Introspectable.Introspect',
+        ]
+      interval: 5s
+      retries: 10
+      timeout: 3s
+
 volumes:
   dind:
     driver_opts:
-      # Use tmpfs to avoid files remaining between runs
+      type: tmpfs
+      device: tmpfs
+  dbus:
+    driver_opts:
       type: tmpfs
       device: tmpfs
   runtime:

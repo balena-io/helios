@@ -141,4 +141,4 @@ dist
 # Added by cargo
 
 /target
-/integration/target
+/helios-integration-tests/target

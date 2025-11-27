@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::common_types::Uuid;
-use crate::remote_types::AppTarget as RemoteAppTarget;
+use crate::remote_types::UserAppTarget as RemoteAppTarget;
 
 use super::release::Release;
 
 /// The internal state of the app
-#[derive(State, Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct App {
     /// App id on the remote backend. This only exists for legacy reasons
     /// and should be removed at some point.
@@ -23,6 +23,13 @@ pub struct App {
     pub releases: BTreeMap<Uuid, Release>,
 }
 
+// neither app, release or services have internal fields so we can just
+// Target = Self in the `State` implementation
+impl State for App {
+    type Target = Self;
+}
+
+pub type AppTarget = App;
 pub type TargetAppMap = BTreeMap<Uuid, AppTarget>;
 
 impl From<RemoteAppTarget> for AppTarget {

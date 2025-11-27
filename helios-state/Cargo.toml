@@ -12,6 +12,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+default = []
+userapps = []
+balenahup = []
+
 [dependencies]
 helios-legacy = { path = "../helios-legacy", version = "0" }
 helios-oci = { path = "../helios-oci", version = "0" }
@@ -22,6 +27,7 @@ futures-lite.workspace = true
 mahler.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tar.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

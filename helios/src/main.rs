@@ -45,6 +45,7 @@ fn initialize_tracing() {
                     .add_directive("mahler_core::worker=debug".parse().unwrap())
                     .add_directive("hyper=error".parse().unwrap())
                     .add_directive("reqwest=debug".parse().unwrap())
+                    .add_directive("zbus=error".parse().unwrap())
                     .add_directive("bollard=error".parse().unwrap()),
             ),
         )
@@ -60,6 +61,9 @@ fn initialize_tracing() {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
+
+    // make sure the runtime dir exists
+    util::dirs::ensure_runtime_dir()?;
 
     let cli = cli::parse();
 

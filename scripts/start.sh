@@ -38,6 +38,12 @@ unset HELIOS_REMOTE_API_KEY
 
 if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
   HELIOS_OS_VERSION="${BALENA_HOST_OS_VERSION}"
+
+  # Append the board revision to the OS version if available
+  if [ -n "${BALENA_HOST_OS_BOARD_REV}" ]; then
+    HELIOS_OS_VERSION="$HELIOS_OS_VERSION@${BALENA_HOST_OS_BOARD_REV}"
+  fi
+
   export HELIOS_OS_VERSION
 fi
 
@@ -60,6 +66,7 @@ export HELIOS_REMOTE_POLL_INTERVAL_MS
 export XDG_CACHE_HOME=/cache
 export XDG_CONFIG_HOME=/local
 export XDG_STATE_HOME=/local
+export XDG_RUNTIME_DIR=/tmp/run
 
 # Remove the socket if it exists (we will need some proper handover at some point)
 rm /tmp/run/helios.sock 2>/dev/null || true

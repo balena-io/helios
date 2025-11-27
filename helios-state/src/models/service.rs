@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::common_types::ImageUri;
 use crate::remote_types::ServiceTarget as RemoteServiceTarget;
 
-#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
@@ -12,6 +12,12 @@ pub struct Service {
     /// Service image URI
     pub image: ImageUri,
 }
+
+impl State for Service {
+    type Target = Self;
+}
+
+pub type ServiceTarget = Service;
 
 impl From<RemoteServiceTarget> for ServiceTarget {
     fn from(service: RemoteServiceTarget) -> Self {

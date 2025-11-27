@@ -34,7 +34,7 @@ use helios_util::types::Uuid;
 // However that means that if at some point we want to support a new target state endpoint version,
 // the local API will change.
 // FIXME: define API specific input types and validations
-use helios_remote::types::AppTarget;
+use helios_remote::types::UserAppTarget as AppTarget;
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -99,22 +99,27 @@ pub async fn start(
 ) {
     let api_span = Span::current();
     let target_app_tx = seek_request_tx.clone();
-    let app = Router::new()
-        .route("/v3/ping", get(|| async { "OK" }))
-        .route("/v3/status", get(update_status))
-        .route("/v3/device", get(get_device_cur_state))
-        .route("/v3/device/apps/{uuid}", get(get_app_cur_state))
-        .route(
-            "/v3/device/apps/{uuid}",
-            post(move |state, path, query, apps| {
-                set_app_tgt_state(target_app_tx, state, path, query, apps)
-            }),
-        )
-        // Legacy routes
-        .route(
-            "/v1/update",
-            post(move |body| trigger_poll(poll_request_tx, body)),
-        );
+    let mut app = Router::new().route("/ping", get(|| async { "OK" }));
+
+    // make the v3 API optional while we get to a production ready release
+    if cfg!(feature = "v3") {
+        app = app
+            .route("/v3/status", get(update_status))
+            .route("/v3/device", get(get_device_cur_state))
+            .route("/v3/device/apps/{uuid}", get(get_app_cur_state))
+            .route(
+                "/v3/device/apps/{uuid}",
+                post(move |state, path, query, apps| {
+                    set_app_tgt_state(target_app_tx, state, path, query, apps)
+                }),
+            );
+    }
+
+    // Legacy routes
+    app = app.route(
+        "/v1/update",
+        post(move |body| trigger_poll(poll_request_tx, body)),
+    );
 
     // Default to proxying requests if there is no handler
     let app = match (proxy_config, proxy_state) {

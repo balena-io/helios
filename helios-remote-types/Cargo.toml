@@ -16,6 +16,7 @@ version.workspace = true
 helios-util = { path = "../helios-util", version = "0" }
 
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

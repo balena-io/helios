@@ -16,6 +16,7 @@ version.workspace = true
 axum.workspace = true
 dirs.workspace = true
 fastrand.workspace = true
+futures-lite.workspace = true
 mahler.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -26,6 +27,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zbus.workspace = true
 
 [dev-dependencies]
 mockito.workspace = true

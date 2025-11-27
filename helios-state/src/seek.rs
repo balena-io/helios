@@ -190,7 +190,7 @@ pub async fn start_seek(
 
     // Keep track of the current state and update status
     let uuid = initial_state.uuid.clone();
-    let os = initial_state.os.clone();
+    let os = initial_state.host.as_ref().map(|host| host.meta.clone());
     let mut current_state = initial_state.clone();
     let mut update_status = UpdateStatus::default();
 
