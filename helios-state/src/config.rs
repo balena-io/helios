@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use helios_util::types::{OperatingSystem, Uuid};
@@ -14,11 +15,22 @@ pub struct StateConfig {
     pub host_runtime_dir: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct HostRuntimeDir(pub PathBuf);
+
+impl Deref for HostRuntimeDir {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub struct Resources {
     pub(crate) docker: Docker,
     pub(crate) registry_auth_client: Option<RegistryAuthClient>,
     pub(crate) local_store: Store,
-    pub(crate) host_runtime_dir: PathBuf,
+    pub(crate) host_runtime_dir: HostRuntimeDir,
 }
 
 #[derive(Debug, Error)]
@@ -50,7 +62,7 @@ pub async fn prepare(
         docker,
         registry_auth_client,
         local_store,
-        host_runtime_dir,
+        host_runtime_dir: HostRuntimeDir(host_runtime_dir),
     };
 
     Ok((runtime, initial_state))

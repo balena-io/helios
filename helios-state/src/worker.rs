@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 use crate::oci::{Client as Docker, Error as DockerError, RegistryAuthClient};
 use crate::util::store::Store;
 
+use super::config::HostRuntimeDir;
 use super::models::{Device, DeviceTarget};
 use super::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
 
@@ -43,6 +44,7 @@ type LocalWorker = Worker<Device, Ready, DeviceTarget>;
 pub fn create(
     docker: Docker,
     local_store: Store,
+    host_runtime_dir: HostRuntimeDir,
     registry_auth_client: Option<RegistryAuthClient>,
     initial: Device,
 ) -> Result<LocalWorker, CreateError> {
@@ -55,6 +57,7 @@ pub fn create(
         worker.use_resource(RwLock::new(auth_client));
     }
 
+    worker.use_resource(host_runtime_dir);
     worker.use_resource(local_store);
 
     Ok(worker)

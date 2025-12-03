@@ -194,13 +194,14 @@ pub async fn start_seek(
         docker,
         local_store,
         registry_auth_client,
-        ..
+        host_runtime_dir,
     } = runtime;
 
     // Create a mahler worker and start following changes
     let mut worker = create(
         docker.clone(),
         local_store.clone(),
+        host_runtime_dir.clone(),
         registry_auth_client.clone(),
         initial_state.clone(),
     )?;
@@ -403,6 +404,7 @@ pub async fn start_seek(
                     worker = create(
                         docker.clone(),
                         local_store.clone(),
+                        host_runtime_dir.clone(),
                         registry_auth_client.clone(),
                         initial_state,
                     )?;
