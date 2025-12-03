@@ -1,10 +1,11 @@
+mod config;
 mod read;
 mod seek;
 mod tasks;
 mod worker;
 
 pub mod models;
-pub use read::read;
+pub use config::{Resources, prepare};
 pub use seek::{LocalState, SeekRequest, UpdateOpts, UpdateStatus, start_seek};
 
 use helios_legacy as legacy;

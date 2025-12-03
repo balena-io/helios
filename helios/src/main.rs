@@ -24,12 +24,12 @@ use helios_util::types::{OperatingSystem, Uuid};
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
-use crate::oci::{Client as Docker, RegistryAuthClient};
+use crate::oci::RegistryAuthClient;
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
 use crate::util::config::StoredConfig;
-use crate::util::dirs::{config_dir, state_dir};
+use crate::util::dirs::config_dir;
 use crate::util::store::Store;
 
 fn initialize_tracing() {
@@ -112,16 +112,12 @@ async fn start_supervisor(
         "using config:"
     );
 
-    // Create a store for local state
-    let local_store = Store::new(state_dir());
-
-    // Load the initial state
-    let docker = Docker::connect().await?;
-    let initial_state = state::read(&docker, &local_store, uuid.clone(), os).await?;
-
+    // Create a registry auth client using the remote credentials
     let registry_auth = remote_config
         .clone()
         .map(|c| RegistryAuthClient::new(c.api_endpoint.clone(), c.into()));
+
+    let (state_runtime, initial_state) = state::prepare(uuid.clone(), os, registry_auth).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
@@ -197,9 +193,7 @@ async fn start_supervisor(
 
         // Start state seeking
         res = state::start_seek(
-            &docker,
-            &registry_auth,
-            &local_store,
+            state_runtime,
             initial_state,
             proxy_state.clone(),
             legacy_config,

@@ -11,12 +11,11 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
+use crate::Resources;
 use crate::legacy::{
     LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
 };
-use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::util::interrupt::Interrupt;
-use crate::util::store::Store;
 
 use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};
@@ -175,11 +174,8 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 }
 
 #[instrument(name = "seek", skip_all, err)]
-#[allow(clippy::too_many_arguments)]
 pub async fn start_seek(
-    docker: &Docker,
-    registry_auth_client: &Option<RegistryAuthClient>,
-    local_store: &Store,
+    runtime: Resources,
     initial_state: Device,
     proxy_state: Option<ProxyState>,
     legacy_config: Option<LegacyConfig>,
@@ -193,6 +189,12 @@ pub async fn start_seek(
     let os = initial_state.host.as_ref().map(|host| host.meta.clone());
     let mut current_state = initial_state.clone();
     let mut update_status = UpdateStatus::default();
+
+    let Resources {
+        docker,
+        local_store,
+        registry_auth_client,
+    } = runtime;
 
     // Create a mahler worker and start following changes
     let mut worker = create(
@@ -395,7 +397,7 @@ pub async fn start_seek(
                     // We need to create a new worker with the updated state as it
                     // may have been changed by the legacy supervisor
                     let initial_state =
-                        read_state(docker, local_store, uuid.clone(), os.clone()).await?;
+                        read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
 
                     worker = create(
                         docker.clone(),
