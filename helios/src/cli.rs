@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::num::ParseIntError;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::api::LocalAddress;
@@ -18,9 +19,21 @@ pub struct Cli {
     #[arg(env = "HELIOS_UUID", long = "uuid", value_name = "uuid")]
     pub uuid: Option<Uuid>,
 
-    /// Host OS name and version with metadata, eg. "balenaOS 6.5.39+rev1"
-    #[arg(env = "HELIOS_OS_VERSION", long = "os-version", value_name = "str")]
-    pub os: Option<OperatingSystem>,
+    /// Host OS name and version with metadata, e.g. "balenaOS 6.5.39+rev1"
+    #[arg(
+        env = "HELIOS_HOST_OS_VERSION",
+        long = "host-os-version",
+        value_name = "str"
+    )]
+    pub host_os: Option<OperatingSystem>,
+
+    /// Host OS runtime directory for locks and update scripts, e.g. "/tmp/helios"
+    #[arg(
+        env = "HELIOS_HOST_RUNTIME_DIR",
+        long = "host-runtime-dir",
+        value_name = "path"
+    )]
+    pub host_runtime_dir: Option<PathBuf>,
 
     /// Local API listen address
     #[arg(

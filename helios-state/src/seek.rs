@@ -11,12 +11,12 @@ use tokio::sync::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::Resources;
 use crate::legacy::{
     LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
 };
 use crate::util::interrupt::Interrupt;
 
+use super::config::Resources;
 use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};
 use super::worker::{CreateError as WorkerCreateError, create};
@@ -194,6 +194,7 @@ pub async fn start_seek(
         docker,
         local_store,
         registry_auth_client,
+        ..
     } = runtime;
 
     // Create a mahler worker and start following changes

@@ -33,6 +33,9 @@ services:
       io.balena.features.balena-api: '1'
     environment:
       - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
+      # Needed for locks and balenahup. This needs to match the device
+      # used for the `runtime` volume
+      - BALENA_HOST_RUNTIME_DIR=/tmp/balena-supervisor
     volumes:
       # Base directory for app configuration and update locks
       - runtime:/tmp/run
@@ -48,8 +51,6 @@ volumes:
     driver: local
     driver_opts:
       type: none
-      o: bind,X-mount.mkdir=0755
-      # XXX: this directory needs to exist on the host
-      # before mounting. X-mount.mkdir doesn't work everywhere
-      # unfortunately (it doesn't on balenaOS)
+      o: bind
+      # XXX: this directory needs to exist on the host before the container is started
       device: /tmp/balena-supervisor

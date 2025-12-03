@@ -5,7 +5,7 @@ mod tasks;
 mod worker;
 
 pub mod models;
-pub use config::{Resources, prepare};
+pub use config::{StateConfig, prepare};
 pub use seek::{LocalState, SeekRequest, UpdateOpts, UpdateStatus, start_seek};
 
 use helios_legacy as legacy;

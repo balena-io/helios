@@ -19,7 +19,7 @@ use helios_oci as oci;
 use helios_remote as remote;
 use helios_state as state;
 use helios_util as util;
-use helios_util::types::{OperatingSystem, Uuid};
+use helios_util::types::Uuid;
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
@@ -28,6 +28,7 @@ use crate::oci::RegistryAuthClient;
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
+use crate::state::StateConfig;
 use crate::util::config::StoredConfig;
 use crate::util::dirs::config_dir;
 use crate::util::store::Store;
@@ -89,9 +90,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
 
     let (uuid, remote_config) = maybe_provision(&cli, &config_store).await?;
-    let os = cli.os.clone();
 
-    start_supervisor(uuid, os, api_config, remote_config, legacy_config).await?;
+    let state_config = StateConfig {
+        host_os: cli.host_os,
+        host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
+    };
+
+    start_supervisor(uuid, state_config, api_config, remote_config, legacy_config).await?;
 
     Ok(())
 }
@@ -99,7 +104,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[instrument(name = "helios", skip_all, err)]
 async fn start_supervisor(
     uuid: Uuid,
-    os: Option<OperatingSystem>,
+    state_config: StateConfig,
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
@@ -117,7 +122,8 @@ async fn start_supervisor(
         .clone()
         .map(|c| RegistryAuthClient::new(c.api_endpoint.clone(), c.into()));
 
-    let (state_runtime, initial_state) = state::prepare(uuid.clone(), os, registry_auth).await?;
+    let (state_runtime, initial_state) =
+        state::prepare(uuid.clone(), state_config, registry_auth).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());

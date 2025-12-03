@@ -37,14 +37,23 @@ export HELIOS_UUID
 unset HELIOS_REMOTE_API_KEY
 
 if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
-  HELIOS_OS_VERSION="${BALENA_HOST_OS_VERSION}"
+  HELIOS_HOST_OS_VERSION="${BALENA_HOST_OS_VERSION}"
 
   # Append the board revision to the OS version if available
   if [ -n "${BALENA_HOST_OS_BOARD_REV}" ]; then
-    HELIOS_OS_VERSION="$HELIOS_OS_VERSION@${BALENA_HOST_OS_BOARD_REV}"
+    HELIOS_HOST_OS_VERSION="$HELIOS_HOST_OS_VERSION@${BALENA_HOST_OS_BOARD_REV}"
   fi
 
-  export HELIOS_OS_VERSION
+  export HELIOS_HOST_OS_VERSION
+fi
+
+# Do not allow the board rev to be user configurable
+unset HELIOS_HOST_RUNTIME_DIR
+
+if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then
+  HELIOS_HOST_RUNTIME_DIR="${BALENA_HOST_RUNTIME_DIR}"
+  unset BALENA_HOST_RUNTIME_DIR
+  export HELIOS_HOST_RUNTIME_DIR
 fi
 
 # Run in unmanaged mode if the legacy Supervisor is unmanaged

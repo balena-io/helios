@@ -1,16 +1,24 @@
+use std::path::PathBuf;
+
 use helios_util::types::{OperatingSystem, Uuid};
 use thiserror::Error;
 
 use crate::models::Device;
 use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::read::{ReadStateError, read};
-use crate::util::dirs::state_dir;
+use crate::util::dirs;
 use crate::util::store::Store;
+
+pub struct StateConfig {
+    pub host_os: Option<OperatingSystem>,
+    pub host_runtime_dir: PathBuf,
+}
 
 pub struct Resources {
     pub(crate) docker: Docker,
     pub(crate) registry_auth_client: Option<RegistryAuthClient>,
     pub(crate) local_store: Store,
+    pub(crate) host_runtime_dir: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -24,19 +32,25 @@ pub enum StatePrepareError {
 
 pub async fn prepare(
     uuid: Uuid,
-    os: Option<OperatingSystem>,
+    host_config: StateConfig,
     registry_auth_client: Option<RegistryAuthClient>,
 ) -> Result<(Resources, Device), StatePrepareError> {
     let docker = Docker::connect().await?;
 
     // Create a store for local state
-    let local_store = Store::new(state_dir());
+    let local_store = Store::new(dirs::state_dir());
 
-    let initial_state = read(&docker, &local_store, uuid, os).await?;
+    let StateConfig {
+        host_os,
+        host_runtime_dir,
+    } = host_config;
+
+    let initial_state = read(&docker, &local_store, uuid, host_os).await?;
     let runtime = Resources {
         docker,
         registry_auth_client,
         local_store,
+        host_runtime_dir,
     };
 
     Ok((runtime, initial_state))
