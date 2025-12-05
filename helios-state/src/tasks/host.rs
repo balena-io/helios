@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::time::Duration;
 
 use mahler::extract::{Args, Res, System, Target, View};
@@ -7,15 +6,16 @@ use mahler::{
     task,
     worker::{Uninitialized, Worker},
 };
-use tar::Archive;
 use tokio::fs;
 use tracing::{debug, warn};
 
+use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 use crate::util::systemd;
+use crate::util::tar;
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -101,6 +101,7 @@ fn install_hostapp_release(
     Args(release_uuid): Args<String>,
     docker: Res<Docker>,
     store: Res<Store>,
+    host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
     if release.status != HostReleaseStatus::Created {
@@ -143,6 +144,10 @@ fn install_hostapp_release(
 
         // configure the target dir in $RUNTIME_DIR/balenahup
         let target_dir = runtime_dir().join("balenahup");
+        let host_target_dir = host_runtime_dir
+            .as_ref()
+            .expect("should not be nil")
+            .join("balenahup");
 
         // remove the target dir if it exists
         if let Err(e) = fs::remove_dir_all(&target_dir).await {
@@ -154,16 +159,17 @@ fn install_hostapp_release(
         fs::create_dir_all(&target_dir).await?;
 
         // read scripts from the container
-        let cursor = Cursor::new(container_helper.read_from(&id, "/app").await?);
-        let mut archive = Archive::new(cursor);
+        let bytes = container_helper.read_from(&id, "/app").await?;
 
         // extract the scripts into the target directory
-        archive.unpack(target_dir)?;
+        tar::unpack_from(&bytes, "/app", target_dir)?;
 
         // call systemd run using `/tmp/balena-supervisor/balenahup` as the workdir, wait for
         // the script to finish
         debug!("running the updater script");
-        let hup_cmd = systemd::Command::new("/tmp/balena-supervisor/balenahup/app/entry.sh")
+        let hup_script = host_target_dir.join("entry.sh");
+        let hup_script = hup_script.to_str().expect("should be valid unicode");
+        let hup_cmd = systemd::Command::new(hup_script)
             .args(&[
                 "--app-uuid",
                 release.app.as_str(),
@@ -175,7 +181,7 @@ fn install_hostapp_release(
             ])
             // FIXME: this is the host equivalent of $RUNTIME_DIR/balenahup, we
             // need to declare this mapping somewhere
-            .workdir("/tmp/balena-supervisor/balenahup/app");
+            .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
 
         // remove the balenahup container
