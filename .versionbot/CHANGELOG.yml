@@ -1,4 +1,48 @@
 - commits:
+    - subject: Use host runtime dir on balenahup tasks
+      hash: f020619dd88e7c02a6014962c963bad4e09aa0aa
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add host-runtime-dir option to CLI
+      hash: 559312078f24fa0f8a7bb67413c959f627fbe89b
+      body: |
+        Also move the `os-version` configuration to `host-os-version`. Both of
+        these properties are used by the state engine to configure HUP and will
+        be used in the future for locks.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Group state initialization into a `prepare` function
+      hash: ef1364591b859a268f65bc9e5fa7682ac24f9b0d
+      body: |
+        This simplifies the initialization steps needed by the main crate before
+        calling `start_seek` and also reduces the number of arguments of that
+        function.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Create tar module in utils
+      hash: 15e18cb3c973fe9320533108468425f0183d4999
+      body: |
+        Updates the host task to use the module rather than the external tar
+        module.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.13.0
+  title: ""
+  date: 2025-12-05T09:28:32.376Z
+- commits:
     - subject: Disable hostapp reporting
       hash: 46a85fb00db0f38bfd210516f587723cb52e6390
       body: |
