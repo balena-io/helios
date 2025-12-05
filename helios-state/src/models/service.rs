@@ -1,10 +1,10 @@
-use mahler::State;
-use serde::{Deserialize, Serialize};
+use mahler::state::State;
 
 use crate::common_types::ImageUri;
 use crate::remote_types::ServiceTarget as RemoteServiceTarget;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(State, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq))]
 pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
@@ -13,11 +13,12 @@ pub struct Service {
     pub image: ImageUri,
 }
 
-impl State for Service {
-    type Target = Self;
+impl From<Service> for ServiceTarget {
+    fn from(svc: Service) -> Self {
+        let Service { id, image } = svc;
+        ServiceTarget { id, image }
+    }
 }
-
-pub type ServiceTarget = Service;
 
 impl From<RemoteServiceTarget> for ServiceTarget {
     fn from(service: RemoteServiceTarget) -> Self {

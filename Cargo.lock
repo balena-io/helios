@@ -1372,9 +1372,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mahler"
-version = "0.21.4"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19b77a16db18d51363b2798fd546b1f0b3364872153c13e35d0da28aaedbe8e3"
+checksum = "ace7131c0c75f67cd4fba5cd1fbda1d38fabf01a15ab00949cff67b3f75987c8"
 dependencies = [
  "mahler-core",
  "mahler-derive",
@@ -1382,9 +1382,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-core"
-version = "0.21.4"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06cb8b3d5917a44de431f263480f1d7ce9477dd61ac739d5d3d0afc144b3d062"
+checksum = "dfcac461a1cc461914b56c8dc976817565ba4c850d6729020e31e6203d3e1249"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1402,9 +1402,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-derive"
-version = "0.21.4"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e06e3887d7adf99956521cb86b8f45a78a217f868ef7127921d4ec458da51672"
+checksum = "8e397d75766e72df6d9d93cb5175ba041156bc12b7222436b3a2088eb7f4db0d"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -6,7 +6,7 @@ use crate::oci::{Client as Docker, Error as DockerError, RegistryAuthClient};
 use crate::util::store::Store;
 
 use super::config::HostRuntimeDir;
-use super::models::{Device, DeviceTarget};
+use super::models::Device;
 use super::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
 
 #[derive(Debug, thiserror::Error)]
@@ -21,7 +21,7 @@ pub enum CreateError {
 /// Configure the worker jobs
 ///
 /// This is mostly used for tests
-fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
+fn worker() -> Worker<Device, Uninitialized> {
     let mut worker = Worker::new();
 
     worker = with_device_tasks(worker);
@@ -38,7 +38,7 @@ fn worker() -> Worker<Device, Uninitialized, DeviceTarget> {
     worker
 }
 
-type LocalWorker = Worker<Device, Ready, DeviceTarget>;
+type LocalWorker = Worker<Device, Ready>;
 
 /// Create and initialize the worker
 pub fn create(
@@ -66,8 +66,9 @@ pub fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::DeviceTarget;
 
-    use mahler::{Dag, par, seq};
+    use mahler::workflow::{Dag, par, seq};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -93,6 +94,8 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
+            "auths": [],
+            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -100,9 +103,10 @@ mod tests {
             "apps": {
                 "my-app-uuid": {
                     "id": 0,
-                    "name": "my-app"
+                    "name": "my-app",
                 }
-            }
+            },
+            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -116,48 +120,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn it_finds_a_workflow_to_create_an_app_and_configs() {
-        before();
-
-        let initial_state = serde_json::from_value::<Device>(json!({
-            "uuid": "my-device-uuid",
-        }))
-        .unwrap();
-        let target = serde_json::from_value::<DeviceTarget>(json!({
-            "name": "device-name",
-            "uuid": "my-device-uuid",
-            "apps": {
-                "my-app-uuid": {
-                    "id": 0,
-                    "name": "my-app"
-                }
-            },
-        }))
-        .unwrap();
-
-        let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!("ensure clean-up")
-            + par!(
-                "update device name",
-                "initialize app with uuid 'my-app-uuid'",
-            )
-            + seq!("perform clean-up");
-        assert_eq!(workflow.to_string(), expected.to_string());
-    }
-
-    #[tokio::test]
     async fn it_finds_a_workflow_to_update_an_app_and_configs() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "my-device-name",
             "uuid": "my-device-uuid",
+            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
-                    "name": "my-app-old-name"
+                    "name": "my-app-old-name",
                 }
             },
+            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -166,9 +142,10 @@ mod tests {
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
-                    "name": "my-app"
+                    "name": "my-app",
                 }
             },
+            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -189,12 +166,14 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
             "name": "device-name",
+            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
-                    "name": "my-app"
+                    "name": "my-app",
                 }
-            }
+            },
+            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -203,9 +182,10 @@ mod tests {
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
-                    "name": "my-new-app-name"
+                    "name": "my-new-app-name",
                 }
-            }
+            },
+            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -224,12 +204,14 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
+            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
                     "name": "my-new-app-name",
                 }
-            }
+            },
+            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -267,7 +249,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -308,6 +291,7 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
+            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -328,7 +312,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "needs_cleanup": false
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -353,7 +338,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -369,13 +355,15 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "auths": [],
             "host": {
                 "meta": {
                     "name": "balenaOS",
                     "version": "5.7.3",
                     "build": "abcd1234",
-                }
-            }
+                },
+            },
+            "needs_cleanup": false
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -388,10 +376,11 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "cde2354",
-                        "status": "running",
+                        "status": "Running",
                     }
                 }
             },
+            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -413,6 +402,7 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "auths": [],
             "host": {
                 "meta": {
                     "name": "balenaOS",
@@ -425,10 +415,12 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "abcd1234",
-                        "status": "running",
+                        "status": "Running",
+                        "install_attempts": 1,
                     }
                 }
             },
+            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -441,10 +433,11 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "cde2354",
-                        "status": "running"
+                        "status": "Running"
                     }
                 }
             },
+            "needs_cleanup": false,
         }))
         .unwrap();
 

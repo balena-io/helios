@@ -44,7 +44,7 @@ enum HostUpdateError {
 fn init_hostapp_release(
     mut maybe_rel: View<Option<HostRelease>>,
     Args(release_uuid): Args<String>,
-    Target(tgt): Target<HostReleaseTarget>,
+    Target(tgt): Target<HostRelease>,
     System(device): System<Device>,
     store: Res<Store>,
 ) -> IO<Option<HostRelease>, StoreError> {
@@ -255,7 +255,7 @@ fn complete_hostapp_install(
 /// handle an `update(/host/releases/<commit>)`
 fn update_script_uri(
     mut rel: View<HostRelease>,
-    Target(tgt): Target<HostReleaseTarget>,
+    Target(tgt): Target<HostRelease>,
     Args(release_uuid): Args<String>,
     store: Res<Store>,
 ) -> IO<HostRelease, StoreError> {
@@ -300,9 +300,7 @@ fn remove_old_metadata(
     })
 }
 
-pub fn with_hostapp_tasks<O, I>(
-    worker: Worker<O, Uninitialized, I>,
-) -> Worker<O, Uninitialized, I> {
+pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker.jobs(
         "/host/releases/{release_uuid}",
         [

@@ -5,7 +5,7 @@ use std::{
     sync::LazyLock,
 };
 
-use mahler::State;
+use mahler::state::State;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

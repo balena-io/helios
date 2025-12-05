@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
-use mahler::State;
-use serde::{Deserialize, Serialize};
+use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
@@ -15,36 +14,41 @@ pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
 /// The current state of a device that will be stored
 /// by the worker
-#[derive(State, Serialize, Deserialize, Debug, Clone)]
-#[mahler(derive(PartialEq, Eq, Default))]
+#[derive(State, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq))]
 pub struct Device {
     /// The device UUID
     #[mahler(internal)]
     pub uuid: Uuid,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    #[serde(default)]
     #[mahler(internal)]
     pub auths: RegistryAuthSet,
 
     /// List of docker images on the device
-    #[serde(default)]
     #[mahler(internal)]
-    pub images: BTreeMap<ImageUri, Image>,
+    pub images: Map<ImageUri, Image>,
 
     /// Apps on the device
-    #[serde(default)]
-    pub apps: BTreeMap<Uuid, App>,
+    pub apps: Map<Uuid, App>,
 
     /// The "hostapp" configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
     pub host: Option<Host>,
 
-    #[serde(default)]
+    /// A cleanup sttep is needed
     pub needs_cleanup: bool,
+}
+
+impl Default for DeviceTarget {
+    fn default() -> Self {
+        DeviceTarget {
+            name: None,
+            apps: Map::new(),
+            host: None,
+            needs_cleanup: false,
+        }
+    }
 }
 
 impl Device {
@@ -53,8 +57,8 @@ impl Device {
             uuid,
             name: None,
             auths: RegistryAuthSet::new(),
-            images: BTreeMap::new(),
-            apps: BTreeMap::new(),
+            images: Map::new(),
+            apps: Map::new(),
             host: os.map(Host::new),
             needs_cleanup: false,
         }
@@ -68,11 +72,16 @@ impl From<Device> for DeviceTarget {
             apps,
             host,
             needs_cleanup,
-            ..
+            uuid: _,
+            auths: _,
+            images: _,
         } = device;
         Self {
             name,
-            apps,
+            apps: apps
+                .into_iter()
+                .map(|(uuid, app)| (uuid, app.into()))
+                .collect(),
             host: host.map(|r| r.into()),
             needs_cleanup,
         }
@@ -83,7 +92,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
-        let mut userapps = BTreeMap::new();
+        let mut userapps = Map::new();
         let mut hostapps = Vec::new();
         for (app_uuid, app) in apps {
             match app {
@@ -129,6 +138,7 @@ mod tests {
                     "version": "6.5.4",
                 }
             },
+            "auths": [],
             "apps": {
                 "aaa": {
                     "name": "my-app",
@@ -144,7 +154,8 @@ mod tests {
                     "engine_id": "ccc"
                 }
 
-            }
+            },
+            "needs_cleanup": false
         });
 
         let device: Device = serde_json::from_value(json).unwrap();
