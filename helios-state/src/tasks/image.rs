@@ -1,6 +1,6 @@
 use tokio::sync::RwLock;
 
-use mahler::extract::{Args, Res, System, Target, View};
+use mahler::extract::{Args, RawTarget, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::{
     task,
@@ -15,7 +15,7 @@ use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthErro
 /// Request registry tokens
 pub(super) fn request_registry_credentials(
     mut auths: View<RegistryAuthSet>,
-    Target(tgt_auths): Target<RegistryAuthSet>,
+    RawTarget(tgt_auths): RawTarget<RegistryAuthSet>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
 ) -> IO<RegistryAuthSet, RegistryAuthError> {
     // Update the device authorization list
@@ -56,7 +56,7 @@ fn tag_image(
         Ok(image)
     })
     .map(|mut image| {
-        image.replace(tgt);
+        image.replace(tgt.into());
         image
     })
 }
@@ -183,7 +183,7 @@ fn remove_image(
 }
 
 /// Update worker with image tasks
-pub fn with_image_tasks<O, I>(worker: Worker<O, Uninitialized, I>) -> Worker<O, Uninitialized, I> {
+pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
         .job(
             "/auths",

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use mahler::extract::{Args, System, Target, View};
+use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::{
     task,
@@ -9,8 +10,7 @@ use mahler::{
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppTarget, Device, RegistryAuthSet, Release, ReleaseTarget, Service, ServiceTarget,
-    TargetAppMap,
+    App, AppMap, AppTarget, Device, RegistryAuthSet, Release, Service, ServiceTarget,
 };
 use crate::oci::RegistryAuth;
 
@@ -20,7 +20,7 @@ use super::utils::find_installed_service;
 /// Request authorization for new image installs
 fn request_registry_token_for_new_images(
     System(device): System<Device>,
-    Target(tgt_apps): Target<TargetAppMap>,
+    Target(tgt_apps): Target<AppMap>,
 ) -> Option<Task> {
     // Find all images for new services in the target state
     let images_to_install: Vec<&ImageUri> = tgt_apps
@@ -77,15 +77,12 @@ fn request_registry_token_for_new_images(
 }
 
 /// Initialize the app in memory
-fn prepare_app(
-    mut app: View<Option<App>>,
-    Target(tgt_app): Target<AppTarget>,
-) -> View<Option<App>> {
+fn prepare_app(mut app: View<Option<App>>, Target(tgt_app): Target<App>) -> View<Option<App>> {
     let AppTarget { id, name, .. } = tgt_app;
     app.replace(App {
         id,
         name,
-        ..Default::default()
+        releases: Map::new(),
     });
     app
 }
@@ -102,7 +99,7 @@ fn set_app_name(
 /// Install all new images for a release
 fn fetch_release_images(
     System(device): System<Device>,
-    Target(tgt_release): Target<ReleaseTarget>,
+    Target(tgt_release): Target<Release>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
@@ -146,14 +143,16 @@ fn fetch_release_images(
 
 /// Initialize an empty release
 fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
-    release.replace(Release::default());
+    release.replace(Release {
+        services: Map::new(),
+    });
     release
 }
 
 /// Do the initial pull for a new service
 fn fetch_service_image(
     System(device): System<Device>,
-    Target(tgt): Target<ServiceTarget>,
+    Target(tgt): Target<Service>,
     Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
     // tell the planner to skip this task if the image already exists
@@ -180,7 +179,7 @@ fn fetch_service_image(
 fn install_service(
     mut svc: View<Option<Service>>,
     System(device): System<Device>,
-    Target(tgt): Target<ServiceTarget>,
+    Target(tgt): Target<Service>,
 ) -> View<Option<Service>> {
     // Skip the task if the image for the service doesn't exist yet
     if device.images.keys().all(|img| img != &tgt.image) {
@@ -194,9 +193,7 @@ fn install_service(
 }
 
 /// Update worker with user app tasks
-pub fn with_userapp_tasks<O, I>(
-    worker: Worker<O, Uninitialized, I>,
-) -> Worker<O, Uninitialized, I> {
+pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
         .job("/apps", task::update(request_registry_token_for_new_images))
         .job(

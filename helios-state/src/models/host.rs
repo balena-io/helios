@@ -1,12 +1,9 @@
-use std::collections::BTreeMap;
-
-use mahler::State;
-use serde::{Deserialize, Serialize};
+use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::remote_types::HostAppTarget as RemoteHostAppTarget;
 
-#[derive(State, Serialize, Deserialize, Debug, Clone)]
+#[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct Host {
     /// Internal host metadata obtained from the hostOS
@@ -16,15 +13,14 @@ pub struct Host {
     /// The hostapp releases. While only one release is expected on the target state, the
     /// device may be in-between releases, in which case there may still be clean-up steps to
     /// perform.
-    #[serde(default)]
-    pub releases: BTreeMap<Uuid, HostRelease>,
+    pub releases: Map<Uuid, HostRelease>,
 }
 
 impl Host {
     pub fn new(meta: OperatingSystem) -> Self {
         Host {
             meta,
-            releases: BTreeMap::new(),
+            releases: Map::new(),
         }
     }
 }
@@ -47,7 +43,7 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
             updater,
         } = app;
 
-        let mut releases = BTreeMap::new();
+        let mut releases = Map::new();
         releases.insert(
             release_uuid,
             HostReleaseTarget {
@@ -64,15 +60,14 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
     }
 }
 
-#[derive(State, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(State, Debug, Clone, PartialEq, Eq)]
 pub enum HostReleaseStatus {
     Created,
     Installed,
     Running,
 }
 
-#[derive(State, Serialize, Deserialize, Debug, Clone)]
+#[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct HostRelease {
     /// The host app uuid
@@ -98,7 +93,6 @@ pub struct HostRelease {
     pub status: HostReleaseStatus,
 
     /// How many installs have been attempted for this release
-    #[serde(default)]
     #[mahler(internal)]
     pub install_attempts: usize,
 }

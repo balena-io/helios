@@ -25,7 +25,7 @@ fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
 /// This should be the final task for every workflow
 fn perform_cleanup(
     device: View<Device>,
-    Target(tgt_device): Target<DeviceTarget>,
+    Target(tgt_device): Target<Device>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
 ) -> IO<Device> {
     // skip the task if we have not reached the target state
@@ -72,7 +72,7 @@ fn set_device_name(
     })
 }
 
-pub fn with_device_tasks<O, I>(worker: Worker<O, Uninitialized, I>) -> Worker<O, Uninitialized, I> {
+pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
         .job(
             "/name",
