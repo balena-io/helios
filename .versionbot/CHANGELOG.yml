@@ -1,4 +1,18 @@
 - commits:
+    - subject: Update mahler to v0.22
+      hash: 81810656a6a3bb2b27da1cd46a900634456ab9ea
+      body: ""
+      footer:
+        Depends-on: balena-io-modules/mahler#69
+        depends-on: balena-io-modules/mahler#69
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.13.1
+  title: ""
+  date: 2025-12-09T16:13:51.306Z
+- commits:
     - subject: Use host runtime dir on balenahup tasks
       hash: f020619dd88e7c02a6014962c963bad4e09aa0aa
       body: ""
