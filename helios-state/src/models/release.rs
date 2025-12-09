@@ -1,22 +1,26 @@
-use mahler::State;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use mahler::state::{Map, State};
 
 use crate::remote_types::ReleaseTarget as RemoteReleaseTarget;
 
 use super::service::Service;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(State, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq))]
 pub struct Release {
-    #[serde(default)]
-    pub services: BTreeMap<String, Service>,
+    pub services: Map<String, Service>,
 }
 
-impl State for Release {
-    type Target = Self;
+impl From<Release> for ReleaseTarget {
+    fn from(rel: Release) -> Self {
+        let Release { services } = rel;
+        ReleaseTarget {
+            services: services
+                .into_iter()
+                .map(|(svc_name, svc)| (svc_name, svc.into()))
+                .collect(),
+        }
+    }
 }
-
-pub type ReleaseTarget = Release;
 
 impl From<RemoteReleaseTarget> for ReleaseTarget {
     fn from(tgt: RemoteReleaseTarget) -> Self {
