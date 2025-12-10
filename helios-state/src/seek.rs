@@ -203,7 +203,7 @@ pub async fn start_seek(
         local_store.clone(),
         host_runtime_dir.clone(),
         registry_auth_client.clone(),
-        initial_state.clone(),
+        initial_state,
     )?;
     let mut worker_stream = worker.follow();
 
@@ -299,6 +299,18 @@ pub async fn start_seek(
                 // Trigger a new target state apply if we got here
                 drop(apply_future);
                 interrupt = Interrupt::new();
+
+                // We create a new worker each time as the state of the system may have changed
+                // outside of what is monitored by the worker
+                current_state = read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
+                worker = create(
+                    docker.clone(),
+                    local_store.clone(),
+                    host_runtime_dir.clone(),
+                    registry_auth_client.clone(),
+                    current_state.clone(),
+                )?;
+                worker_stream = worker.follow();
 
                 // Set the update status immediately
                 update_status = UpdateStatus::ApplyingChanges;
@@ -396,19 +408,9 @@ pub async fn start_seek(
                 }
                 // if the legacy apply went through
                 else if matches!(state, SeekState::Reset) {
-                    // We need to create a new worker with the updated state as it
-                    // may have been changed by the legacy supervisor
-                    let initial_state =
+                    // reload the current state
+                    current_state =
                         read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
-
-                    worker = create(
-                        docker.clone(),
-                        local_store.clone(),
-                        host_runtime_dir.clone(),
-                        registry_auth_client.clone(),
-                        initial_state,
-                    )?;
-                    worker_stream = worker.follow();
 
                     UpdateStatus::Done
                 } else {
