@@ -205,19 +205,36 @@ fn fetch_service_image(
 /// FIXME: this only creates the service in memory for now, as we add features, this will also
 /// create the service container
 fn install_service(
-    mut svc: View<Option<Service>>,
+    mut maybe_svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<Service>,
-) -> View<Option<Service>> {
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+    store: Res<Store>,
+) -> IO<Option<Service>, StoreError> {
     // Skip the task if the image for the service doesn't exist yet
     if device.images.keys().all(|img| img != &tgt.image) {
-        return svc;
+        return maybe_svc.into();
     }
 
     let ServiceTarget { id, image, .. } = tgt;
+    maybe_svc.replace(Service { id, image });
 
-    svc.replace(Service { id, image });
-    svc
+    with_io(maybe_svc, async move |maybe_svc| {
+        // FIXME: create/manage container
+
+        if let (Some(svc), Some(local_store)) = (maybe_svc.as_ref(), store.as_ref()) {
+            // store the image uri that corresponds to the current release service
+            local_store
+                .write(
+                    format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
+                    "image",
+                    &svc.image,
+                )
+                .await?;
+        }
+
+        Ok(maybe_svc)
+    })
 }
 
 /// Update worker with user app tasks
