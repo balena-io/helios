@@ -72,11 +72,12 @@ fn request_registry_token_for_new_images(
     let tgt_auths: RegistryAuthSet = images_to_install
         .iter()
         .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
+            let img = (*img).clone();
             if let Some(service) = img.registry() {
                 if let Some(scope) = acc.get_mut(service) {
-                    scope.push((*img).clone());
+                    scope.push(img);
                 } else {
-                    acc.insert(service.clone(), vec![(*img).clone()]);
+                    acc.insert(service.clone(), vec![img]);
                 }
             }
             acc
@@ -140,47 +141,54 @@ fn set_app_name(
     })
 }
 
-/// Install all new images for a release
-fn fetch_release_images(
+/// Install all new images for all target apps
+fn fetch_apps_images(
     System(device): System<Device>,
-    Target(tgt_rel): Target<Release>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    Target(tgt_apps): Target<AppMap>,
 ) -> Vec<Task> {
     // Find all images for new services in the target state
-    let images_to_install: Vec<ImageUri> = tgt_rel
-        .services
-        .into_iter()
-        .filter_map(|(svc_name, svc)| {
-            if device
-                .apps
-                .get(&app_uuid)
-                .and_then(|app| app.releases.get(&commit))
-                .and_then(|rel| rel.services.get(&svc_name))
-                .is_some()
-            {
-                // the service already exists, ignore the image
-                return None;
-            }
+    let images_to_install: Vec<&ImageUri> = tgt_apps
+        .iter()
+        .flat_map(|(app_uuid, app)| {
+            app.releases.iter().flat_map(|(commit, release)| {
+                release
+                    .services
+                    .iter()
+                    .filter_map(|(svc_name, svc)| {
+                        if device
+                            .apps
+                            .get(app_uuid)
+                            .and_then(|app| app.releases.get(commit))
+                            .and_then(|rel| rel.services.get(svc_name))
+                            .is_some()
+                        {
+                            // the service already exists, ignore the image
+                            return None;
+                        }
 
-            if let ImageRef::Uri(img_uri) = svc.image {
-                Some((svc_name, img_uri))
-            } else {
-                None
-            }
-        })
-        .filter(|(svc_name, svc_img)| {
-            // ignore the image if it already exists
-            if device.images.contains_key(svc_img) {
-                return false;
-            }
+                        // only use the target image ref if it is an URI
+                        if let ImageRef::Uri(img_uri) = &svc.image {
+                            Some((svc_name, img_uri))
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|(svc_name, svc_img)| {
+                        // ignore the image if it already exists
+                        if device.images.contains_key(svc_img) {
+                            return false;
+                        }
 
-            // select the image if it is for a new service or the existing service image has the
-            // same digest (which means we are just re-tagging)
-            find_installed_service(&device, &app_uuid, &commit, svc_name)
-                .is_none_or(|s| s.image.digest().is_some() && svc_img.digest() == s.image.digest())
+                        // select the image if it is for a new service or the existing service image has the
+                        // same digest (which means we are just re-tagging)
+                        find_installed_service(&device, app_uuid, commit, svc_name).is_none_or(
+                            |s| s.image.digest().is_some() && svc_img.digest() == s.image.digest(),
+                        )
+                    })
+            })
         })
         // remove duplicate digests
-        .fold(Vec::<ImageUri>::new(), |mut acc, (_, svc_img)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc_img)| {
             if acc
                 .iter()
                 .all(|img| img.digest().is_none() || img.digest() != svc_img.digest())
@@ -193,7 +201,7 @@ fn fetch_release_images(
     // only download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image))
+        tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
 }
@@ -204,36 +212,6 @@ fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> 
         services: Map::new(),
     });
     release
-}
-
-/// Do the initial pull for a new service
-fn fetch_service_image(
-    System(device): System<Device>,
-    Target(tgt): Target<Service>,
-    Args((app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
-) -> Option<Task> {
-    let tgt_img = if let ImageRef::Uri(img) = tgt.image {
-        // Skip this task if the image already exists
-        if device.images.contains_key(&img) {
-            return None;
-        }
-        img
-    } else {
-        // also skip if the target image is not a Uri
-        // XXX: not sure if this can happen without a bug
-        return None;
-    };
-
-    // If there is a service with the same name in any other releases of the service
-    // and the service image has as different digest then we skip the fetch as
-    // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, &app_uuid, &commit, &service_name)
-        .is_none_or(|svc| svc.image.digest().is_some() && tgt_img.digest() == svc.image.digest())
-    {
-        return Some(create_image.with_arg("image_name", tgt_img));
-    }
-
-    None
 }
 
 /// Install the service
@@ -303,7 +281,13 @@ fn update_service_image_metadata(
 /// Update worker with user app tasks
 pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
-        .job("/apps", task::update(request_registry_token_for_new_images))
+        .jobs(
+            "/apps",
+            [
+                task::update(request_registry_token_for_new_images),
+                task::update(fetch_apps_images),
+            ],
+        )
         .job(
             "/apps/{app_uuid}",
             task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
@@ -318,25 +302,19 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [
-                task::create(fetch_release_images),
-                task::create(prepare_release).with_description(
-                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                    },
-                ),
-            ],
+            [task::create(prepare_release).with_description(
+                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                },
+            )],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
-            [
-                task::create(fetch_service_image),
-                task::create(install_service).with_description(
-                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("initialize service '{service_name}' for release '{commit}'")
-                    },
-                ),
-            ],
+            [task::create(install_service).with_description(
+                |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                    format!("initialize service '{service_name}' for release '{commit}'")
+                },
+            )],
         )
         .job(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}/image",
