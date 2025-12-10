@@ -37,9 +37,9 @@ fn request_registry_token_for_new_images(
                         // and there is no service from a different release
                         find_installed_service(
                             &device,
-                            app_uuid.clone(),
-                            commit.clone(),
-                            (*service_name).clone(),
+                            app_uuid,
+                            commit,
+                            service_name,
                         )
                         // or there is a service and the digest doesn't match the target digest
                         .is_none_or(|s| {
@@ -140,9 +140,9 @@ fn fetch_release_images(
             // and there is no service from a different release
             find_installed_service(
                     &device,
-                    app_uuid.clone(),
-                    commit.clone(),
-                    (*service_name).clone(),
+                    &app_uuid,
+                    &commit,
+                    service_name
                 )
                 // or if there is a service, then only chose it if it has the same digest
                 // as the target service
@@ -191,7 +191,7 @@ fn fetch_service_image(
     // If there is a service with the same name in any other releases of the service
     // and the service image has as different digest then we skip the fetch as
     // that pull will need deltas and needs to be handled by another task
-    if find_installed_service(&device, app_uuid, commit, service_name)
+    if find_installed_service(&device, &app_uuid, &commit, &service_name)
         .is_none_or(|svc| svc.image.digest().is_some() && tgt.image.digest() == svc.image.digest())
     {
         return Some(create_image.with_arg("image_name", tgt.image));
