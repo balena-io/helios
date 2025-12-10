@@ -8,6 +8,7 @@ use mahler::{
     worker::{Uninitialized, Worker},
 };
 
+use crate::common_types::Uuid;
 use crate::models::{Device, DeviceTarget};
 use crate::oci::RegistryAuthClient;
 use crate::util::store::{Store, StoreError};
@@ -27,7 +28,8 @@ fn perform_cleanup(
     device: View<Device>,
     Target(tgt_device): Target<Device>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
-) -> IO<Device> {
+    store: Res<Store>,
+) -> IO<Device, StoreError> {
     // skip the task if we have not reached the target state
     // (outside the needs_cleanup property)
     if DeviceTarget::from(Device {
@@ -47,6 +49,18 @@ fn perform_cleanup(
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
         }
+
+        // clean up old-app metadata
+        if let Some(local_store) = store.as_ref() {
+            let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
+            for app_uuid in app_uuids {
+                // remove app metadata not in the current/target state
+                if !device.apps.contains_key(&app_uuid) {
+                    local_store.delete_all(&format!("/apps/{app_uuid}")).await?;
+                }
+            }
+        }
+
         Ok(device)
     })
     .map(|mut device| {

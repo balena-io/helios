@@ -1,3 +1,4 @@
+use mahler::state::Map;
 use thiserror::Error;
 use tokio::fs;
 use tracing::instrument;
@@ -8,7 +9,7 @@ use crate::oci::{Client as Docker, Error as DockerError, WithContext};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::Device;
+use super::models::{App, Device};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -72,7 +73,25 @@ pub async fn read(
         device.images.insert(uri, image.into());
     }
 
-    // TODO: read state of apps if the `userapps` feature is enabled
+    // read state of apps if the `userapps` feature is enabled
+    if cfg!(feature = "userapps") {
+        let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
+        for app_uuid in app_uuids {
+            if let Some(id) = local_store.read(&format!("/apps/{app_uuid}"), "id").await? {
+                let name = local_store
+                    .read(format!("/apps/{app_uuid}"), "name")
+                    .await?;
+                device.apps.insert(
+                    app_uuid,
+                    App {
+                        id,
+                        name,
+                        releases: Map::new(),
+                    },
+                );
+            }
+        }
+    }
 
     Ok(device)
 }

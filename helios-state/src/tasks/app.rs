@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mahler::extract::{Args, System, Target, View};
+use mahler::extract::{Args, Res, System, Target, View};
 use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::{
@@ -13,6 +13,7 @@ use crate::models::{
     App, AppMap, AppTarget, Device, RegistryAuthSet, Release, Service, ServiceTarget,
 };
 use crate::oci::RegistryAuth;
+use crate::util::store::{Store, StoreError};
 
 use super::image::{create_image, request_registry_credentials};
 use super::utils::find_installed_service;
@@ -76,24 +77,51 @@ fn request_registry_token_for_new_images(
     Some(request_registry_credentials.with_target(tgt_auths))
 }
 
-/// Initialize the app in memory
-fn prepare_app(mut app: View<Option<App>>, Target(tgt_app): Target<App>) -> View<Option<App>> {
+/// Initialize the app and store its local data
+fn prepare_app(
+    mut maybe_app: View<Option<App>>,
+    Target(tgt_app): Target<App>,
+    Args(app_uuid): Args<Uuid>,
+    store: Res<Store>,
+) -> IO<Option<App>, StoreError> {
     let AppTarget { id, name, .. } = tgt_app;
-    app.replace(App {
+    maybe_app.replace(App {
         id,
         name,
         releases: Map::new(),
     });
-    app
+
+    with_io(maybe_app, async move |maybe_app| {
+        // store id and name as local state
+        if let (Some(app), Some(local_store)) = (maybe_app.as_ref(), store.as_ref()) {
+            local_store
+                .write(format!("/apps/{app_uuid}"), "id", &app.id)
+                .await?;
+            local_store
+                .write(format!("/apps/{app_uuid}"), "name", &app.name)
+                .await?;
+        }
+
+        Ok(maybe_app)
+    })
 }
 
-/// Update the in-memory app name
+/// Update the local app name
 fn set_app_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-) -> View<Option<String>> {
+    Args(app_uuid): Args<String>,
+    store: Res<Store>,
+) -> IO<Option<String>, StoreError> {
     *name = tgt;
-    name
+    with_io(name, async move |name| {
+        if let Some(local_store) = store.as_ref() {
+            local_store
+                .write(format!("/apps/{app_uuid}"), "name", &*name)
+                .await?;
+        }
+        Ok(name)
+    })
 }
 
 /// Install all new images for a release
