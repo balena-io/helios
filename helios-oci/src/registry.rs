@@ -31,7 +31,6 @@ impl RegistryAuth {
     pub fn in_scope(&self, image_uri: &ImageUri) -> bool {
         if image_uri
             .registry()
-            .as_ref()
             .is_none_or(|service| &self.service != service)
         {
             return false;
@@ -66,11 +65,10 @@ impl<T: Into<ImageUri>> TryFrom<Vec<T>> for RegistryAuth {
 
         let service = images[0]
             .registry()
-            .as_ref()
             .ok_or(RegistryAuthConversionError::NoRegistry)?;
 
         for image in &images {
-            match image.registry().as_ref() {
+            match image.registry() {
                 None => return Err(RegistryAuthConversionError::NoRegistry),
                 Some(registry) if registry != service => {
                     return Err(RegistryAuthConversionError::MixedRegistries);

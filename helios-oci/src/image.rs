@@ -39,7 +39,7 @@ impl Image<'_> {
     /// Tags an image so that it becomes part of a repository.
     pub async fn tag(&self, name: &str, new_name: &ImageUri) -> Result<()> {
         let repo = new_name.repo();
-        let tag = new_name.tag().clone();
+        let tag = new_name.tag().cloned();
         let opts = TagImageOptions {
             repo: Some(repo),
             tag,

@@ -3,13 +3,15 @@ use thiserror::Error;
 use tokio::fs;
 use tracing::instrument;
 
-use crate::common_types::{ImageUri, InvalidImageUriError, OperatingSystem, Uuid};
+use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError, WithContext};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::{App, Device, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID};
+use super::models::{
+    App, Device, ImageRef, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID,
+};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -145,27 +147,25 @@ pub async fn read(
             });
 
             // Get the image uri for the service from the local store
-            let svc_img: Option<ImageUri> = local_store
+            let image = local_store
                 .read(
                     format!("/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"),
                     "image",
                 )
-                .await?;
+                .await?
+                // use the image id if no store metadata is available
+                .unwrap_or(ImageRef::Id(local_container.image_id));
 
             // Insert the service and link it to the image if there is state
             // metadata about the image
-            // TODO: we might need to create an in-memory service referencing an image by id
-            // rather than uri if the image does not exist in the local store
-            if let Some(image) = svc_img {
-                let svc_id: u32 = labels
-                    .get("io.balena.service-id")
-                    .and_then(|id| id.parse().ok())
-                    .unwrap_or(0);
+            let svc_id: u32 = labels
+                .get("io.balena.service-id")
+                .and_then(|id| id.parse().ok())
+                .unwrap_or(0);
 
-                release
-                    .services
-                    .insert(service_name, Service { id: svc_id, image });
-            }
+            release
+                .services
+                .insert(service_name, Service { id: svc_id, image });
         }
     }
 
