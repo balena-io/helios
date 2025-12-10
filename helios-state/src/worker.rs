@@ -283,6 +283,76 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn it_finds_a_workflow_to_update_services_image_metadata() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "services": {
+                                "one": {
+                                    "id": 1,
+                                    "image": "sha256:deadbeef"
+                                },
+                                "two": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "needs_cleanup": false,
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "services": {
+                                "one": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                                "two": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "needs_cleanup": false,
+        }))
+        .unwrap();
+
+        let workflow = worker().find_workflow(initial_state, target).unwrap();
+        let expected: Dag<&str> = seq!(
+            "ensure clean-up",
+            "update image metadata for service 'one' of release 'my-release-uuid'",
+            "perform clean-up"
+        );
+
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
     // The worker doesn't have any tasks to update services or delete releases
     // so this plan should fail
     #[tokio::test]

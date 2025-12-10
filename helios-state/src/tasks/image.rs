@@ -8,7 +8,7 @@ use mahler::{
 };
 
 use crate::common_types::ImageUri;
-use crate::models::{Device, Image, RegistryAuthSet};
+use crate::models::{Device, Image, ImageRef, RegistryAuthSet};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
@@ -145,7 +145,7 @@ pub(super) fn create_image(
 
 /// Remove an image
 ///
-/// Condition: the image exists (and there are no services referencing it?)
+/// Condition: the image exists and there are no services referencing it
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
 fn remove_image(
@@ -157,10 +157,13 @@ fn remove_image(
     // only remove the image if it not being used by any service
     if device.apps.values().any(|app| {
         app.releases.values().any(|release| {
-            release
-                .services
-                .values()
-                .any(|s| s.image == image_name.clone())
+            release.services.values().any(|s| {
+                if let ImageRef::Uri(s_img) = &s.image {
+                    s_img == &image_name
+                } else {
+                    false
+                }
+            })
         })
     }) {
         return img_ptr.into();
