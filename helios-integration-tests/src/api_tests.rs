@@ -1,12 +1,13 @@
 use std::{collections::HashMap, time::Duration};
 
-use bollard::{query_parameters::PruneImagesOptions, Docker};
+use bollard::{Docker, query_parameters::PruneImagesOptions};
 use reqwest::StatusCode;
 use serde_json::json;
 
 const HELIOS_URL: &str = "http://helios-api";
 
 async fn wait_for_target_apply() -> serde_json::Value {
+    tokio::time::sleep(Duration::from_secs(1)).await;
     loop {
         let status_res: serde_json::Value = reqwest::get(format!("{HELIOS_URL}/v3/status"))
             .await
