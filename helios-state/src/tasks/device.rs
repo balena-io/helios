@@ -50,13 +50,31 @@ fn perform_cleanup(
             auth_client.clear();
         }
 
-        // clean up old-app metadata
+        // clean up old app/release metadata
         if let Some(local_store) = store.as_ref() {
             let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
             for app_uuid in app_uuids {
                 // remove app metadata not in the current/target state
                 if !device.apps.contains_key(&app_uuid) {
-                    local_store.delete_all(&format!("/apps/{app_uuid}")).await?;
+                    local_store.delete_all(format!("/apps/{app_uuid}")).await?;
+                } else {
+                    let release_uuids: Vec<Uuid> = local_store
+                        .list(format!("/apps/{app_uuid}/releases"))
+                        .await?;
+
+                    // remove release metadata if not in the target state
+                    for release_uuid in release_uuids {
+                        if !device
+                            .apps
+                            .get(&app_uuid)
+                            .map(|app| app.releases.contains_key(&release_uuid))
+                            .unwrap_or_default()
+                        {
+                            local_store
+                                .delete_all(format!("/apps/{app_uuid}/releases/{release_uuid}"))
+                                .await?;
+                        }
+                    }
                 }
             }
         }
