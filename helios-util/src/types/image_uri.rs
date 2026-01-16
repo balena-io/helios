@@ -45,20 +45,20 @@ impl ImageUri {
             .expect("URI should have format [domain.tld/]repo/image[:tag][@digest]")
     }
 
-    pub fn registry(&self) -> &Option<String> {
-        &self.registry
+    pub fn registry(&self) -> Option<&String> {
+        self.registry.as_ref()
     }
 
     pub fn image(&self) -> &String {
         &self.image
     }
 
-    pub fn tag(&self) -> &Option<String> {
-        &self.tag
+    pub fn tag(&self) -> Option<&String> {
+        self.tag.as_ref()
     }
 
-    pub fn digest(&self) -> &Option<String> {
-        &self.digest
+    pub fn digest(&self) -> Option<&String> {
+        self.digest.as_ref()
     }
 
     pub fn repo(&self) -> String {
