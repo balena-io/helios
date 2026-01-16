@@ -1,4 +1,70 @@
 - commits:
+    - subject: Recreate the worker before applying state
+      hash: 631adda6d3c3c6b3ee6f04842ed632b27d5a1401
+      body: |
+        The system may have changed while the worker was idle (e.g. images
+        pruned), making the worker state become out of date. This re-reads the
+        state before each update to ensure the plan is accurate.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Process image installs for all apps
+      hash: 5fd167972b0ae720559a7a2068483234bbd0effe
+      body: |
+        This replaces `fetch_release_images` for a `fetch_apps_images` thus
+        batching all installs together. This ensures that at most 3 images will
+        be downloaded concurrently from all user apps in the target state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use ImageRef type to reference local images
+      hash: a0050e31d2c993cbfca025e044ad3226b968ee6c
+      body: |
+        Local images may be referenced by URI or by Id. This reference is used
+        when reading service information from containers and mapping a container
+        to the backend image URI
+
+        This also updates ImageRef methods to return `Option<&String>` to be
+        more idiomatic.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Read/write service data from containers
+      hash: fc8b1f44edb17ac4bfebeb26ada9319fd70b6ed1
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Create ServiceContainerName type
+      hash: 60c79c955d579f5ed2155c246e924bdc13e943e1
+      body: |
+        This will be used for extracting release metadata from the container
+        name as that is the only place the metadata can live.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Read/write app metadata from local store
+      hash: d18b4ad75448849872aa685420dc3a8c12225826
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.13.2
+  title: ""
+  date: 2026-01-16T18:52:18.587Z
+- commits:
     - subject: Update mahler to v0.22
       hash: 81810656a6a3bb2b27da1cd46a900634456ab9ea
       body: ""
