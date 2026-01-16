@@ -1,0 +1,68 @@
+[package]
+name = "helios-store"
+description = "Multi-thread and multi-process safe file-based object store"
+readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+pin-project-lite.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
+globset.workspace = true
+fastrand.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+
+
+# We are currently using `libc` and `windows-sys` directly. We haven't had the
+# need yet, and it's actually easier to find platform-specific details this way,
+# but there are several higher-level crates we may want to use instead of or in part:
+#
+# - [nix]: Provides friendly bindings to various *nix platform APIs (Linux,
+#   Darwin, etc). The goal is to unify what can be while still providing platform
+#   specific APIs. For many system APIs, Nix provides a safe alternative to the
+#   unsafe APIs exposed by the libc crate. This is done by wrapping the libc
+#   functionality with types/abstractions that enforce legal/safe usage.
+#
+# - [rustix]: Provides efficient memory-safe and I/O-safe wrappers to POSIX-like,
+#   Unix-like, Linux, and Winsock syscall-like APIs, with configurable backends.
+#   rustix is low-level and, and while the net API supports Windows Sockets 2
+#   (Winsock), the rest of the APIs do not support Windows.
+#
+# - [windows]: Wrapper over `windows-sys` providing a more idiomatic way to
+#   access Windows APIs.
+#
+# [nix]: https://github.com/nix-rust/nix
+# [rustix]: https://github.com/bytecodealliance/rustix
+# [windows]: https://github.com/microsoft/windows-rs
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false, features = [
+  # https://github.com/rust-lang/libc
+  "std",
+  "extra_traits",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", default-features = false, features = [
+  # https://github.com/microsoft/windows-rs
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+] }
