@@ -3,8 +3,8 @@ FROM alpine:3.22
 # Install build dependencies and dbus
 RUN apk add --update --no-cache \
 		build-base \
-		openssl-dev \
 		rust cargo \
+		clang clang-dev cmake \
 		dbus
 
 WORKDIR /usr/src/app

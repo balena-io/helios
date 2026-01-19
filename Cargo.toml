@@ -55,9 +55,9 @@ version = "0.3.20"
 features = ["env-filter", "fmt", "registry", "ansi"]
 
 [workspace.dependencies.reqwest]
-version = "0.12"
+version = "0.13"
 default-features = false
-features = ["json", "rustls-tls", "brotli", "stream"]
+features = ["json", "rustls", "brotli", "stream"]
 
 [workspace.dependencies.serde]
 version = "1.0"
