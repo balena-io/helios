@@ -1,4 +1,6 @@
+use futures_lite::StreamExt;
 use tokio::sync::RwLock;
+use tracing::trace;
 
 use mahler::extract::{Args, RawTarget, Res, System, Target, View};
 use mahler::job;
@@ -66,18 +68,22 @@ fn tag_image(
 /// Effect: add the image to the list of images
 /// Action: pull the image from the registry and add it to the images local registry
 pub(super) fn pull_image(
-    mut image: View<Option<Image>>,
+    image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
     auth_client: Res<RwLock<RegistryAuthClient>>,
-) -> IO<Option<Image>, DockerError> {
+) -> IO<Image, DockerError> {
+    // probably unnecessary, just some defensive programming
+    enforce!(image.is_none(), "image already exists");
+
     // Initialize the image if it doesn't exist
-    if image.is_none() {
-        image.replace(Image {
-            engine_id: image_name.to_string(),
-            labels: Default::default(),
-        });
-    }
+    let image = image.create(Image {
+        // use the image name as is while the image has not been
+        // created
+        engine_id: image_name.to_string(),
+        labels: Default::default(),
+        download_progress: 0,
+    });
 
     with_io(image, |mut image| async move {
         let docker = docker
@@ -99,11 +105,34 @@ pub(super) fn pull_image(
             None
         };
 
-        // FIXME: progress reporting
-        docker.image().pull(&image_name, credentials).await?;
+        // Report the state
+        let _ = image.flush().await;
+
+        // Report progress
+        let mut stream = docker.image().pull_with_progress(&image_name, credentials);
+        let mut last_logged = -1;
+        while let Some(result) = stream.next().await {
+            let (current, total) = result?;
+            let percent = 100 * current / total;
+            let bucket = percent / 20;
+
+            // limit the number of reports per pull to avoid spamming
+            // the backend
+            if bucket > last_logged {
+                trace!("progress={percent}%");
+                last_logged = bucket;
+
+                image.download_progress = percent;
+
+                // report download progress back to the worker
+                let _ = image.flush().await;
+            }
+        }
+        trace!("progress=100%");
+
         let new_img: Image = docker.image().inspect(&image_name).await?.into();
 
-        image.replace(new_img);
+        *image = new_img;
 
         Ok(image)
     })

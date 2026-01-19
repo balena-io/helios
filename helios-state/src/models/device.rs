@@ -151,7 +151,8 @@ mod tests {
             },
             "images": {
                 "ubuntu": {
-                    "engine_id": "ccc"
+                    "engine_id": "ccc",
+                    "download_progress": 100,
                 }
 
             },
