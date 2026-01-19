@@ -2,7 +2,7 @@ use std::future::{self, Future};
 use std::pin::Pin;
 
 use futures_lite::StreamExt;
-use mahler::worker::{SeekError as WorkerSeekError, SeekStatus};
+use mahler::worker::SeekStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{
@@ -106,7 +106,7 @@ pub enum SeekError {
     CreateWorker(#[from] WorkerCreateError),
 
     #[error("failed to reach target state: {0}")]
-    SeekTargetState(#[from] WorkerSeekError),
+    SeekTargetState(#[from] mahler::error::Error),
 
     #[error("failed to update state on legacy Supervisor: {0}")]
     LegacyUpdate(#[from] StateUpdateError),

@@ -1,11 +1,9 @@
 use std::time::Duration;
 
 use mahler::extract::{Args, Res, System, Target, View};
+use mahler::job;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 use tokio::fs;
 use tracing::{debug, warn};
 
@@ -104,9 +102,10 @@ fn install_hostapp_release(
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
-    if release.status != HostReleaseStatus::Created {
-        return release.into();
-    }
+    enforce!(
+        release.status == HostReleaseStatus::Created,
+        "OS release already installed"
+    );
 
     // increase the install counter and set the status after
     // the successful run of the task
@@ -218,9 +217,10 @@ fn complete_hostapp_install(
     // This task is only  applicable if the release is already installed
     // which will only happen if install_hostapp_release finishes without an
     // error
-    if rel.status != HostReleaseStatus::Installed {
-        return rel.into();
-    }
+    enforce!(
+        rel.status == HostReleaseStatus::Installed,
+        "OS release not installed yet"
+    );
 
     with_io(rel, async move |rel| {
         // Get the running status by comparing
@@ -260,9 +260,10 @@ fn update_script_uri(
     store: Res<Store>,
 ) -> IO<HostRelease, StoreError> {
     // do nothing if the release is not currently running
-    if rel.status != HostReleaseStatus::Running {
-        return rel.into();
-    }
+    enforce!(
+        rel.status == HostReleaseStatus::Running,
+        "OS release is not running yet"
+    );
 
     // the only change that this applies is to the updater script
     rel.updater = tgt.updater;
@@ -304,25 +305,25 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
     worker.jobs(
         "/host/releases/{release_uuid}",
         [
-            task::create(init_hostapp_release).with_description(
+            job::create(init_hostapp_release).with_description(
                 |Args(release_uuid): Args<String>| {
                     format!("initialize hostOS release '{release_uuid}'")
                 },
             ),
-            task::update(install_hostapp_release).with_description(
+            job::update(install_hostapp_release).with_description(
                 |Args(release_uuid): Args<String>| {
                     format!("install hostOS release '{release_uuid}'")
                 },
             ),
-            task::update(complete_hostapp_install).with_description(
+            job::update(complete_hostapp_install).with_description(
                 |Args(release_uuid): Args<String>| {
                     format!("complete hostOS release install for '{release_uuid}'")
                 },
             ),
-            task::update(update_script_uri).with_description(|Args(release_uuid): Args<String>| {
+            job::update(update_script_uri).with_description(|Args(release_uuid): Args<String>| {
                 format!("update metadata for release '{release_uuid}'")
             }),
-            task::delete(remove_old_metadata).with_description(
+            job::delete(remove_old_metadata).with_description(
                 |Args(release_uuid): Args<String>| {
                     format!("clean up metadata for previous hostOS release '{release_uuid}'",)
                 },

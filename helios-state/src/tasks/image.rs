@@ -1,11 +1,9 @@
 use tokio::sync::RwLock;
 
 use mahler::extract::{Args, RawTarget, Res, System, Target, View};
+use mahler::job;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::ImageUri;
 use crate::models::{Device, Image, ImageRef, RegistryAuthSet};
@@ -166,7 +164,7 @@ fn remove_image(
             })
         })
     }) {
-        return img_ptr.into();
+        return IO::abort("image is still in use");
     }
 
     with_io(img_ptr, |img_ptr| async move {
@@ -190,24 +188,24 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
     worker
         .job(
             "/auths",
-            task::none(request_registry_credentials)
+            job::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
         .jobs(
             "/images/{image_name}",
             [
-                task::none(pull_image).with_description(|Args(image_name): Args<String>| {
+                job::none(pull_image).with_description(|Args(image_name): Args<String>| {
                     format!("pull image '{image_name}'")
                 }),
-                task::none(remove_image).with_description(|Args(image_name): Args<String>| {
+                job::none(remove_image).with_description(|Args(image_name): Args<String>| {
                     format!("delete image '{image_name}'")
                 }),
-                task::none(tag_image).with_description(
+                job::none(tag_image).with_description(
                     |Args(image_name): Args<String>, tgt: Target<Image>| {
                         format!("tag image '{}' as '{image_name}'", tgt.engine_id)
                     },
                 ),
-                task::none(create_image),
+                job::none(create_image),
             ],
         )
 }

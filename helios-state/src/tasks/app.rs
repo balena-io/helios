@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
 use mahler::extract::{Args, Res, System, Target, View};
+use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
@@ -227,11 +225,13 @@ fn install_service(
 ) -> IO<Option<Service>, StoreError> {
     // Skip the task if the image for the service doesn't exist yet
     if let ImageRef::Uri(tgt_img) = &tgt.image {
-        if !device.images.contains_key(tgt_img) {
-            return maybe_svc.into();
-        }
+        enforce!(
+            device.images.contains_key(tgt_img),
+            "image {tgt_img} not found"
+        );
     } else {
-        return maybe_svc.into();
+        // this should not happen
+        return IO::abort("target image must be an URI");
     }
 
     let ServiceTarget { id, image, .. } = tgt;
@@ -284,25 +284,25 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/apps",
             [
-                task::update(request_registry_token_for_new_images),
-                task::update(fetch_apps_images),
+                job::update(request_registry_token_for_new_images),
+                job::update(fetch_apps_images),
             ],
         )
         .job(
             "/apps/{app_uuid}",
-            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            job::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
         .job(
             "/apps/{app_uuid}/name",
-            task::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
+            job::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
                 format!("update name for app with uuid '{uuid}'")
             }),
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [task::create(prepare_release).with_description(
+            [job::create(prepare_release).with_description(
                 |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                     format!("initialize release '{commit}' for app with uuid '{uuid}'")
                 },
@@ -310,7 +310,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
-            [task::create(install_service).with_description(
+            [job::create(install_service).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!("initialize service '{service_name}' for release '{commit}'")
                 },
@@ -318,7 +318,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .job(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}/image",
-            task::update(update_service_image_metadata).with_description(
+            job::update(update_service_image_metadata).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
                         "update image metadata for service '{service_name}' of release '{commit}'"

@@ -1,12 +1,9 @@
 use tokio::sync::RwLock;
-use tracing::debug;
 
 use mahler::extract::{Res, Target, View};
+use mahler::job;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::Uuid;
 use crate::models::{Device, DeviceTarget};
@@ -38,13 +35,12 @@ fn perform_cleanup(
     }) != tgt_device
         || !device.needs_cleanup
     {
-        return device.into();
+        return IO::abort("target state not reached yet");
     }
 
     with_io(device, |device| async move {
         // Clean up authorizations
         if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
-            debug!("clean up registry credentials");
             // Wait for write authorization
             let mut auth_client = auth_client_rwlock.write().await;
             auth_client.clear();
@@ -108,15 +104,15 @@ pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unini
     worker
         .job(
             "/name",
-            task::any(set_device_name).with_description(|| "update device name"),
+            job::any(set_device_name).with_description(|| "update device name"),
         )
         // XXX: this is not added first because of
         // https://github.com/balena-io-modules/mahler-rs/pull/50
         .jobs(
             "",
             [
-                task::update(ensure_cleanup).with_description(|| "ensure clean-up"),
-                task::update(perform_cleanup).with_description(|| "perform clean-up"),
+                job::update(ensure_cleanup).with_description(|| "ensure clean-up"),
+                job::update(perform_cleanup).with_description(|| "perform clean-up"),
             ],
         )
 }
