@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use bollard::query_parameters::{
     CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
 };
-use futures_lite::StreamExt;
+use futures_lite::Stream;
 
 use super::util::types::{ImageUri, InvalidImageUriError};
 use super::{Client, Credentials, Error, Result, WithContext};
 
-use bollard::secret::{ImageInspect, ImageSummary};
+use bollard::secret::{CreateImageInfo, ImageInspect, ImageSummary};
 
 #[derive(Debug, Clone)]
 pub struct Image<'a>(&'a Client);
@@ -54,22 +56,62 @@ impl Image<'_> {
 
     /// Pulls an image from a registry.
     pub async fn pull(&self, image: &ImageUri, creds: Option<Credentials>) -> Result<()> {
+        use futures_lite::StreamExt;
+
+        let mut stream = self.pull_with_progress(image, creds);
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Pulls an image from a registry, returning a stream of progress updates (current, total).
+    pub fn pull_with_progress(&self, image: &ImageUri, creds: Option<Credentials>) -> PullProgress {
         let opts = Some(CreateImageOptions {
             from_image: Some(image.clone().into()),
             ..Default::default()
         });
 
-        let mut stream = self.0.inner().create_image(opts, None, creds);
-        while let Some(progress) = stream.next().await {
-            // TODO: report progress. This requires https://github.com/balena-io-modules/mahler-rs/issues/43
-            let _ = progress
-                .map_err(Error::from)
-                .with_context(|| format!("failed to pull image {}", image.as_str()))?;
+        PullProgress {
+            inner: Box::pin(self.0.inner().create_image(opts, None, creds)),
+            image: image.as_str().to_owned(),
         }
-
-        Ok(())
     }
+}
 
+pub struct PullProgress {
+    inner: Pin<
+        Box<dyn Stream<Item = std::result::Result<CreateImageInfo, bollard::errors::Error>> + Send>,
+    >,
+    image: String,
+}
+
+impl Stream for PullProgress {
+    type Item = Result<(i64, i64)>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Err(e))) => {
+                    let err =
+                        Error::from(e).context(format!("failed to pull image {}", self.image));
+                    return Poll::Ready(Some(Err(err)));
+                }
+                Poll::Ready(Some(Ok(info))) => {
+                    if let Some(detail) = info.progress_detail {
+                        if let (Some(current), Some(total)) = (detail.current, detail.total) {
+                            return Poll::Ready(Some(Ok((current, total))));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Image<'_> {
     /// Returns low-level information about an image.
     pub async fn inspect(&self, image: &ImageUri) -> Result<LocalImage> {
         let res = self.0.inner().inspect_image(image.as_str()).await;
