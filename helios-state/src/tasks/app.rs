@@ -94,21 +94,23 @@ fn request_registry_token_for_new_images(
 
 /// Initialize the app and store its local data
 fn prepare_app(
-    mut maybe_app: View<Option<App>>,
+    maybe_app: View<Option<App>>,
     Target(tgt_app): Target<App>,
     Args(app_uuid): Args<Uuid>,
     store: Res<Store>,
-) -> IO<Option<App>, StoreError> {
+) -> IO<App, StoreError> {
+    enforce!(maybe_app.is_none(), "app already exists");
+
     let AppTarget { id, name, .. } = tgt_app;
-    maybe_app.replace(App {
+    let app = maybe_app.create(App {
         id,
         name,
         releases: Map::new(),
     });
 
-    with_io(maybe_app, async move |maybe_app| {
+    with_io(app, async move |app| {
         // store id and name as local state
-        if let (Some(app), Some(local_store)) = (maybe_app.as_ref(), store.as_ref()) {
+        if let Some(local_store) = store.as_ref() {
             local_store
                 .write(format!("/apps/{app_uuid}"), "id", &app.id)
                 .await?;
@@ -117,7 +119,7 @@ fn prepare_app(
                 .await?;
         }
 
-        Ok(maybe_app)
+        Ok(app)
     })
 }
 
@@ -205,11 +207,10 @@ fn fetch_apps_images(
 }
 
 /// Initialize an empty release
-fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
-    release.replace(Release {
+fn prepare_release(release: View<Option<Release>>) -> View<Release> {
+    release.create(Release {
         services: Map::new(),
-    });
-    release
+    })
 }
 
 /// Install the service
@@ -217,12 +218,12 @@ fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> 
 /// FIXME: this only creates the service in memory for now, as we add features, this will also
 /// create the service container
 fn install_service(
-    mut maybe_svc: View<Option<Service>>,
+    maybe_svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     store: Res<Store>,
-) -> IO<Option<Service>, StoreError> {
+) -> IO<Service, StoreError> {
     // Skip the task if the image for the service doesn't exist yet
     if let ImageRef::Uri(tgt_img) = &tgt.image {
         enforce!(
@@ -235,12 +236,12 @@ fn install_service(
     }
 
     let ServiceTarget { id, image, .. } = tgt;
-    maybe_svc.replace(Service { id, image });
+    let svc = maybe_svc.create(Service { id, image });
 
-    with_io(maybe_svc, async move |maybe_svc| {
+    with_io(svc, async move |svc| {
         // FIXME: create/manage container
 
-        if let (Some(svc), Some(local_store)) = (maybe_svc.as_ref(), store.as_ref()) {
+        if let Some(local_store) = store.as_ref() {
             // store the image uri that corresponds to the current release service
             local_store
                 .write(
@@ -251,7 +252,7 @@ fn install_service(
                 .await?;
         }
 
-        Ok(maybe_svc)
+        Ok(svc)
     })
 }
 

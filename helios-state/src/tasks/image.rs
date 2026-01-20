@@ -41,8 +41,12 @@ fn tag_image(
     Target(tgt): Target<Image>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-) -> IO<Option<Image>, DockerError> {
+) -> IO<Image, DockerError> {
+    // probably unnecessary, just some defensive programming
+    enforce!(image.is_none(), "image already exists");
+
     let engine_id = tgt.engine_id.clone();
+    let image = image.create(tgt.into());
 
     with_io(image, |image| async move {
         let docker = docker
@@ -52,10 +56,6 @@ fn tag_image(
         docker.image().tag(&engine_id, &image_name).await?;
 
         Ok(image)
-    })
-    .map(|mut image| {
-        image.replace(tgt.into());
-        image
     })
 }
 
@@ -147,7 +147,7 @@ pub(super) fn create_image(
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
 fn remove_image(
-    img_ptr: View<Option<Image>>,
+    img_ptr: View<Image>,
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,
     docker: Res<Docker>,
@@ -167,6 +167,9 @@ fn remove_image(
         return IO::abort("image is still in use");
     }
 
+    // delete the image
+    let img_ptr = img_ptr.delete();
+
     with_io(img_ptr, |img_ptr| async move {
         let docker = docker
             .as_ref()
@@ -175,11 +178,6 @@ fn remove_image(
         docker.image().remove(&image_name).await?;
 
         Ok(img_ptr)
-    })
-    .map(|mut img| {
-        // delete the image pointer
-        img.take();
-        img
     })
 }
 

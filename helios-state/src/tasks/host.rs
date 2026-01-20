@@ -282,12 +282,12 @@ fn update_script_uri(
 
 /// handle an `delete(/host/releases/<commit>)`
 fn remove_old_metadata(
-    mut rel: View<Option<HostRelease>>,
+    rel: View<HostRelease>,
     Args(release_uuid): Args<String>,
     store: Res<Store>,
 ) -> IO<Option<HostRelease>, StoreError> {
     // remove the old release
-    rel.take();
+    let rel = rel.delete();
 
     with_io(rel, async move |rel| {
         // remove the old release metadata
