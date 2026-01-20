@@ -2,7 +2,7 @@ use futures_lite::StreamExt;
 use tokio::sync::RwLock;
 use tracing::trace;
 
-use mahler::extract::{Args, RawTarget, Res, System, Target, View};
+use mahler::extract::{Args, RawTarget, Res, System, View};
 use mahler::job;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
@@ -40,22 +40,37 @@ pub(super) fn request_registry_credentials(
 /// Tag an existing image with a new name
 fn tag_image(
     image: View<Option<Image>>,
-    Target(tgt): Target<Image>,
+    // because this function is only called from a method (composite task), we can use RawTarget
+    // and receive any serializable data as the target
+    RawTarget((src_img_name, src_img)): RawTarget<(String, Image)>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
 ) -> IO<Image, DockerError> {
     // probably unnecessary, just some defensive programming
     enforce!(image.is_none(), "image already exists");
 
-    let engine_id = tgt.engine_id.clone();
-    let image = image.create(tgt.into());
+    // if both source image and the tagged image are being
+    // created as part of the same plan, the src_image engine id will be null,
+    // because the target is created at planning and is not updated at runtime
+    // for this reason, we use the src_img_name if that's the case. It's also the
+    // same reason why the image is inspected again at the end of the IO block
+    let image_ref = if let Some(id) = &src_img.engine_id {
+        id.clone()
+    } else {
+        src_img_name
+    };
+    let image = image.create(src_img);
 
-    with_io(image, |image| async move {
+    with_io(image, |mut image| async move {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
 
-        docker.image().tag(&engine_id, &image_name).await?;
+        // tag the image
+        docker.image().tag(&image_ref, &image_name).await?;
+
+        // get the updated image information
+        *image = docker.image().inspect(&image_name).await?.into();
 
         Ok(image)
     })
@@ -78,9 +93,7 @@ pub(super) fn pull_image(
 
     // Initialize the image if it doesn't exist
     let image = image.create(Image {
-        // use the image name as is while the image has not been
-        // created
-        engine_id: image_name.to_string(),
+        engine_id: None,
         labels: Default::default(),
         download_progress: 0,
     });
@@ -149,12 +162,12 @@ pub(super) fn create_image(
     if let Some(digest) = image_name.digest() {
         let existing = device
             .images
-            .iter()
+            .into_iter()
             .find(|(name, _)| name.digest().is_some_and(|d| d == digest));
 
-        if let Some((_, image)) = existing {
+        if let Some((src_img_name, src_img)) = existing {
             // If an image with the same digest exists, we just need to tag it
-            return Some(tag_image.with_target(image.clone()));
+            return Some(tag_image.with_target((src_img_name, src_img)));
         }
     }
 
@@ -228,8 +241,9 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
                     format!("delete image '{image_name}'")
                 }),
                 job::none(tag_image).with_description(
-                    |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        format!("tag image '{}' as '{image_name}'", tgt.engine_id)
+                    |Args(image_name): Args<String>,
+                     RawTarget((src_img_name, _)): RawTarget<(String, Image)>| {
+                        format!("tag image '{src_img_name}' as '{image_name}'")
                     },
                 ),
                 job::none(create_image),

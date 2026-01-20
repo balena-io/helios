@@ -9,7 +9,7 @@ use tokio::sync::{
     Notify,
     watch::{Receiver, Sender},
 };
-use tracing::{error, info, instrument, trace};
+use tracing::{info, instrument, trace};
 
 use crate::legacy::{
     LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
