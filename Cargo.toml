@@ -24,6 +24,8 @@ readme = "README.md"
 publish = false
 
 [workspace.dependencies]
+serde_path_to_error = "0.1"
+shell-words = "1.1"
 tracing = "0.1.41"
 serde_json = "1.0"
 thiserror = "2"

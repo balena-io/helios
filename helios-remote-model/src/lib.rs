@@ -10,23 +10,49 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use helios_util::types::{ImageUri, Uuid};
-
+mod command;
+mod labels;
 mod network;
 mod service;
 mod volume;
 
+pub use command::*;
+pub use labels::*;
 pub use network::*;
 pub use service::*;
 pub use volume::*;
 
+use helios_util::types as common_types;
+
+use common_types::{ImageUri, Uuid};
+
 /// Target device as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Device {
     pub name: String,
-
-    #[serde(default)]
     pub apps: AppMap,
+}
+
+/// Internal struct for deriving Deserialize
+#[derive(Deserialize)]
+struct DeviceRaw {
+    name: String,
+    #[serde(default)]
+    apps: AppMap,
+}
+
+impl<'de> Deserialize<'de> for Device {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        serde_path_to_error::deserialize(deserializer)
+            .map(|raw: DeviceRaw| Device {
+                name: raw.name,
+                apps: raw.apps,
+            })
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -293,6 +319,41 @@ mod tests {
                 |e| e.to_string() == "the hostapp must have at least one target release"
             )
         );
+    }
+
+    #[test]
+    fn test_rejects_target_service_with_invalid_command() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "command": "echo 'hello world",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+
+        });
+
+        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "apps.?.releases.?.services.main.composition.command: missing closing quote"
+        )
     }
 
     #[test]

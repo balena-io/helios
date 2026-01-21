@@ -1,9 +1,12 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use helios_util::types::ImageUri;
+use crate::common_types::ImageUri;
 
-/// Target app as defined by the remote backend
+use super::command::Command;
+use super::labels::Labels;
+
+/// Target service as defined by the remote backend
 #[derive(Deserialize, Clone, Debug)]
 pub struct Service {
     pub id: u32,
@@ -20,5 +23,8 @@ pub struct Service {
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ServiceComposition {
     #[serde(default)]
-    pub labels: HashMap<String, String>,
+    pub command: Option<Command>,
+
+    #[serde(default)]
+    pub labels: Labels,
 }
