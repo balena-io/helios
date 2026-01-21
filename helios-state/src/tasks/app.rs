@@ -236,7 +236,12 @@ fn install_service(
     }
 
     let ServiceTarget { id, image, .. } = tgt;
-    let svc = maybe_svc.create(Service { id, image });
+    let svc = maybe_svc.create(Service {
+        id,
+        image,
+        container_id: None,
+        config: tgt.config,
+    });
 
     with_io(svc, async move |svc| {
         // FIXME: create/manage container

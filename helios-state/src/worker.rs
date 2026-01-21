@@ -225,25 +225,30 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "ubuntu:latest"
+                                    "image": "ubuntu:latest",
+                                    "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "config": {},
                                 },
                                 "service3": {
                                     "id": 3,
                                     // different image same digest
-                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "config": {},
                                 },
                                 // additional images to test download batching
                                 "service4": {
                                     "id": 4,
-                                    "image": "alpine:latest"
+                                    "image": "alpine:latest",
+                                    "config": {},
                                 },
                                 "service5": {
                                     "id": 5,
-                                    "image": "alpine:3.20"
+                                    "image": "alpine:3.20",
+                                    "config": {},
                                 },
                             }
                         }
@@ -299,11 +304,13 @@ mod tests {
                             "services": {
                                 "one": {
                                     "id": 1,
-                                    "image": "sha256:deadbeef"
+                                    "image": "sha256:deadbeef",
+                                    "config": {},
                                 },
                                 "two": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                             }
                         }
@@ -324,11 +331,13 @@ mod tests {
                             "services": {
                                 "one": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "two": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                             }
                         }
@@ -371,11 +380,13 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222"
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
+                                    "config": {},
                                 },
 
                             }
@@ -397,11 +408,13 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222"
+                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                    "config": {},
                                 },
 
                             }

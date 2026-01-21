@@ -9,9 +9,7 @@ use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::{
-    App, Device, ImageRef, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID,
-};
+use super::models::{App, Device, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -145,26 +143,21 @@ pub async fn read(
                 services: Map::new(),
             });
 
-            // Get the image uri for the service from the local store
-            let image = local_store
+            // Create the service configuration from the container and image config
+            let image = docker.image().inspect(&local_container.image_id).await?;
+            let mut svc = Service::from((&image.config, local_container));
+
+            // Link the service to the local image if there is state metadata about it
+            svc.image = local_store
                 .read(
                     format!("/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"),
                     "image",
                 )
                 .await?
                 // use the image id if no store metadata is available
-                .unwrap_or(ImageRef::Id(local_container.image_id));
+                .unwrap_or(svc.image);
 
-            // Insert the service and link it to the image if there is state
-            // metadata about the image
-            let svc_id: u32 = labels
-                .and_then(|labels| labels.get("io.balena.service-id"))
-                .and_then(|id| id.parse().ok())
-                .unwrap_or(0);
-
-            release
-                .services
-                .insert(service_name, Service { id: svc_id, image });
+            release.services.insert(service_name, svc);
         }
     }
 

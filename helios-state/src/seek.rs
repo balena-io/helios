@@ -341,9 +341,10 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            // Apply the target
+                            // Apply the normalized target
+                            let target = update_req.target.normalize();
                             status = tokio::select! {
-                                status = worker.seek_target(update_req.target.clone()) => status?.into(),
+                                status = worker.seek_target(target) => status?.into(),
                                 _ = interrupt.wait() => {
                                     return Ok(SeekState::Local(UpdateStatus::Interrupted))
                                 }

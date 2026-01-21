@@ -88,6 +88,30 @@ impl From<Device> for DeviceTarget {
     }
 }
 
+impl DeviceTarget {
+    pub fn normalize(mut self) -> DeviceTarget {
+        // Insert app metadata for every service of every app
+        for (app_uuid, app) in self.apps.iter_mut() {
+            for (rel_uuid, rel) in app.releases.iter_mut() {
+                for (svc_name, svc) in rel.services.iter_mut() {
+                    let _ = svc
+                        .config
+                        .container_name
+                        .insert(format!("{svc_name}_{rel_uuid}"));
+                    svc.config
+                        .labels
+                        .insert("io.balena.app-id".to_string(), app.id.to_string());
+                    svc.config
+                        .labels
+                        .insert("io.balena.app-uuid".to_string(), app_uuid.to_string());
+                }
+            }
+        }
+
+        self
+    }
+}
+
 impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
