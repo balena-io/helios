@@ -6,11 +6,12 @@ use bollard::query_parameters::{
     CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
 };
 use futures_lite::Stream;
+use serde::{Deserialize, Serialize};
 
-use super::util::types::{ImageUri, InvalidImageUriError};
+use super::util::types::ImageUri;
 use super::{Client, Credentials, Error, Result, WithContext};
 
-use bollard::secret::{CreateImageInfo, ImageInspect, ImageSummary};
+use bollard::secret::{CreateImageInfo, ImageInspect};
 
 #[derive(Debug, Clone)]
 pub struct Image<'a>(&'a Client);
@@ -22,11 +23,8 @@ impl<'a> Image<'a> {
 }
 
 impl Image<'_> {
-    /// Returns an iterator on the list of images on the server.
-    ///
-    /// Note that it uses a different, smaller representation of an image than
-    /// inspecting a single image.
-    pub async fn list(&self) -> Result<List> {
+    /// Returns the list of images on the server.
+    pub async fn list(&self) -> Result<Vec<ImageUri>> {
         let opts = ListImagesOptions {
             all: true,
             ..Default::default()
@@ -35,7 +33,15 @@ impl Image<'_> {
         let res = self.0.inner().list_images(Some(opts)).await;
         let images = res.map_err(Error::with_context("failed to list images"))?;
 
-        Ok(List(images))
+        images
+            .into_iter()
+            .flat_map(|image| {
+                image
+                    .repo_tags
+                    .into_iter()
+                    .map(|tag| tag.parse().map_err(Error::unexpected))
+            })
+            .collect()
     }
 
     /// Tags an image so that it becomes part of a repository.
@@ -100,10 +106,10 @@ impl Stream for PullProgress {
                     return Poll::Ready(Some(Err(err)));
                 }
                 Poll::Ready(Some(Ok(info))) => {
-                    if let Some(detail) = info.progress_detail {
-                        if let (Some(current), Some(total)) = (detail.current, detail.total) {
-                            return Poll::Ready(Some(Ok((current, total))));
-                        }
+                    if let Some(detail) = info.progress_detail
+                        && let (Some(current), Some(total)) = (detail.current, detail.total)
+                    {
+                        return Poll::Ready(Some(Ok((current, total))));
                     }
                 }
             }
@@ -113,13 +119,14 @@ impl Stream for PullProgress {
 
 impl Image<'_> {
     /// Returns low-level information about an image.
-    pub async fn inspect(&self, image: &ImageUri) -> Result<LocalImage> {
-        let res = self.0.inner().inspect_image(image.as_str()).await;
+    pub async fn inspect(&self, image: &str) -> Result<LocalImage> {
+        let res = self.0.inner().inspect_image(image).await;
         let info = res
             .map_err(Error::from)
-            .with_context(|| format!("failed to inspect image {}", image.as_str()))?;
+            .with_context(|| format!("failed to inspect image {image}"))?;
 
-        Ok((&info).into())
+        info.try_into()
+            .with_context(|| format!("failed to inspect image {image}"))
     }
 
     /// Removes an image, along with any untagged parent images that were referenced by that image.
@@ -135,6 +142,24 @@ impl Image<'_> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct ImageConfig {
+    /// Command to run specified as an array of strings
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<Vec<String>>,
+
+    /// User-defined key/value metadata
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, String>>,
+}
+
+impl From<bollard::config::ImageConfig> for ImageConfig {
+    fn from(value: bollard::config::ImageConfig) -> Self {
+        let bollard::config::ImageConfig { cmd, labels, .. } = value;
+        Self { cmd, labels }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalImage {
     /// The content-addressable ID of an image.
@@ -147,44 +172,17 @@ pub struct LocalImage {
     /// digests of image manifests that reference the image.
     pub id: String,
 
-    /// User-defined key/value metadata.
-    pub labels: HashMap<String, String>,
+    /// Configuration of the image. These fields are used as defaults when starting a container from the image.
+    pub config: ImageConfig,
 }
 
-// by ref in order to clone only what's necessary to build LocalImage.
-impl<'a> From<&'a ImageSummary> for LocalImage {
-    fn from(value: &'a ImageSummary) -> Self {
-        let id = value.id.clone();
-        let labels = value.labels.clone();
-        Self { id, labels }
-    }
-}
+impl TryFrom<ImageInspect> for LocalImage {
+    type Error = Error;
 
-impl<'a> From<&'a ImageInspect> for LocalImage {
-    fn from(value: &'a ImageInspect) -> Self {
-        // FIXME: when is ID nil?
-        let id = value.id.clone().expect("image ID should not be nil");
-        let labels = value
-            .config
-            .as_ref()
-            .and_then(|c| c.labels.clone())
-            .unwrap_or_default();
-        Self { id, labels }
-    }
-}
+    fn try_from(value: ImageInspect) -> Result<Self> {
+        let id = value.id.ok_or("image ID should not be nil")?;
+        let config = value.config.map(|c| c.into()).unwrap_or_default();
 
-#[derive(Debug, Clone)]
-pub struct List(Vec<ImageSummary>);
-
-type ListItem = std::result::Result<(ImageUri, LocalImage), InvalidImageUriError>;
-
-impl List {
-    pub fn iter(&self) -> impl Iterator<Item = ListItem> + '_ {
-        self.0.iter().flat_map(|image| {
-            image
-                .repo_tags
-                .iter()
-                .map(|tag| Ok((tag.parse()?, image.into())))
-        })
+        Ok(Self { id, config })
     }
 }

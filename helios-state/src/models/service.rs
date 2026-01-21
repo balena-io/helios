@@ -62,10 +62,9 @@ impl FromStr for ServiceContainerName {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim_start_matches('/');
-
         // the container name can never be an empty string, so we
-        // panic here instead of returning an error
+        // panic here instead of returning an error as this is more likely
+        // to be a bug
         assert!(!s.is_empty(), "container name cannot be empty");
 
         // the last component of the string should be the release uuid
@@ -117,6 +116,14 @@ impl ImageRef {
             uri.digest()
         } else {
             None
+        }
+    }
+
+    /// Get the reference as a &str
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Uri(uri) => uri.as_str(),
+            Self::Id(id) => id.as_str(),
         }
     }
 }
@@ -218,20 +225,6 @@ mod tests {
     fn test_service_container_name_single_underscore() {
         let name: ServiceContainerName = "_".parse().unwrap();
         assert_eq!(name.service_name, "_");
-        assert_eq!(name.release_uuid, UNKNOWN_RELEASE_UUID.into());
-    }
-
-    #[test]
-    fn test_service_container_name_with_leading_slash() {
-        let name: ServiceContainerName = "/myservice_abc123".parse().unwrap();
-        assert_eq!(name.service_name, "myservice");
-        assert_eq!(name.release_uuid, "abc123".into());
-    }
-
-    #[test]
-    fn test_service_container_name_with_leading_slash_fallback() {
-        let name: ServiceContainerName = "/myservice".parse().unwrap();
-        assert_eq!(name.service_name, "myservice");
         assert_eq!(name.release_uuid, UNKNOWN_RELEASE_UUID.into());
     }
 }

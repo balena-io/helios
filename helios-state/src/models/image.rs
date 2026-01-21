@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use mahler::state::Map;
-
-use crate::oci::LocalImage;
+use crate::oci::{ImageConfig, LocalImage};
 
 /// Image state stored by the Worker. Differently from other models, Image doesn't
 /// implement `mahler::State` because it is only used internally by the worker and image
@@ -15,16 +13,16 @@ pub struct Image {
     /// Image pull progress
     pub download_progress: i64,
 
-    /// Image labels
+    /// Image configuration
     #[serde(default)]
-    pub labels: Map<String, String>,
+    pub config: ImageConfig,
 }
 
 impl From<LocalImage> for Image {
     fn from(img: LocalImage) -> Self {
         Self {
             engine_id: Some(img.id),
-            labels: img.labels.into_iter().collect(),
+            config: img.config,
             download_progress: 100,
         }
     }

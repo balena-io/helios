@@ -70,7 +70,7 @@ fn tag_image(
         docker.image().tag(&image_ref, &image_name).await?;
 
         // get the updated image information
-        *image = docker.image().inspect(&image_name).await?.into();
+        *image = docker.image().inspect(image_name.as_str()).await?.into();
 
         Ok(image)
     })
@@ -94,7 +94,7 @@ pub(super) fn pull_image(
     // Initialize the image if it doesn't exist
     let image = image.create(Image {
         engine_id: None,
-        labels: Default::default(),
+        config: Default::default(),
         download_progress: 0,
     });
 
@@ -143,7 +143,7 @@ pub(super) fn pull_image(
         }
         trace!("progress=100%");
 
-        let new_img: Image = docker.image().inspect(&image_name).await?.into();
+        let new_img: Image = docker.image().inspect(image_name.as_str()).await?.into();
 
         *image = new_img;
 

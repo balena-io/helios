@@ -6,13 +6,13 @@ pub use bollard::auth::DockerCredentials as Credentials;
 pub use bollard::errors::Error as ConnectionError;
 
 mod image;
-pub use image::{Image, LocalImage};
+pub use image::{Image, ImageConfig, LocalImage};
 
 mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
 mod container;
-pub use container::Container;
+pub use container::{Container, ContainerConfig, LocalContainer};
 
 use helios_util as util;
 
@@ -57,10 +57,22 @@ impl Client {
     }
 }
 
+#[doc(hidden)]
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Debug, thiserror::Error)]
+enum ClientError {
+    #[error(transparent)]
+    Connection(#[from] ConnectionError),
+
+    #[error(transparent)]
+    Unexpected(#[from] BoxError),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
     context: Option<String>,
-    source: ConnectionError,
+    source: ClientError,
 }
 
 impl fmt::Display for Error {
@@ -77,15 +89,23 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     #[inline]
-    pub fn new(source: ConnectionError, context: Option<String>) -> Self {
+    fn new(source: ClientError, context: Option<String>) -> Self {
         Self { source, context }
+    }
+
+    /// Create an ClientError::Unexpected from an input error
+    pub(crate) fn unexpected<E: Into<BoxError>>(error: E) -> Self {
+        Self {
+            source: ClientError::Unexpected(error.into()),
+            context: None,
+        }
     }
 
     /// Returns a `ClientError` partial constructor with the given message as context.
     #[inline]
     pub fn with_context(msg: &'static str) -> impl FnOnce(ConnectionError) -> Self {
         move |source| Error {
-            source,
+            source: source.into(),
             context: Some(msg.to_owned()),
         }
     }
@@ -101,7 +121,28 @@ impl Error {
 impl From<ConnectionError> for Error {
     #[inline]
     fn from(value: ConnectionError) -> Self {
-        Self::new(value, None)
+        Self::new(value.into(), None)
+    }
+}
+
+impl From<BoxError> for Error {
+    #[inline]
+    fn from(value: BoxError) -> Self {
+        Self::new(value.into(), None)
+    }
+}
+
+impl From<&str> for Error {
+    #[inline]
+    fn from(value: &str) -> Self {
+        Error::unexpected(value)
+    }
+}
+
+impl From<String> for Error {
+    #[inline]
+    fn from(value: String) -> Self {
+        Error::unexpected(value)
     }
 }
 
