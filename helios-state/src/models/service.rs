@@ -6,7 +6,7 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::common_types::{ImageUri, Uuid};
-use crate::remote_types::ServiceTarget as RemoteServiceTarget;
+use crate::remote_model::Service as RemoteServiceTarget;
 
 // We don't want to fail if the service is supervised but it doesn't have an app-uuid,
 // this could mean the container was tampered with or it is leftover from an old version of the

@@ -1,6 +1,6 @@
 use mahler::state::{Map, State};
 
-use crate::remote_types::ReleaseTarget as RemoteReleaseTarget;
+use crate::remote_model::Release as RemoteReleaseTarget;
 
 use super::service::Service;
 

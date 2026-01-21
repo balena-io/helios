@@ -4,7 +4,7 @@ use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
-use crate::remote_types::{AppTarget as RemoteAppTarget, DeviceTarget as RemoteDeviceTarget};
+use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::host::Host;

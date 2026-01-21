@@ -18,10 +18,10 @@ userapps = []
 balenahup = []
 
 [dependencies]
-helios-legacy = { path = "../helios-legacy", version = "0" }
-helios-oci = { path = "../helios-oci", version = "0" }
-helios-util = { path = "../helios-util", version = "0" }
-helios-remote-types = { path = "../helios-remote-types", version = "0" }
+helios-legacy.workspace = true
+helios-oci.workspace = true
+helios-util.workspace = true
+helios-remote-model.workspace = true
 
 futures-lite.workspace = true
 mahler.workspace = true

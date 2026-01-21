@@ -1,6 +1,6 @@
 [package]
-name = "helios-remote-types"
-description = "Helios support for balenaCloud target types"
+name = "helios-remote-model"
+description = "Helios support for the balenaCloud device model"
 readme = "README.md"
 
 authors.workspace = true
@@ -13,7 +13,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-util = { path = "../helios-util", version = "0" }
+helios-util.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true

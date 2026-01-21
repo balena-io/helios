@@ -13,7 +13,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-util = { path = "../helios-util", version = "0" }
+helios-util.workspace = true
 
 axum.workspace = true
 reqwest.workspace = true

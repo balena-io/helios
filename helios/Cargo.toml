@@ -13,12 +13,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-api = { path = "../helios-api", version = "0", default-features = false }
-helios-legacy = { path = "../helios-legacy", version = "0" }
-helios-oci = { path = "../helios-oci", version = "0" }
-helios-remote = { path = "../helios-remote", version = "0" }
-helios-state = { path = "../helios-state", version = "0", default-features = false }
-helios-util = { path = "../helios-util", version = "0" }
+helios-api.workspace = true
+helios-legacy.workspace = true
+helios-oci.workspace = true
+helios-remote.workspace = true
+helios-state.workspace = true
+helios-util.workspace = true
 
 clap.workspace = true
 tokio.workspace = true

@@ -13,10 +13,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-helios-legacy = { path = "../helios-legacy", version = "0" }
-helios-remote = { path = "../helios-remote", version = "0" }
-helios-state = { path = "../helios-state", version = "0" }
-helios-util = { path = "../helios-util", version = "0" }
+helios-legacy.workspace = true
+helios-remote.workspace = true
+helios-state.workspace = true
+helios-util.workspace = true
 
 axum.workspace = true
 serde.workspace = true
