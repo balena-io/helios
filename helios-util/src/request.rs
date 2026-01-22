@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -415,10 +416,12 @@ impl Get {
             Ok(response) => response,
             Err(e) => {
                 self.state.record_failure(None);
-                return Err(TryGetError::WillRetry(
-                    e.to_string(),
-                    self.state.current_backoff,
-                ));
+                let err_msg = if let Some(source) = e.source() {
+                    format!("{e}: {source:?}")
+                } else {
+                    e.to_string()
+                };
+                return Err(TryGetError::WillRetry(err_msg, self.state.current_backoff));
             }
         };
         let status = response.status();
@@ -668,10 +671,12 @@ impl Patch {
             Err(e) => {
                 // Re-try network errors
                 state.record_failure(None);
-                return Err(TryPatchError::WillRetry(
-                    e.to_string(),
-                    state.current_backoff,
-                ));
+                let err_msg = if let Some(source) = e.source() {
+                    format!("{e}: {source:?}")
+                } else {
+                    e.to_string()
+                };
+                return Err(TryPatchError::WillRetry(err_msg, state.current_backoff));
             }
         };
         let status = response.status();

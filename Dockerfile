@@ -8,7 +8,7 @@ ARG HELIOS_FEATURES
 # Install build dependencies
 RUN apk add --update --no-cache \
 	build-base \
-	openssl-dev \
+	clang clang-dev cmake \
 	rust cargo
 
 WORKDIR /usr/src/app

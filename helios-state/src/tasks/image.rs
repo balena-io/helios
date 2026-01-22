@@ -1,11 +1,11 @@
+use futures_lite::StreamExt;
 use tokio::sync::RwLock;
+use tracing::trace;
 
-use mahler::extract::{Args, RawTarget, Res, System, Target, View};
+use mahler::extract::{Args, RawTarget, Res, System, View};
+use mahler::job;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::ImageUri;
 use crate::models::{Device, Image, ImageRef, RegistryAuthSet};
@@ -40,24 +40,39 @@ pub(super) fn request_registry_credentials(
 /// Tag an existing image with a new name
 fn tag_image(
     image: View<Option<Image>>,
-    Target(tgt): Target<Image>,
+    // because this function is only called from a method (composite task), we can use RawTarget
+    // and receive any serializable data as the target
+    RawTarget((src_img_name, src_img)): RawTarget<(String, Image)>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-) -> IO<Option<Image>, DockerError> {
-    let engine_id = tgt.engine_id.clone();
+) -> IO<Image, DockerError> {
+    // probably unnecessary, just some defensive programming
+    enforce!(image.is_none(), "image already exists");
 
-    with_io(image, |image| async move {
+    // if both source image and the tagged image are being
+    // created as part of the same plan, the src_image engine id will be null,
+    // because the target is created at planning and is not updated at runtime
+    // for this reason, we use the src_img_name if that's the case. It's also the
+    // same reason why the image is inspected again at the end of the IO block
+    let image_ref = if let Some(id) = &src_img.engine_id {
+        id.clone()
+    } else {
+        src_img_name
+    };
+    let image = image.create(src_img);
+
+    with_io(image, |mut image| async move {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
 
-        docker.image().tag(&engine_id, &image_name).await?;
+        // tag the image
+        docker.image().tag(&image_ref, &image_name).await?;
+
+        // get the updated image information
+        *image = docker.image().inspect(&image_name).await?.into();
 
         Ok(image)
-    })
-    .map(|mut image| {
-        image.replace(tgt.into());
-        image
     })
 }
 
@@ -68,18 +83,20 @@ fn tag_image(
 /// Effect: add the image to the list of images
 /// Action: pull the image from the registry and add it to the images local registry
 pub(super) fn pull_image(
-    mut image: View<Option<Image>>,
+    image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
     auth_client: Res<RwLock<RegistryAuthClient>>,
-) -> IO<Option<Image>, DockerError> {
+) -> IO<Image, DockerError> {
+    // probably unnecessary, just some defensive programming
+    enforce!(image.is_none(), "image already exists");
+
     // Initialize the image if it doesn't exist
-    if image.is_none() {
-        image.replace(Image {
-            engine_id: image_name.to_string(),
-            labels: Default::default(),
-        });
-    }
+    let image = image.create(Image {
+        engine_id: None,
+        labels: Default::default(),
+        download_progress: 0,
+    });
 
     with_io(image, |mut image| async move {
         let docker = docker
@@ -101,11 +118,34 @@ pub(super) fn pull_image(
             None
         };
 
-        // FIXME: progress reporting
-        docker.image().pull(&image_name, credentials).await?;
+        // Report the state
+        let _ = image.flush().await;
+
+        // Report progress
+        let mut stream = docker.image().pull_with_progress(&image_name, credentials);
+        let mut last_logged = -1;
+        while let Some(result) = stream.next().await {
+            let (current, total) = result?;
+            let percent = 100 * current / total;
+            let bucket = percent / 20;
+
+            // limit the number of reports per pull to avoid spamming
+            // the backend
+            if bucket > last_logged {
+                trace!("progress={percent}%");
+                last_logged = bucket;
+
+                image.download_progress = percent;
+
+                // report download progress back to the worker
+                let _ = image.flush().await;
+            }
+        }
+        trace!("progress=100%");
+
         let new_img: Image = docker.image().inspect(&image_name).await?.into();
 
-        image.replace(new_img);
+        *image = new_img;
 
         Ok(image)
     })
@@ -122,12 +162,12 @@ pub(super) fn create_image(
     if let Some(digest) = image_name.digest() {
         let existing = device
             .images
-            .iter()
+            .into_iter()
             .find(|(name, _)| name.digest().is_some_and(|d| d == digest));
 
-        if let Some((_, image)) = existing {
+        if let Some((src_img_name, src_img)) = existing {
             // If an image with the same digest exists, we just need to tag it
-            return Some(tag_image.with_target(image.clone()));
+            return Some(tag_image.with_target((src_img_name, src_img)));
         }
     }
 
@@ -149,7 +189,7 @@ pub(super) fn create_image(
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
 fn remove_image(
-    img_ptr: View<Option<Image>>,
+    img_ptr: View<Image>,
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,
     docker: Res<Docker>,
@@ -166,8 +206,11 @@ fn remove_image(
             })
         })
     }) {
-        return img_ptr.into();
+        return IO::abort("image is still in use");
     }
+
+    // delete the image
+    let img_ptr = img_ptr.delete();
 
     with_io(img_ptr, |img_ptr| async move {
         let docker = docker
@@ -178,11 +221,6 @@ fn remove_image(
 
         Ok(img_ptr)
     })
-    .map(|mut img| {
-        // delete the image pointer
-        img.take();
-        img
-    })
 }
 
 /// Update worker with image tasks
@@ -190,24 +228,25 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
     worker
         .job(
             "/auths",
-            task::none(request_registry_credentials)
+            job::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
         .jobs(
             "/images/{image_name}",
             [
-                task::none(pull_image).with_description(|Args(image_name): Args<String>| {
+                job::none(pull_image).with_description(|Args(image_name): Args<String>| {
                     format!("pull image '{image_name}'")
                 }),
-                task::none(remove_image).with_description(|Args(image_name): Args<String>| {
+                job::none(remove_image).with_description(|Args(image_name): Args<String>| {
                     format!("delete image '{image_name}'")
                 }),
-                task::none(tag_image).with_description(
-                    |Args(image_name): Args<String>, tgt: Target<Image>| {
-                        format!("tag image '{}' as '{image_name}'", tgt.engine_id)
+                job::none(tag_image).with_description(
+                    |Args(image_name): Args<String>,
+                     RawTarget((src_img_name, _)): RawTarget<(String, Image)>| {
+                        format!("tag image '{src_img_name}' as '{image_name}'")
                     },
                 ),
-                task::none(create_image),
+                job::none(create_image),
             ],
         )
 }

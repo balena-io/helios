@@ -11,11 +11,11 @@ use super::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
-    #[error("Failed to connect to Docker daemon: {0}")]
+    #[error("failed to connect to Docker daemon: {0}")]
     DockerConnection(#[from] DockerError),
 
-    #[error("Failed to serialize initial state: {0}")]
-    StateSerialization(#[from] mahler::errors::SerializationError),
+    #[error("failed to initialize worker: {0}")]
+    WorkerInit(#[from] mahler::error::Error),
 }
 
 /// Configure the worker jobs
@@ -68,7 +68,7 @@ mod tests {
     use super::*;
     use crate::models::DeviceTarget;
 
-    use mahler::workflow::{Dag, par, seq};
+    use mahler::dag::{Dag, par, seq};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::{self, format::FmtSpan};

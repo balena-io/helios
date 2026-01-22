@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
 use mahler::extract::{Args, Res, System, Target, View};
+use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
-use mahler::{
-    task,
-    worker::{Uninitialized, Worker},
-};
+use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
@@ -96,21 +94,23 @@ fn request_registry_token_for_new_images(
 
 /// Initialize the app and store its local data
 fn prepare_app(
-    mut maybe_app: View<Option<App>>,
+    maybe_app: View<Option<App>>,
     Target(tgt_app): Target<App>,
     Args(app_uuid): Args<Uuid>,
     store: Res<Store>,
-) -> IO<Option<App>, StoreError> {
+) -> IO<App, StoreError> {
+    enforce!(maybe_app.is_none(), "app already exists");
+
     let AppTarget { id, name, .. } = tgt_app;
-    maybe_app.replace(App {
+    let app = maybe_app.create(App {
         id,
         name,
         releases: Map::new(),
     });
 
-    with_io(maybe_app, async move |maybe_app| {
+    with_io(app, async move |app| {
         // store id and name as local state
-        if let (Some(app), Some(local_store)) = (maybe_app.as_ref(), store.as_ref()) {
+        if let Some(local_store) = store.as_ref() {
             local_store
                 .write(format!("/apps/{app_uuid}"), "id", &app.id)
                 .await?;
@@ -119,7 +119,7 @@ fn prepare_app(
                 .await?;
         }
 
-        Ok(maybe_app)
+        Ok(app)
     })
 }
 
@@ -207,11 +207,10 @@ fn fetch_apps_images(
 }
 
 /// Initialize an empty release
-fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
-    release.replace(Release {
+fn prepare_release(release: View<Option<Release>>) -> View<Release> {
+    release.create(Release {
         services: Map::new(),
-    });
-    release
+    })
 }
 
 /// Install the service
@@ -219,28 +218,30 @@ fn prepare_release(mut release: View<Option<Release>>) -> View<Option<Release>> 
 /// FIXME: this only creates the service in memory for now, as we add features, this will also
 /// create the service container
 fn install_service(
-    mut maybe_svc: View<Option<Service>>,
+    maybe_svc: View<Option<Service>>,
     System(device): System<Device>,
     Target(tgt): Target<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     store: Res<Store>,
-) -> IO<Option<Service>, StoreError> {
+) -> IO<Service, StoreError> {
     // Skip the task if the image for the service doesn't exist yet
     if let ImageRef::Uri(tgt_img) = &tgt.image {
-        if !device.images.contains_key(tgt_img) {
-            return maybe_svc.into();
-        }
+        enforce!(
+            device.images.contains_key(tgt_img),
+            "image {tgt_img} not found"
+        );
     } else {
-        return maybe_svc.into();
+        // this should not happen
+        return IO::abort("target image must be an URI");
     }
 
     let ServiceTarget { id, image, .. } = tgt;
-    maybe_svc.replace(Service { id, image });
+    let svc = maybe_svc.create(Service { id, image });
 
-    with_io(maybe_svc, async move |maybe_svc| {
+    with_io(svc, async move |svc| {
         // FIXME: create/manage container
 
-        if let (Some(svc), Some(local_store)) = (maybe_svc.as_ref(), store.as_ref()) {
+        if let Some(local_store) = store.as_ref() {
             // store the image uri that corresponds to the current release service
             local_store
                 .write(
@@ -251,7 +252,7 @@ fn install_service(
                 .await?;
         }
 
-        Ok(maybe_svc)
+        Ok(svc)
     })
 }
 
@@ -284,25 +285,25 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/apps",
             [
-                task::update(request_registry_token_for_new_images),
-                task::update(fetch_apps_images),
+                job::update(request_registry_token_for_new_images),
+                job::update(fetch_apps_images),
             ],
         )
         .job(
             "/apps/{app_uuid}",
-            task::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            job::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
         .job(
             "/apps/{app_uuid}/name",
-            task::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
+            job::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
                 format!("update name for app with uuid '{uuid}'")
             }),
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [task::create(prepare_release).with_description(
+            [job::create(prepare_release).with_description(
                 |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                     format!("initialize release '{commit}' for app with uuid '{uuid}'")
                 },
@@ -310,7 +311,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
-            [task::create(install_service).with_description(
+            [job::create(install_service).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!("initialize service '{service_name}' for release '{commit}'")
                 },
@@ -318,7 +319,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .job(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}/image",
-            task::update(update_service_image_metadata).with_description(
+            job::update(update_service_image_metadata).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
                         "update image metadata for service '{service_name}' of release '{commit}'"
