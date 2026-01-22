@@ -1,4 +1,22 @@
 - commits:
+    - subject: Improve safe_write_all
+      hash: 0be739d1a9b0151d908034adfe2276b489f4781e
+      body: |
+        The function now groups all synchronous filesystem calls in the same
+        task/thread rather than allowing context to change because of the
+        runtime. This should make the function safer and faster.
+
+        The function will also try to remove the tmp file if an error happens in
+        any step.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.13.4
+  title: ""
+  date: 2026-01-22T20:06:14.758Z
+- commits:
     - subject: Refactor Image model to have an optional engine id
       hash: a3e113fc7f4e1b8afd772e5c0a32ebfafbe645b2
       body: |
