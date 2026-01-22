@@ -1,4 +1,56 @@
 - commits:
+    - subject: Refactor Image model to have an optional engine id
+      hash: a3e113fc7f4e1b8afd772e5c0a32ebfafbe645b2
+      body: |
+        This allows that the data from the Helios API is semantically correct
+        when an image download is in progress. It should always be the case that
+        engine_id = null if download_progress < 100.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add download_progress field to Worker images
+      hash: 2efd8d670b092fe530cf0263b87a7d64097d0182
+      body: |
+        Report download progress from image pull task
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add `pull_with_progress` method to helios_oci::Image
+      hash: 66912ba936e049088ed6c4d5c8edaf49f6165b97
+      body: |
+        This method returns a Stream of progress updates that can be used by
+        tasks for state reporting.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use mahler View::create and View::delete method in tasks
+      hash: efc78a525db41523e110cd5d11f59827ac408fe5
+      body: |
+        This simplifies types and makes code simpler
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Update mahler to v0.24.1
+      hash: 5f713c0e97adf549fcc82051a5c28e741801f90e
+      body: |
+        Also bump bollard
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.13.3
+  title: ""
+  date: 2026-01-22T19:34:52.541Z
+- commits:
     - subject: Recreate the worker before applying state
       hash: 631adda6d3c3c6b3ee6f04842ed632b27d5a1401
       body: |
