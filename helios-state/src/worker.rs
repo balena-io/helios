@@ -153,14 +153,14 @@ mod tests {
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
                 "update device name",
-                "update name for app with uuid 'my-app-uuid'",
+                "store name for app with uuid 'my-app-uuid'",
             )
             + seq!("perform clean-up");
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
     #[tokio::test]
-    async fn it_finds_a_workflow_to_change_an_app_name() {
+    async fn it_finds_a_workflow_to_change_an_app_name_and_id() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
@@ -169,7 +169,7 @@ mod tests {
             "auths": [],
             "apps": {
                 "my-app-uuid": {
-                    "id": 1,
+                    "id": 0,
                     "name": "my-app",
                 }
             },
@@ -190,11 +190,12 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!(
-            "ensure clean-up",
-            "update name for app with uuid 'my-app-uuid'",
-            "perform clean-up"
-        );
+        let expected: Dag<&str> = seq!("ensure clean-up")
+            + par!(
+                "store id for app with uuid 'my-app-uuid'",
+                "store name for app with uuid 'my-app-uuid'"
+            )
+            + seq!("perform clean-up");
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
@@ -351,7 +352,7 @@ mod tests {
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!(
             "ensure clean-up",
-            "update image metadata for service 'one' of release 'my-release-uuid'",
+            "store image metadata for service 'one' of release 'my-release-uuid'",
             "perform clean-up"
         );
 

@@ -118,17 +118,10 @@ pub async fn read(
                 .unwrap_or(UNKNOWN_APP_UUID.into());
 
             // Create the app if it doesn't exist yet
-            let app = apps.entry(app_uuid.clone()).or_insert_with(|| {
-                let id: u32 = labels
-                    .and_then(|l| l.get("io.balena.app-id"))
-                    .and_then(|id| id.parse().ok())
-                    .unwrap_or(0);
-
-                App {
-                    id,
-                    name: None,
-                    releases: Map::new(),
-                }
+            let app = apps.entry(app_uuid.clone()).or_insert_with(|| App {
+                id: 0,
+                name: None,
+                releases: Map::new(),
             });
 
             // Read the app name from the local state

@@ -102,7 +102,7 @@ fn request_registry_token_for_new_images(
 }
 
 /// Initialize the app and store its local data
-fn prepare_app(
+fn create_app(
     maybe_app: View<Option<App>>,
     Target(tgt_app): Target<App>,
     Args(app_uuid): Args<Uuid>,
@@ -118,22 +118,38 @@ fn prepare_app(
     });
 
     with_io(app, async move |app| {
+        let local_store = store.as_ref().expect("store should be available");
         // store id and name as local state
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .write(format!("/apps/{app_uuid}"), "id", &app.id)
-                .await?;
-            local_store
-                .write(format!("/apps/{app_uuid}"), "name", &app.name)
-                .await?;
-        }
+        local_store
+            .write(format!("/apps/{app_uuid}"), "id", &app.id)
+            .await?;
+        local_store
+            .write(format!("/apps/{app_uuid}"), "name", &app.name)
+            .await?;
 
         Ok(app)
     })
 }
 
+/// Update the local app id
+fn store_app_id(
+    mut id: View<u32>,
+    Target(tgt): Target<u32>,
+    Args(app_uuid): Args<String>,
+    store: Res<Store>,
+) -> IO<u32, StoreError> {
+    *id = tgt;
+    with_io(id, async move |id| {
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .write(format!("/apps/{app_uuid}"), "id", &*id)
+            .await?;
+        Ok(id)
+    })
+}
+
 /// Update the local app name
-fn set_app_name(
+fn store_app_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
     Args(app_uuid): Args<String>,
@@ -141,11 +157,10 @@ fn set_app_name(
 ) -> IO<Option<String>, StoreError> {
     *name = tgt;
     with_io(name, async move |name| {
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .write(format!("/apps/{app_uuid}"), "name", &*name)
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .write(format!("/apps/{app_uuid}"), "name", &*name)
+            .await?;
         Ok(name)
     })
 }
@@ -310,7 +325,7 @@ fn install_service(
     })
 }
 
-fn update_service_image_metadata(
+fn store_service_image_uri(
     mut img: View<ImageRef>,
     Target(tgt): Target<ImageUri>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
@@ -319,16 +334,15 @@ fn update_service_image_metadata(
     *img = ImageRef::Uri(tgt);
 
     with_io(img, async move |img| {
-        if let Some(local_store) = store.as_ref() {
-            // store the image uri that corresponds to the current release service
-            local_store
-                .write(
-                    format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
-                    "image",
-                    &*img,
-                )
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        // store the image uri that corresponds to the current release service
+        local_store
+            .write(
+                format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
+                "image",
+                &*img,
+            )
+            .await?;
         Ok(img)
     })
 }
@@ -345,14 +359,20 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .job(
             "/apps/{app_uuid}",
-            job::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            job::create(create_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
         .job(
             "/apps/{app_uuid}/name",
-            job::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
-                format!("update name for app with uuid '{uuid}'")
+            job::any(store_app_name).with_description(|Args(uuid): Args<Uuid>| {
+                format!("store name for app with uuid '{uuid}'")
+            }),
+        )
+        .job(
+            "/apps/{app_uuid}/id",
+            job::update(store_app_id).with_description(|Args(uuid): Args<Uuid>| {
+                format!("store id for app with uuid '{uuid}'")
             }),
         )
         .jobs(
@@ -376,10 +396,10 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .job(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}/image",
-            job::update(update_service_image_metadata).with_description(
+            job::update(store_service_image_uri).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
-                        "update image metadata for service '{service_name}' of release '{commit}'"
+                        "store image metadata for service '{service_name}' of release '{commit}'"
                     )
                 },
             ),

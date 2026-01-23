@@ -100,9 +100,6 @@ impl DeviceTarget {
                         .insert(format!("{svc_name}_{rel_uuid}"));
                     svc.config
                         .labels
-                        .insert("io.balena.app-id".to_string(), app.id.to_string());
-                    svc.config
-                        .labels
                         .insert("io.balena.app-uuid".to_string(), app_uuid.to_string());
                 }
             }
