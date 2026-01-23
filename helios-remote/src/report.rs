@@ -180,34 +180,31 @@ fn calculate_report_diff(
     if let Some(old_device) = last_report
         .as_ref()
         .and_then(|old_report| old_report.get(&device_uuid))
-    {
-        if let Some(device) = new_report
+        && let Some(device) = new_report
             .get_mut(&device_uuid)
             .and_then(|d| d.as_object_mut())
-        {
-            if let Some(apps) = device.get_mut("apps").and_then(|a| a.as_object_mut()) {
-                // Track which apps to remove
-                let apps_to_remove: Vec<String> = apps
-                    .iter()
-                    .filter(|(app_uuid, app)| {
-                        old_device
-                            .get("apps")
-                            .and_then(|old_apps| old_apps.get(*app_uuid))
-                            == Some(*app)
-                    })
-                    .map(|(uuid, _)| uuid.clone())
-                    .collect();
+        && let Some(apps) = device.get_mut("apps").and_then(|a| a.as_object_mut())
+    {
+        // Track which apps to remove
+        let apps_to_remove: Vec<String> = apps
+            .iter()
+            .filter(|(app_uuid, app)| {
+                old_device
+                    .get("apps")
+                    .and_then(|old_apps| old_apps.get(*app_uuid))
+                    == Some(*app)
+            })
+            .map(|(uuid, _)| uuid.clone())
+            .collect();
 
-                // Remove unchanged apps
-                for app_uuid in apps_to_remove {
-                    apps.remove(&app_uuid);
-                }
+        // Remove unchanged apps
+        for app_uuid in apps_to_remove {
+            apps.remove(&app_uuid);
+        }
 
-                // Remove apps field if empty
-                if apps.is_empty() {
-                    device.remove("apps");
-                }
-            }
+        // Remove apps field if empty
+        if apps.is_empty() {
+            device.remove("apps");
         }
     }
 

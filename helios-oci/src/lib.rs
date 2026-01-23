@@ -83,7 +83,7 @@ impl Error {
 
     /// Returns a `ClientError` partial constructor with the given message as context.
     #[inline]
-    pub fn with_context(msg: &'static str) -> impl (FnOnce(ConnectionError) -> Self) {
+    pub fn with_context(msg: &'static str) -> impl FnOnce(ConnectionError) -> Self {
         move |source| Error {
             source,
             context: Some(msg.to_owned()),

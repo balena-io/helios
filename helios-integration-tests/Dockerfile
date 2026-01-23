@@ -1,4 +1,4 @@
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Install build dependencies and dbus
 RUN apk add --update --no-cache \

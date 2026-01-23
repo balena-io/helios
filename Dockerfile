@@ -1,7 +1,7 @@
 # Comma-separated list of features
 ARG HELIOS_FEATURES=all
 
-FROM alpine:3.22 AS build
+FROM alpine:3.23 AS build
 
 ARG HELIOS_FEATURES
 
@@ -29,7 +29,7 @@ COPY helios-util ./helios-util
 RUN cargo build --no-default-features --features $HELIOS_FEATURES --release --locked
 
 # Release target
-FROM alpine:3.22
+FROM alpine:3.23
 
 WORKDIR /opt/helios
 
