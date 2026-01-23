@@ -271,15 +271,15 @@ mod tests {
                         as 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
                 "pull image 'alpine:3.20'",
             )
-            + seq!(
-                "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                "initialize service 'service1' for release 'my-release-uuid'",
-                "initialize service 'service2' for release 'my-release-uuid'",
-                "initialize service 'service3' for release 'my-release-uuid'",
-                "initialize service 'service4' for release 'my-release-uuid'",
-                "initialize service 'service5' for release 'my-release-uuid'",
-                "perform clean-up"
-            );
+            + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            + par!(
+                "install service 'service1' for release 'my-release-uuid'",
+                "install service 'service2' for release 'my-release-uuid'",
+                "install service 'service3' for release 'my-release-uuid'",
+                "install service 'service4' for release 'my-release-uuid'",
+                "install service 'service5' for release 'my-release-uuid'",
+            )
+            + seq!("perform clean-up");
 
         assert_eq!(
             workflow.to_string(),
