@@ -1,4 +1,95 @@
 - commits:
+    - subject: Remove app-id from service labels
+      hash: dbda96beb36c0f5396737ff6d62ef443a1b284a0
+      body: |
+        The app-id just exists for legacy reasons and there is no need to keep
+        it as a reference on the service
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Update install_service to create container
+      hash: 6a81afd4f084709b4cbb115346051cd64b8730cb
+      body: |
+        Uses the updated types to create the service container on the install
+        task and populate its state with the data from the engine.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Refactor local service model
+      hash: 33dae221f4e0b08601b7d5930d5ab2d963981643
+      body: |
+        Performs multiple changes to be able to create tasks to work with
+        services, including reading service configurations from the engine and
+        creating container configuration when creating containers.
+
+        - Adds container_id to keep track of the enginer id for the service
+        - Adds config property and conversions from the remote target state and
+          oci configurations. The config property contains the container_name
+          which is set when normalizing the target state
+        - Moves ImageRef to helios_state::models::image
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Refactor helios-oci types
+      hash: cf50c4d640c3ba4a98f0e3fcd46747d5b1a97eb9
+      body: |
+        Introduces ImageConfig and ContainerConfig types, these are used inside
+        LocalImage and LocalContainer to provide the configuration of these
+        engine elements.
+
+        ContainerConfig is now used as argument to a new `Container::create`
+        method that allows the creation of a container.
+
+        This means that when inspecting a container, the configuration returned
+        for the container can also be re-used to re-create that container.
+
+        This also modifies helios_oci::image::inspect to accept &str, so it can
+        be used to query an image by its id.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Refactor remote service model
+      hash: 30b4af277d1e3798bf0356702ef5ae78f00bd4eb
+      body: |
+        Adds composition.command and composition.labels and creates types to
+        correctly process the values coming from the backend. It also adds
+        serde_path_to_error as a dependency for contextualizing input errors.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Rename helios-remote-types to helios-remote-model
+      hash: e0409896a2f147ea22b6edbc8761fdfd1c623395
+      body: |
+        Also re-organize the sub-crate a bit to start adding support for compose
+        features.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Update MSRV to 1.89
+      hash: f2b89daede573d5709ab35347b8c3ff522d1eedd
+      body: |
+        Needed to take advantage of some new functions in the standard library
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+  version: 0.14.0
+  title: ""
+  date: 2026-01-27T07:54:19.688Z
+- commits:
     - subject: Improve safe_write_all
       hash: 0be739d1a9b0151d908034adfe2276b489f4781e
       body: |
