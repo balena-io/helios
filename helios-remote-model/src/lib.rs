@@ -1,6 +1,6 @@
 //! Target types received from the remote backend
 //!
-//! All input validations should happen here
+//! All input validations should happen in this module
 //!
 //! the types are based  from https://github.com/balena-io/open-balena-api/blob/master/src/features/device-state/routes/state-get-v3.ts#L48
 
@@ -10,57 +10,91 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use helios_util::types::{ImageUri, Uuid};
+mod command;
+mod labels;
+mod network;
+mod service;
+mod volume;
+
+pub use command::*;
+pub use labels::*;
+pub use network::*;
+pub use service::*;
+pub use volume::*;
+
+use helios_util::types as common_types;
+
+use common_types::{ImageUri, Uuid};
 
 /// Target device as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
-pub struct DeviceTarget {
+#[derive(Clone, Debug)]
+pub struct Device {
     pub name: String,
+    pub apps: AppMap,
+}
 
+/// Internal struct for deriving Deserialize
+#[derive(Deserialize)]
+struct DeviceRaw {
+    name: String,
     #[serde(default)]
-    pub apps: AppTargetMap,
+    apps: AppMap,
+}
+
+impl<'de> Deserialize<'de> for Device {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        serde_path_to_error::deserialize(deserializer)
+            .map(|raw: DeviceRaw| Device {
+                name: raw.name,
+                apps: raw.apps,
+            })
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct AppTargetMap(HashMap<Uuid, AppTarget>);
+pub struct AppMap(HashMap<Uuid, App>);
 
-impl Deref for AppTargetMap {
-    type Target = HashMap<Uuid, AppTarget>;
+impl Deref for AppMap {
+    type Target = HashMap<Uuid, App>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for AppTargetMap {
+impl DerefMut for AppMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl IntoIterator for AppTargetMap {
-    type Item = (Uuid, AppTarget);
-    type IntoIter = std::collections::hash_map::IntoIter<Uuid, AppTarget>;
+impl IntoIterator for AppMap {
+    type Item = (Uuid, App);
+    type IntoIter = std::collections::hash_map::IntoIter<Uuid, App>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
-impl<'de> Deserialize<'de> for AppTargetMap {
+impl<'de> Deserialize<'de> for AppMap {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize, Clone, Debug)]
-        struct RemoteAppTarget {
+        struct AppTarget {
             pub id: u32,
             pub name: String,
             #[serde(default)]
             pub is_host: bool,
             #[serde(default)]
-            pub releases: ReleaseTargetMap,
+            pub releases: ReleaseMap,
         }
 
-        let remote_apps: HashMap<Uuid, RemoteAppTarget> = HashMap::deserialize(deserializer)?;
+        let remote_apps: HashMap<Uuid, AppTarget> = HashMap::deserialize(deserializer)?;
 
         // validate that there is only one hostapp
         if remote_apps.iter().filter(|(_, app)| app.is_host).count() > 1 {
@@ -71,17 +105,14 @@ impl<'de> Deserialize<'de> for AppTargetMap {
 
         let mut apps = HashMap::new();
         for (app_uuid, app) in remote_apps {
-            let RemoteAppTarget {
+            let AppTarget {
                 id,
                 name,
                 releases,
                 is_host,
             } = app;
             if !is_host {
-                apps.insert(
-                    app_uuid,
-                    AppTarget::User(UserAppTarget { id, name, releases }),
-                );
+                apps.insert(app_uuid, App::User(UserApp { id, name, releases }));
             // Only select the hostapp if it has the appropriate metadata
             } else if let Some((release_uuid, release)) = releases.into_iter().next() {
                 let hostapp = release.services.into_values().find(|svc| {
@@ -117,7 +148,7 @@ impl<'de> Deserialize<'de> for AppTargetMap {
                     if let Some(board_rev) = labels.remove("io.balena.private.hostapp.board-rev") {
                         apps.insert(
                             app_uuid,
-                            AppTarget::Host(HostAppTarget {
+                            App::Host(HostApp {
                                 release_uuid,
                                 image: svc.image,
                                 board_rev,
@@ -133,18 +164,18 @@ impl<'de> Deserialize<'de> for AppTargetMap {
             }
         }
 
-        Ok(AppTargetMap(apps))
+        Ok(AppMap(apps))
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum AppTarget {
-    User(UserAppTarget),
-    Host(HostAppTarget),
+pub enum App {
+    User(UserApp),
+    Host(HostApp),
 }
 
 #[derive(Clone, Debug)]
-pub struct HostAppTarget {
+pub struct HostApp {
     pub release_uuid: Uuid,
     pub image: ImageUri,
     pub board_rev: String,
@@ -153,44 +184,44 @@ pub struct HostAppTarget {
 
 /// Target app as defined by the remote backend
 #[derive(Deserialize, Clone, Debug)]
-pub struct UserAppTarget {
+pub struct UserApp {
     pub id: u32,
     pub name: String,
     #[serde(default)]
-    pub releases: ReleaseTargetMap,
+    pub releases: ReleaseMap,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ReleaseTargetMap(HashMap<Uuid, ReleaseTarget>);
+pub struct ReleaseMap(HashMap<Uuid, Release>);
 
-impl Deref for ReleaseTargetMap {
-    type Target = HashMap<Uuid, ReleaseTarget>;
+impl Deref for ReleaseMap {
+    type Target = HashMap<Uuid, Release>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for ReleaseTargetMap {
+impl DerefMut for ReleaseMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl IntoIterator for ReleaseTargetMap {
-    type Item = (Uuid, ReleaseTarget);
-    type IntoIter = std::collections::hash_map::IntoIter<Uuid, ReleaseTarget>;
+impl IntoIterator for ReleaseMap {
+    type Item = (Uuid, Release);
+    type IntoIter = std::collections::hash_map::IntoIter<Uuid, Release>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl<'de> Deserialize<'de> for ReleaseTargetMap {
+impl<'de> Deserialize<'de> for ReleaseMap {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let releases: HashMap<Uuid, ReleaseTarget> = HashMap::deserialize(deserializer)?;
+        let releases: HashMap<Uuid, Release> = HashMap::deserialize(deserializer)?;
 
         if releases.len() > 1 {
             return Err(serde::de::Error::custom(
@@ -203,45 +234,16 @@ impl<'de> Deserialize<'de> for ReleaseTargetMap {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct ReleaseTarget {
+pub struct Release {
     #[serde(default)]
-    pub services: HashMap<String, ServiceTarget>,
+    pub services: HashMap<String, Service>,
 
     #[serde(default)]
-    pub volumes: HashMap<String, VolumeTarget>,
+    pub volumes: HashMap<String, Volume>,
 
     #[serde(default)]
-    pub networks: HashMap<String, NetworkTarget>,
+    pub networks: HashMap<String, Network>,
 }
-
-/// Target app as defined by the remote backend
-// FIXME: add remaining fields
-#[derive(Deserialize, Clone, Debug)]
-pub struct ServiceTarget {
-    pub id: u32,
-    pub image: ImageUri,
-
-    #[serde(default)]
-    pub labels: HashMap<String, String>,
-
-    #[serde(default)]
-    pub composition: ServiceTargetComposition,
-}
-
-// TODO: replace this type with Service from https://crates.io/crates/docker-compose-types
-#[derive(Deserialize, Clone, Debug, Default)]
-pub struct ServiceTargetComposition {
-    #[serde(default)]
-    pub labels: HashMap<String, String>,
-}
-
-// FIXME: add remaining fields
-#[derive(Deserialize, Clone, Debug)]
-pub struct VolumeTarget {}
-
-// FIXME: add remaining fields
-#[derive(Deserialize, Clone, Debug)]
-pub struct NetworkTarget {}
 
 #[cfg(test)]
 mod tests {
@@ -252,7 +254,7 @@ mod tests {
     fn test_accepts_empty_releases() {
         let json = json!({});
 
-        let releases: ReleaseTargetMap = serde_json::from_value(json).unwrap();
+        let releases: ReleaseMap = serde_json::from_value(json).unwrap();
         assert_eq!(releases.len(), 0)
     }
 
@@ -262,7 +264,7 @@ mod tests {
             "release-one": {}
         });
 
-        let releases: ReleaseTargetMap = serde_json::from_value(json).unwrap();
+        let releases: ReleaseMap = serde_json::from_value(json).unwrap();
         assert_eq!(releases.len(), 1);
         assert!(releases.contains_key(&"release-one".into()));
     }
@@ -276,7 +278,7 @@ mod tests {
                 },
         });
 
-        let release = serde_json::from_value::<ReleaseTargetMap>(json);
+        let release = serde_json::from_value::<ReleaseMap>(json);
         assert!(release.is_err());
     }
 
@@ -295,7 +297,7 @@ mod tests {
             }
         });
 
-        let apps = serde_json::from_value::<AppTargetMap>(json);
+        let apps = serde_json::from_value::<AppMap>(json);
         assert!(apps.is_err_and(|e| e.to_string() == "only one target hostapp is allowed"));
     }
 
@@ -311,12 +313,47 @@ mod tests {
 
         });
 
-        let apps = serde_json::from_value::<AppTargetMap>(json);
+        let apps = serde_json::from_value::<AppMap>(json);
         assert!(
             apps.is_err_and(
                 |e| e.to_string() == "the hostapp must have at least one target release"
             )
         );
+    }
+
+    #[test]
+    fn test_rejects_target_service_with_invalid_command() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "command": "echo 'hello world",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+
+        });
+
+        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "apps.?.releases.?.services.main.composition.command: missing closing quote"
+        )
     }
 
     #[test]
@@ -342,7 +379,7 @@ mod tests {
             }
         });
 
-        let releases: ReleaseTargetMap = serde_json::from_value(json).unwrap();
+        let releases: ReleaseMap = serde_json::from_value(json).unwrap();
         assert_eq!(releases.len(), 1);
         assert!(releases.contains_key(&"release-one".into()));
     }
@@ -385,14 +422,14 @@ mod tests {
         }
         });
 
-        let apps: AppTargetMap = serde_json::from_value(json).unwrap();
+        let apps: AppMap = serde_json::from_value(json).unwrap();
         assert_eq!(apps.len(), 1);
 
         let app = apps
             .get(&"ea8013b1a82540b59bc8b109b45739ab".into())
             .unwrap();
 
-        if let AppTarget::Host(hostapp) = app {
+        if let App::Host(hostapp) = app {
             assert_eq!(
                 hostapp.release_uuid,
                 "c8b48659434e80a8b3adc0c5ad1e347a".into()

@@ -2,11 +2,9 @@ use std::convert::Infallible;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::common_types::{ImageUri, Uuid};
-use crate::remote_types::ServiceTarget as RemoteServiceTarget;
+use crate::common_types::Uuid;
 
 // We don't want to fail if the service is supervised but it doesn't have an app-uuid,
 // this could mean the container was tampered with or it is leftover from an old version of the
@@ -62,10 +60,9 @@ impl FromStr for ServiceContainerName {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim_start_matches('/');
-
         // the container name can never be an empty string, so we
-        // panic here instead of returning an error
+        // panic here instead of returning an error as this is more likely
+        // to be a bug
         assert!(!s.is_empty(), "container name cannot be empty");
 
         // the last component of the string should be the release uuid
@@ -90,82 +87,6 @@ impl FromStr for ServiceContainerName {
             service_name,
             release_uuid: release_uuid.into(),
         })
-    }
-}
-
-/// An image reference is either a image URI or a content addressable image ID
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ImageRef {
-    /// A URI reference
-    Uri(ImageUri),
-
-    /// A content addressable image id
-    Id(String),
-}
-
-impl State for ImageRef {
-    type Target = Self;
-}
-
-impl ImageRef {
-    /// Convenience method to get the digest of an image ref
-    ///
-    /// Returns None if the image is not a Uri or the Uri does not have a digest
-    pub fn digest(&self) -> Option<&String> {
-        if let Self::Uri(uri) = self {
-            uri.digest()
-        } else {
-            None
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ImageRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s: String = String::deserialize(deserializer)?;
-        if s.starts_with("sha256:") {
-            return Ok(ImageRef::Id(s));
-        }
-
-        let uri: ImageUri = s.parse().map_err(serde::de::Error::custom)?;
-        Ok(ImageRef::Uri(uri))
-    }
-}
-
-impl From<ImageUri> for ImageRef {
-    fn from(uri: ImageUri) -> Self {
-        ImageRef::Uri(uri)
-    }
-}
-
-#[derive(State, Debug, Clone)]
-#[mahler(derive(PartialEq, Eq))]
-pub struct Service {
-    /// Service ID on the remote backend
-    pub id: u32,
-
-    /// Service image URI
-    pub image: ImageRef,
-}
-
-impl From<Service> for ServiceTarget {
-    fn from(svc: Service) -> Self {
-        let Service { id, image } = svc;
-        ServiceTarget { id, image }
-    }
-}
-
-impl From<RemoteServiceTarget> for ServiceTarget {
-    fn from(service: RemoteServiceTarget) -> Self {
-        let RemoteServiceTarget { id, image, .. } = service;
-        ServiceTarget {
-            id,
-            image: image.into(),
-        }
     }
 }
 
@@ -218,20 +139,6 @@ mod tests {
     fn test_service_container_name_single_underscore() {
         let name: ServiceContainerName = "_".parse().unwrap();
         assert_eq!(name.service_name, "_");
-        assert_eq!(name.release_uuid, UNKNOWN_RELEASE_UUID.into());
-    }
-
-    #[test]
-    fn test_service_container_name_with_leading_slash() {
-        let name: ServiceContainerName = "/myservice_abc123".parse().unwrap();
-        assert_eq!(name.service_name, "myservice");
-        assert_eq!(name.release_uuid, "abc123".into());
-    }
-
-    #[test]
-    fn test_service_container_name_with_leading_slash_fallback() {
-        let name: ServiceContainerName = "/myservice".parse().unwrap();
-        assert_eq!(name.service_name, "myservice");
         assert_eq!(name.release_uuid, UNKNOWN_RELEASE_UUID.into());
     }
 }

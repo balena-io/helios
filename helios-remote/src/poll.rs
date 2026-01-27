@@ -13,7 +13,7 @@ use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::types::DeviceTarget;
+use super::model::Device as DeviceTarget;
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();

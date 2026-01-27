@@ -126,10 +126,10 @@ impl FromStr for ImageUri {
             tag.map(|t| t.to_owned())
         };
 
-        if let Some(ref d) = digest {
-            if !IMAGE_DIGEST_RE.is_match(d) {
-                return Err(InvalidImageUriError(uri.into()));
-            }
+        if let Some(ref d) = digest
+            && !IMAGE_DIGEST_RE.is_match(d)
+        {
+            return Err(InvalidImageUriError(uri.into()));
         }
 
         let normalized = {

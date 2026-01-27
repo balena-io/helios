@@ -1,7 +1,7 @@
 use mahler::state::{Map, State};
 
 use crate::common_types::Uuid;
-use crate::remote_types::UserAppTarget as RemoteAppTarget;
+use crate::remote_model::UserApp as RemoteAppTarget;
 
 use super::release::Release;
 

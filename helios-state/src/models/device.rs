@@ -4,7 +4,7 @@ use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
-use crate::remote_types::{AppTarget as RemoteAppTarget, DeviceTarget as RemoteDeviceTarget};
+use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::host::Host;
@@ -85,6 +85,27 @@ impl From<Device> for DeviceTarget {
             host: host.map(|r| r.into()),
             needs_cleanup,
         }
+    }
+}
+
+impl DeviceTarget {
+    pub fn normalize(mut self) -> DeviceTarget {
+        // Insert app metadata for every service of every app
+        for (app_uuid, app) in self.apps.iter_mut() {
+            for (rel_uuid, rel) in app.releases.iter_mut() {
+                for (svc_name, svc) in rel.services.iter_mut() {
+                    let _ = svc
+                        .config
+                        .container_name
+                        .insert(format!("{svc_name}_{rel_uuid}"));
+                    svc.config
+                        .labels
+                        .insert("io.balena.app-uuid".to_string(), app_uuid.to_string());
+                }
+            }
+        }
+
+        self
     }
 }
 

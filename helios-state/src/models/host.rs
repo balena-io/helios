@@ -1,7 +1,7 @@
 use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
-use crate::remote_types::HostAppTarget as RemoteHostAppTarget;
+use crate::remote_model::HostApp as RemoteHostAppTarget;
 
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]

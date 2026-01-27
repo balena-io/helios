@@ -9,12 +9,21 @@ use mahler::worker::{Uninitialized, Worker};
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service, ServiceTarget,
+    mark_duplicate_service_config,
 };
-use crate::oci::RegistryAuth;
+use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
 
 use super::image::{create_image, request_registry_credentials};
 use super::utils::find_installed_service;
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Oci(#[from] OciError),
+}
 
 /// Request authorization for new image installs
 fn request_registry_token_for_new_images(
@@ -93,7 +102,7 @@ fn request_registry_token_for_new_images(
 }
 
 /// Initialize the app and store its local data
-fn prepare_app(
+fn create_app(
     maybe_app: View<Option<App>>,
     Target(tgt_app): Target<App>,
     Args(app_uuid): Args<Uuid>,
@@ -109,22 +118,38 @@ fn prepare_app(
     });
 
     with_io(app, async move |app| {
+        let local_store = store.as_ref().expect("store should be available");
         // store id and name as local state
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .write(format!("/apps/{app_uuid}"), "id", &app.id)
-                .await?;
-            local_store
-                .write(format!("/apps/{app_uuid}"), "name", &app.name)
-                .await?;
-        }
+        local_store
+            .write(format!("/apps/{app_uuid}"), "id", &app.id)
+            .await?;
+        local_store
+            .write(format!("/apps/{app_uuid}"), "name", &app.name)
+            .await?;
 
         Ok(app)
     })
 }
 
+/// Update the local app id
+fn store_app_id(
+    mut id: View<u32>,
+    Target(tgt): Target<u32>,
+    Args(app_uuid): Args<String>,
+    store: Res<Store>,
+) -> IO<u32, StoreError> {
+    *id = tgt;
+    with_io(id, async move |id| {
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .write(format!("/apps/{app_uuid}"), "id", &*id)
+            .await?;
+        Ok(id)
+    })
+}
+
 /// Update the local app name
-fn set_app_name(
+fn store_app_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
     Args(app_uuid): Args<String>,
@@ -132,11 +157,10 @@ fn set_app_name(
 ) -> IO<Option<String>, StoreError> {
     *name = tgt;
     with_io(name, async move |name| {
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .write(format!("/apps/{app_uuid}"), "name", &*name)
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .write(format!("/apps/{app_uuid}"), "name", &*name)
+            .await?;
         Ok(name)
     })
 }
@@ -207,41 +231,86 @@ fn fetch_apps_images(
 }
 
 /// Initialize an empty release
-fn prepare_release(release: View<Option<Release>>) -> View<Release> {
+fn create_release(release: View<Option<Release>>) -> View<Release> {
     release.create(Release {
         services: Map::new(),
     })
 }
 
-/// Install the service
+/// Install the service if the images exist
 ///
-/// FIXME: this only creates the service in memory for now, as we add features, this will also
-/// create the service container
-fn install_service(
-    maybe_svc: View<Option<Service>>,
+/// Implement this as a method to allow to make concurrent service installs
+fn maybe_install_service(
     System(device): System<Device>,
     Target(tgt): Target<Service>,
-    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
-    store: Res<Store>,
-) -> IO<Service, StoreError> {
+) -> Option<Task> {
     // Skip the task if the image for the service doesn't exist yet
-    if let ImageRef::Uri(tgt_img) = &tgt.image {
-        enforce!(
-            device.images.contains_key(tgt_img),
-            "image {tgt_img} not found"
-        );
-    } else {
-        // this should not happen
-        return IO::abort("target image must be an URI");
+    if let ImageRef::Uri(tgt_img) = &tgt.image
+        && device.images.contains_key(tgt_img)
+    {
+        // FIXME: we need to add current host OS metadata to the
+        // service as env vars via the target
+        return Some(install_service.with_target(tgt));
     }
+    None
+}
+
+/// Install the service
+fn install_service(
+    maybe_svc: View<Option<Service>>,
+    Target(tgt): Target<Service>,
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+    store: Res<Store>,
+) -> IO<Service, AppError> {
+    enforce!(maybe_svc.is_none(), "service {svc_name} already exists");
 
     let ServiceTarget { id, image, .. } = tgt;
-    let svc = maybe_svc.create(Service { id, image });
+    let svc = maybe_svc.create(Service {
+        id,
+        image,
+        container_id: None,
+        config: tgt.config,
+    });
 
-    with_io(svc, async move |svc| {
-        // FIXME: create/manage container
+    with_io(svc, async move |mut svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let local_store = store.as_ref().expect("store should be available");
+        let container_name = svc
+            .config
+            .container_name
+            .clone()
+            .expect("container name should be available");
 
-        if let Some(local_store) = store.as_ref() {
+        if let ImageRef::Uri(svc_img) = svc.image.clone() {
+            let image = docker
+                .image()
+                .inspect(svc_img.as_str())
+                .await
+                .with_context(|| format!("failed to inspect image {svc_img}"))?;
+
+            // convert the service configuration to a container configuration
+            // and mark duplicates from the image
+            let mut container_config = svc.config.clone().into();
+            mark_duplicate_service_config(&mut container_config, &image.config);
+
+            let container_id = docker
+                .container()
+                .create(&container_name, &svc_img, container_config)
+                .await?;
+
+            // check that the container was created and generate the Service configuration
+            // from the image config and container info
+            let local_container = docker
+                .container()
+                .inspect(&container_id)
+                .await
+                .context("failed to inspect container for service")?;
+            *svc = Service::from((&image.config, local_container));
+            svc.image = ImageRef::Uri(svc_img);
+
             // store the image uri that corresponds to the current release service
             local_store
                 .write(
@@ -256,7 +325,7 @@ fn install_service(
     })
 }
 
-fn update_service_image_metadata(
+fn store_service_image_uri(
     mut img: View<ImageRef>,
     Target(tgt): Target<ImageUri>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
@@ -265,16 +334,15 @@ fn update_service_image_metadata(
     *img = ImageRef::Uri(tgt);
 
     with_io(img, async move |img| {
-        if let Some(local_store) = store.as_ref() {
-            // store the image uri that corresponds to the current release service
-            local_store
-                .write(
-                    format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
-                    "image",
-                    &*img,
-                )
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        // store the image uri that corresponds to the current release service
+        local_store
+            .write(
+                format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
+                "image",
+                &*img,
+            )
+            .await?;
         Ok(img)
     })
 }
@@ -291,19 +359,25 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .job(
             "/apps/{app_uuid}",
-            job::create(prepare_app).with_description(|Args(uuid): Args<Uuid>| {
+            job::create(create_app).with_description(|Args(uuid): Args<Uuid>| {
                 format!("initialize app with uuid '{uuid}'")
             }),
         )
         .job(
             "/apps/{app_uuid}/name",
-            job::any(set_app_name).with_description(|Args(uuid): Args<Uuid>| {
-                format!("update name for app with uuid '{uuid}'")
+            job::any(store_app_name).with_description(|Args(uuid): Args<Uuid>| {
+                format!("store name for app with uuid '{uuid}'")
+            }),
+        )
+        .job(
+            "/apps/{app_uuid}/id",
+            job::update(store_app_id).with_description(|Args(uuid): Args<Uuid>| {
+                format!("store id for app with uuid '{uuid}'")
             }),
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [job::create(prepare_release).with_description(
+            [job::create(create_release).with_description(
                 |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                     format!("initialize release '{commit}' for app with uuid '{uuid}'")
                 },
@@ -311,18 +385,21 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
-            [job::create(install_service).with_description(
-                |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                    format!("initialize service '{service_name}' for release '{commit}'")
-                },
-            )],
+            [
+                job::create(maybe_install_service),
+                job::none(install_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("install service '{service_name}' for release '{commit}'")
+                    },
+                ),
+            ],
         )
         .job(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}/image",
-            job::update(update_service_image_metadata).with_description(
+            job::update(store_service_image_uri).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
-                        "update image metadata for service '{service_name}' of release '{commit}'"
+                        "store image metadata for service '{service_name}' of release '{commit}'"
                     )
                 },
             ),

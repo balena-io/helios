@@ -153,14 +153,14 @@ mod tests {
         let expected: Dag<&str> = seq!("ensure clean-up")
             + par!(
                 "update device name",
-                "update name for app with uuid 'my-app-uuid'",
+                "store name for app with uuid 'my-app-uuid'",
             )
             + seq!("perform clean-up");
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
     #[tokio::test]
-    async fn it_finds_a_workflow_to_change_an_app_name() {
+    async fn it_finds_a_workflow_to_change_an_app_name_and_id() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
@@ -169,7 +169,7 @@ mod tests {
             "auths": [],
             "apps": {
                 "my-app-uuid": {
-                    "id": 1,
+                    "id": 0,
                     "name": "my-app",
                 }
             },
@@ -190,11 +190,12 @@ mod tests {
         .unwrap();
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
-        let expected: Dag<&str> = seq!(
-            "ensure clean-up",
-            "update name for app with uuid 'my-app-uuid'",
-            "perform clean-up"
-        );
+        let expected: Dag<&str> = seq!("ensure clean-up")
+            + par!(
+                "store id for app with uuid 'my-app-uuid'",
+                "store name for app with uuid 'my-app-uuid'"
+            )
+            + seq!("perform clean-up");
         assert_eq!(workflow.to_string(), expected.to_string());
     }
 
@@ -225,25 +226,30 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "ubuntu:latest"
+                                    "image": "ubuntu:latest",
+                                    "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "config": {},
                                 },
                                 "service3": {
                                     "id": 3,
                                     // different image same digest
-                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080"
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "config": {},
                                 },
                                 // additional images to test download batching
                                 "service4": {
                                     "id": 4,
-                                    "image": "alpine:latest"
+                                    "image": "alpine:latest",
+                                    "config": {},
                                 },
                                 "service5": {
                                     "id": 5,
-                                    "image": "alpine:3.20"
+                                    "image": "alpine:3.20",
+                                    "config": {},
                                 },
                             }
                         }
@@ -266,15 +272,15 @@ mod tests {
                         as 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
                 "pull image 'alpine:3.20'",
             )
-            + seq!(
-                "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                "initialize service 'service1' for release 'my-release-uuid'",
-                "initialize service 'service2' for release 'my-release-uuid'",
-                "initialize service 'service3' for release 'my-release-uuid'",
-                "initialize service 'service4' for release 'my-release-uuid'",
-                "initialize service 'service5' for release 'my-release-uuid'",
-                "perform clean-up"
-            );
+            + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            + par!(
+                "install service 'service1' for release 'my-release-uuid'",
+                "install service 'service2' for release 'my-release-uuid'",
+                "install service 'service3' for release 'my-release-uuid'",
+                "install service 'service4' for release 'my-release-uuid'",
+                "install service 'service5' for release 'my-release-uuid'",
+            )
+            + seq!("perform clean-up");
 
         assert_eq!(
             workflow.to_string(),
@@ -299,11 +305,13 @@ mod tests {
                             "services": {
                                 "one": {
                                     "id": 1,
-                                    "image": "sha256:deadbeef"
+                                    "image": "sha256:deadbeef",
+                                    "config": {},
                                 },
                                 "two": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                             }
                         }
@@ -324,11 +332,13 @@ mod tests {
                             "services": {
                                 "one": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "two": {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                             }
                         }
@@ -342,7 +352,7 @@ mod tests {
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!(
             "ensure clean-up",
-            "update image metadata for service 'one' of release 'my-release-uuid'",
+            "store image metadata for service 'one' of release 'my-release-uuid'",
             "perform clean-up"
         );
 
@@ -371,11 +381,13 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222"
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
+                                    "config": {},
                                 },
 
                             }
@@ -397,11 +409,13 @@ mod tests {
                             "services": {
                                 "service1": {
                                     "id": 1,
-                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111"
+                                    "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
-                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222"
+                                    "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                    "config": {},
                                 },
 
                             }

@@ -108,11 +108,20 @@ async fn test_set_app_target_install_images() {
                 "services": {
                     "service-one": {
                         "id": 1,
-                        "image": "ubuntu:latest"
+                        "image": "ubuntu:latest",
+                        "composition": {
+                            "command": "sleep infinity"
+                        }
                     },
                     "service-two": {
                         "id": 2,
-                        "image": "alpine:latest"
+                        "image": "alpine:latest",
+                        "composition": {
+                            "command": ["sleep", "10"],
+                            "labels": {
+                                "my-label": "true"
+                            }
+                        }
                     }
                 }
             }
@@ -141,27 +150,25 @@ async fn test_set_app_target_install_images() {
         .and_then(|apps| apps.get("test-app"))
         .unwrap();
 
-    assert_eq!(
-        app,
-        &json!({
-            "id": 0,
-            "name": "my-new-app-name",
-            "releases": {
-                "my-release-uuid": {
-                    "services": {
-                        "service-one": {
-                            "id": 1,
-                            "image": "ubuntu:latest"
-                        },
-                        "service-two": {
-                            "id": 2,
-                            "image": "alpine:latest"
-                        }
-                    }
-                }
-            }
-        })
-    );
+    let svc_one_container_id = app
+        .get("releases")
+        .and_then(|r| r.get("my-release-uuid"))
+        .and_then(|r| r.get("services"))
+        .and_then(|s| s.get("service-one"))
+        .and_then(|s| s.get("container_id"))
+        .unwrap()
+        .as_str()
+        .unwrap();
+
+    let svc_two_container_id = app
+        .get("releases")
+        .and_then(|r| r.get("my-release-uuid"))
+        .and_then(|r| r.get("services"))
+        .and_then(|s| s.get("service-two"))
+        .and_then(|s| s.get("container_id"))
+        .unwrap()
+        .as_str()
+        .unwrap();
 
     let images = device.get("images").unwrap();
 
@@ -177,6 +184,29 @@ async fn test_set_app_target_install_images() {
 
     let img = docker.inspect_image("alpine:latest").await.unwrap();
     assert_eq!(img.id.unwrap(), *alpine_img_id);
+
+    // the containers exist and have the right configuration
+    let container = docker
+        .inspect_container(svc_one_container_id, None)
+        .await
+        .unwrap();
+    let config = container.config.unwrap();
+    assert_eq!(config.cmd.unwrap(), vec!["sleep", "infinity"]);
+    assert_eq!(
+        config.labels.unwrap().get("io.balena.app-uuid").unwrap(),
+        "test-app"
+    );
+
+    let container = docker
+        .inspect_container(svc_two_container_id, None)
+        .await
+        .unwrap();
+
+    let config = container.config.unwrap();
+    assert_eq!(config.cmd.unwrap(), vec!["sleep", "10"]);
+    let labels = config.labels.unwrap();
+    assert_eq!(labels.get("io.balena.app-uuid").unwrap(), "test-app");
+    assert_eq!(labels.get("my-label").unwrap(), "true");
 
     cleanup().await;
 }
