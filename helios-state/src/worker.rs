@@ -227,28 +227,33 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "service3": {
                                     "id": 3,
                                     // different image same digest
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 // additional images to test download batching
                                 "service4": {
                                     "id": 4,
                                     "image": "alpine:latest",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "service5": {
                                     "id": 5,
                                     "image": "alpine:3.20",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                             }
@@ -262,6 +267,14 @@ mod tests {
 
         let workflow = worker().find_workflow(initial_state, target).unwrap();
         let expected: Dag<&str> = seq!("ensure clean-up", "request registry credentials")
+            + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'service1' for release 'my-release-uuid'",
+                "initialize service 'service2' for release 'my-release-uuid'",
+                "initialize service 'service3' for release 'my-release-uuid'",
+                "initialize service 'service4' for release 'my-release-uuid'",
+                "initialize service 'service5' for release 'my-release-uuid'",
+            )
             + par!(
                 "pull image 'ubuntu:latest'",
                 "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
@@ -272,7 +285,6 @@ mod tests {
                         as 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
                 "pull image 'alpine:3.20'",
             )
-            + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + par!(
                 "install service 'service1' for release 'my-release-uuid'",
                 "install service 'service2' for release 'my-release-uuid'",
@@ -306,11 +318,13 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "sha256:deadbeef",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                             }
@@ -333,11 +347,13 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                             }
@@ -382,11 +398,13 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
+                                    "status": "Installed",
                                     "config": {},
                                 },
 
@@ -410,11 +428,13 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "status": "Installed",
                                     "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                    "status": "Installed",
                                     "config": {},
                                 },
 

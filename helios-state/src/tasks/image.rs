@@ -95,7 +95,7 @@ pub(super) fn pull_image(
     let image = image.create(Image {
         engine_id: None,
         config: Default::default(),
-        download_progress: 0,
+        download_progress: 100,
     });
 
     with_io(image, |mut image| async move {
@@ -119,6 +119,7 @@ pub(super) fn pull_image(
         };
 
         // Report the state
+        image.download_progress = 0;
         let _ = image.flush().await;
 
         // Report progress
