@@ -203,9 +203,9 @@ async fn get_app_cur_state(
     Path(app_uuid): Path<Uuid>,
 ) -> Result<Json<App>, StatusCode> {
     let state = state_rx.borrow();
-    let device = state.device.clone();
-    if let Some(app) = device.apps.get(&app_uuid) {
-        return Ok(Json(app.clone()));
+    let mut device = state.device.clone();
+    if let Some(app) = device.apps.remove(&app_uuid) {
+        return Ok(Json(app));
     }
 
     Err(StatusCode::NOT_FOUND)
