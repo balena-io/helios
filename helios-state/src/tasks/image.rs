@@ -126,8 +126,8 @@ pub(super) fn pull_image(
         let mut last_logged = -1;
         while let Some(result) = stream.next().await {
             let (current, total) = result?;
-            let percent = 100 * current / total;
-            let bucket = percent / 20;
+            let percent = (100 * current / total) as u8;
+            let bucket = (percent / 20) as i8;
 
             // limit the number of reports per pull to avoid spamming
             // the backend
