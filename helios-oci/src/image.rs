@@ -5,8 +5,8 @@ use std::task::{Context, Poll};
 use bollard::query_parameters::{
     CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
 };
-use futures_lite::Stream;
 use serde::{Deserialize, Serialize};
+use tokio_stream::{Stream, StreamExt};
 
 use super::util::types::ImageUri;
 use super::{Client, Credentials, Error, Result, WithContext};
@@ -62,8 +62,6 @@ impl Image<'_> {
 
     /// Pulls an image from a registry.
     pub async fn pull(&self, image: &ImageUri, creds: Option<Credentials>) -> Result<()> {
-        use futures_lite::StreamExt;
-
         let mut stream = self.pull_with_progress(image, creds);
         while let Some(result) = stream.next().await {
             result?;

@@ -904,11 +904,11 @@ name = "helios-oci"
 version = "0.14.0"
 dependencies = [
  "bollard",
- "futures-lite",
  "helios-util",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -943,7 +943,6 @@ dependencies = [
 name = "helios-state"
 version = "0.14.0"
 dependencies = [
- "futures-lite",
  "helios-legacy",
  "helios-oci",
  "helios-remote-model",
@@ -954,6 +953,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
 ]
@@ -965,7 +965,6 @@ dependencies = [
  "axum",
  "dirs",
  "fastrand",
- "futures-lite",
  "mahler",
  "mockito",
  "regex",
