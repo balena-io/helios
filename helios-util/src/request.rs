@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{Span, field, instrument, warn};
+use tracing::{Span, debug, field, instrument, warn};
 
 use crate::crypto::sha256_hex_digest;
 use crate::interrupt::Interrupt;
@@ -638,7 +638,7 @@ impl Patch {
                     tries += 1;
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e)?,
             }
         }
     }
@@ -707,6 +707,7 @@ impl Patch {
             }
             _ => {
                 // Other 4xx client errors are permanent - don't retry
+                debug!("bad request: {state_to_send}");
                 state.error_count += 1;
                 // Reset the back-off since this terminates the loop
                 state.current_backoff = state.config.min_interval;
