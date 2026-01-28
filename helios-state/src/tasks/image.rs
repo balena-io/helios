@@ -1,5 +1,5 @@
-use futures_lite::StreamExt;
 use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
 use tracing::trace;
 
 use mahler::extract::{Args, RawTarget, Res, System, View};

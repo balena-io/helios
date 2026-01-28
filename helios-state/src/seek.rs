@@ -1,7 +1,6 @@
 use std::future::{self, Future};
 use std::pin::Pin;
 
-use futures_lite::StreamExt;
 use mahler::worker::SeekStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +8,7 @@ use tokio::sync::{
     Notify,
     watch::{Receiver, Sender},
 };
+use tokio_stream::StreamExt;
 use tracing::{info, instrument, trace};
 
 use crate::legacy::{
@@ -310,6 +310,7 @@ pub async fn start_seek(
                     registry_auth_client.clone(),
                     current_state.clone(),
                 )?;
+
                 worker_stream = worker.follow();
 
                 // Set the update status immediately
