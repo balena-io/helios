@@ -137,10 +137,10 @@ pub(super) fn pull_image(
                 last_logged = bucket;
 
                 image.download_progress = percent;
-
-                // report download progress back to the worker
-                let _ = image.flush().await;
             }
+
+            // report download progress back to the worker
+            let _ = image.flush().await;
         }
         trace!("progress=100%");
 
