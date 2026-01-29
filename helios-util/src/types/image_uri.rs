@@ -72,6 +72,15 @@ impl ImageUri {
         }
     }
 
+    pub fn repo_and_tag(&self) -> String {
+        let repo = self.repo();
+        if let Some(tag) = &self.tag {
+            format!("{repo}:{tag}")
+        } else {
+            format!("{repo}:latest")
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.normalized
     }
@@ -118,6 +127,12 @@ impl FromStr for ImageUri {
             .ok_or_else(|| InvalidImageUriError(uri.into()))?;
         let tag = caps.get(3).map(|m| m.as_str());
         let digest = caps.get(4).map(|m| m.as_str().to_owned());
+
+        // <none>:<none> is not supported as it makes the URI useless
+        // to query the engine
+        if image == "<none>" || tag == Some("<none>") {
+            return Err(InvalidImageUriError(uri.into()));
+        }
 
         // omit the tag if explicitely set to `latest`
         let tag = if let Some("latest") = tag {
@@ -246,6 +261,13 @@ mod tests {
         assert_eq!(uri.image, "myimage");
         assert_eq!(uri.tag, None);
         assert_eq!(uri.digest, None);
+    }
+
+    #[test]
+    fn test_none_none() {
+        let result: Result<ImageUri, _> = "<none>:<none>".parse();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), InvalidImageUriError(_)));
     }
 
     #[test]
