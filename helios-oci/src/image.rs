@@ -33,15 +33,36 @@ impl Image<'_> {
         let res = self.0.inner().list_images(Some(opts)).await;
         let images = res.map_err(Error::with_context("failed to list images"))?;
 
-        images
+        let uris = images
             .into_iter()
             .flat_map(|image| {
                 image
-                    .repo_tags
+                    .repo_digests
                     .into_iter()
-                    .map(|tag| tag.parse().map_err(Error::unexpected))
+                    .chain(image.repo_tags)
+                    // ignore errors when parsing as the list may contain
+                    // <none>:<none> tags
+                    .flat_map(|tag| tag.parse().ok())
             })
-            .collect()
+            // Deduplicate digests and tags ImageUri::repo_and_tag
+            // When repo and tag match, prefer the one with a digest.
+            .fold(
+                HashMap::<String, ImageUri>::new(),
+                |mut acc, uri: ImageUri| {
+                    let repo_and_tag = uri.repo_and_tag();
+                    let exists_with_digest = acc
+                        .get(&repo_and_tag)
+                        .is_some_and(|existing| existing.digest().is_some());
+                    if !exists_with_digest {
+                        acc.insert(repo_and_tag, uri);
+                    }
+                    acc
+                },
+            )
+            .into_values()
+            .collect();
+
+        Ok(uris)
     }
 
     /// Tags an image so that it becomes part of a repository.
