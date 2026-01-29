@@ -327,7 +327,13 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
 
     info!("waiting for state changes");
     let mut last_report = LastReport::None;
-    loop {
+    let mut state_changed = false;
+    'report: loop {
+        // loop again if the state changed while waiting for the previous patch to complete
+        if !state_changed && state_rx.changed().await.is_err() {
+            break;
+        }
+
         let report = state_rx.borrow_and_update().clone().into();
         let interrupt = Interrupt::new();
         let report_future = send_report(
@@ -338,26 +344,23 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
         );
         tokio::pin!(report_future);
 
-        // Wait for the report to be sent or cancel the patch if the state changes
-        // before the patch is completed
-        last_report = tokio::select! {
-            res = &mut report_future => {
-                // Report completed, wait for next state change before reporting again
-                if state_rx.changed().await.is_err() {
-                    break;
+        // Wait for the report to be sent. Only interrupt the patch if the channel closes,
+        // which indicates an error condition. State changes during the request should not
+        // interrupt it - we'll report the new state after this request completes.
+        last_report = loop {
+            tokio::select! {
+                res = &mut report_future => break res,
+                Err(_) = state_rx.changed() => {
+                    // Channel closed - interrupt the request and exit
+                    interrupt.trigger();
+                    report_future.await;
+                    break 'report;
                 }
-                res
-            },
-            _ = state_rx.changed() => {
-                // Interrupt the future
-                interrupt.trigger();
-
-                // Wait for the future to complete
-                report_future.await;
-
-                // Reuse the last report since the request was interrupted
-                last_report
-            },
+                else => {
+                    // mark the state changed and keep waiting
+                    state_changed = true
+                },
+            }
         };
     }
     trace!("state channel closed");
