@@ -1,5 +1,5 @@
-use futures_lite::StreamExt;
 use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
 use tracing::trace;
 
 use mahler::extract::{Args, RawTarget, Res, System, View};
@@ -95,7 +95,7 @@ pub(super) fn pull_image(
     let image = image.create(Image {
         engine_id: None,
         config: Default::default(),
-        download_progress: 0,
+        download_progress: 100,
     });
 
     with_io(image, |mut image| async move {
@@ -119,6 +119,7 @@ pub(super) fn pull_image(
         };
 
         // Report the state
+        image.download_progress = 0;
         let _ = image.flush().await;
 
         // Report progress
@@ -126,8 +127,8 @@ pub(super) fn pull_image(
         let mut last_logged = -1;
         while let Some(result) = stream.next().await {
             let (current, total) = result?;
-            let percent = 100 * current / total;
-            let bucket = percent / 20;
+            let percent = (100 * current / total) as u8;
+            let bucket = (percent / 20) as i8;
 
             // limit the number of reports per pull to avoid spamming
             // the backend
@@ -136,10 +137,10 @@ pub(super) fn pull_image(
                 last_logged = bucket;
 
                 image.download_progress = percent;
-
-                // report download progress back to the worker
-                let _ = image.flush().await;
             }
+
+            // report download progress back to the worker
+            let _ = image.flush().await;
         }
         trace!("progress=100%");
 

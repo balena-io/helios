@@ -11,6 +11,22 @@ mod container_name;
 pub use config::*;
 pub use container_name::*;
 
+/// The worker service status
+///
+/// Note: there is no Downloading/Downloaded status because
+/// that is not necessary for planning and complicates the task
+/// definitions.
+///
+/// The `Downloading` state can be determined by the state
+/// report module by checking if status == Installing and
+/// image download progress < 100
+#[derive(State, Debug, Clone, Default, Eq, PartialEq)]
+pub enum ServiceStatus {
+    #[default]
+    Installing,
+    Installed,
+}
+
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct Service {
@@ -20,6 +36,9 @@ pub struct Service {
     /// Service container ID on the engine
     #[mahler(internal)]
     pub container_id: Option<String>,
+
+    /// The service lifecycle status
+    pub status: ServiceStatus,
 
     /// Service image URI
     pub image: ImageRef,
@@ -31,9 +50,18 @@ pub struct Service {
 impl From<Service> for ServiceTarget {
     fn from(svc: Service) -> Self {
         let Service {
-            id, image, config, ..
+            id,
+            image,
+            config,
+            status,
+            ..
         } = svc;
-        ServiceTarget { id, image, config }
+        ServiceTarget {
+            id,
+            image,
+            config,
+            status,
+        }
     }
 }
 
@@ -61,6 +89,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         ServiceTarget {
             id,
             image: image.into(),
+            // FIXME: this should depend on the running state
+            status: ServiceStatus::Installed,
             config: ServiceConfig {
                 // set the name to None by default, but a name will be set when transforming
                 // from the target state
@@ -90,6 +120,7 @@ impl From<(&ImageConfig, LocalContainer)> for Service {
         Self {
             id,
             image,
+            status: ServiceStatus::Installed,
             container_id: Some(container_id),
             config,
         }
