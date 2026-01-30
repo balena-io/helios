@@ -26,7 +26,7 @@ use tracing::{
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
 use helios_remote::PollRequest;
 use helios_state::models::{App, Device, DeviceTarget as LocalDeviceTarget};
-use helios_state::{LocalState, SeekRequest, UpdateOpts, UpdateStatus};
+use helios_state::{LocalState, SeekRequest, TargetState, UpdateOpts, UpdateStatus};
 use helios_util::types::Uuid;
 
 // NOTE: we use the target from the remote backend as input for the API
@@ -233,9 +233,8 @@ async fn set_app_tgt_state(
 
     if seek_request_tx
         .send(SeekRequest {
-            target,
+            target: TargetState::Local { target },
             opts,
-            raw_target: None,
         })
         .is_err()
     {
@@ -258,9 +257,10 @@ mod tests {
         watch::Receiver<SeekRequest>,
     ) {
         let (seek_request_tx, seek_rx) = watch::channel(SeekRequest {
-            target: LocalDeviceTarget::default(),
+            target: TargetState::Local {
+                target: LocalDeviceTarget::default(),
+            },
             opts: UpdateOpts::default(),
-            raw_target: None,
         });
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
         let device = Device::new(Uuid::default(), "balenaOS 6.3.1".parse().ok());
@@ -349,7 +349,14 @@ mod tests {
         let seek_request = seek_rx.borrow().clone();
         assert!(!seek_request.opts.force);
         assert!(!seek_request.opts.cancel); // API default via serde is false
-        assert!(seek_request.target.apps.contains_key(&app_uuid));
+        if let TargetState::Local {
+            target: local_target,
+        } = seek_request.target
+        {
+            assert!(local_target.apps.contains_key(&app_uuid));
+        } else {
+            panic!("expected local target");
+        }
     }
 
     #[tokio::test]
@@ -373,6 +380,13 @@ mod tests {
         assert!(seek_rx.changed().await.is_ok());
         let seek_request = seek_rx.borrow().clone();
         assert!(seek_request.opts.force);
-        assert!(seek_request.target.apps.contains_key(&app_uuid));
+        if let TargetState::Local {
+            target: local_target,
+        } = seek_request.target
+        {
+            assert!(local_target.apps.contains_key(&app_uuid));
+        } else {
+            panic!("expected local target");
+        }
     }
 }

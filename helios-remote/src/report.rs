@@ -29,6 +29,7 @@ pub enum UpdateStatus {
     // Aborted,
     #[serde(rename = "applying changes")]
     ApplyingChanges,
+    // Rejected
 }
 
 #[derive(Serialize, Debug)]

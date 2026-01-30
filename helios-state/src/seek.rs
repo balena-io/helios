@@ -9,11 +9,9 @@ use tokio::sync::{
     watch::{Receiver, Sender},
 };
 use tokio_stream::StreamExt;
-use tracing::{info, instrument, trace};
+use tracing::{error, info, instrument, trace};
 
-use crate::legacy::{
-    LegacyConfig, ProxyState, StateUpdateError, trigger_update, wait_for_state_settle,
-};
+use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
 use crate::util::interrupt::Interrupt;
 
 use super::config::Resources;
@@ -34,6 +32,7 @@ pub enum UpdateStatus {
     #[default]
     Done,
     ApplyingChanges,
+    Rejected,
     Aborted(Vec<String>),
     Interrupted,
 }
@@ -89,12 +88,44 @@ impl Default for UpdateOpts {
     }
 }
 
+/// This encodes possible target configurations coming from
+/// the remote API or the local API.
+///
+/// - A Remote target optionally has a DeviceTarget if the target is supported
+///   (and hence it can be serialized), otherwise it always includes a raw_target
+///   which is the exact request. The raw_target only serves to pass to the legacy supervisor.
+/// - A Local API target is validated by the request so it can only have an already validated
+///   device target
+///
+/// FIXME: this type will no longer be necessary once the legacy supervisor no longer handles
+/// state updates
+#[derive(Debug, Clone)]
+pub enum TargetState {
+    Remote {
+        target: Option<DeviceTarget>,
+        raw_target: Value,
+    },
+    Local {
+        target: DeviceTarget,
+    },
+}
+
 /// A request to reach a target state.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SeekRequest {
-    pub target: DeviceTarget,
-    pub raw_target: Option<Value>,
+    pub target: TargetState,
     pub opts: UpdateOpts,
+}
+
+impl Default for SeekRequest {
+    fn default() -> Self {
+        Self {
+            target: TargetState::Local {
+                target: DeviceTarget::default(),
+            },
+            opts: UpdateOpts::default(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -327,7 +358,7 @@ pub async fn start_seek(
 
                     // If this is the case we already know the target won't be processed by the
                     // apply block so, we just put it back on the pending queue.
-                    if update_req.raw_target.is_none()
+                    if let TargetState::Local { .. } = update_req.target
                         && matches!(prev_seek_state, SeekState::Legacy)
                     {
                         next_target.set(update_req.clone());
@@ -335,7 +366,16 @@ pub async fn start_seek(
 
                     Box::pin(async move {
                         let mut status = UpdateStatus::ApplyingChanges;
-                        if !matches!(prev_seek_state, SeekState::Legacy) {
+                        let device_target_opt = match update_req.target {
+                            TargetState::Remote { ref target, .. } => target.as_ref(),
+                            TargetState::Local { ref target } => Some(target),
+                        };
+
+                        // If there is a target and the last apply was not an apply to
+                        // the legacy state
+                        if let Some(target) = device_target_opt
+                            && !matches!(prev_seek_state, SeekState::Legacy)
+                        {
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
                             if let Some(proxy_state) = &proxy_state {
@@ -343,7 +383,7 @@ pub async fn start_seek(
                             }
 
                             // Apply the normalized target
-                            let target = update_req.target.normalize();
+                            let target = target.clone().normalize();
                             status = tokio::select! {
                                 status = worker.seek_target(target) => status?.into(),
                                 _ = interrupt.wait() => {
@@ -352,15 +392,17 @@ pub async fn start_seek(
                             };
                         }
 
-                        if let (Some(config), Some(target_state)) =
-                            (legacy_config.clone(), update_req.raw_target)
+                        // If there is a legacy supervisor and the target state is coming from
+                        // the remote API
+                        if let (Some(config), TargetState::Remote { raw_target, .. }) =
+                            (legacy_config.clone(), &update_req.target)
                         {
                             // Set as the target state the raw target accepted by
                             // the fallback
                             if let Some(proxy_state) = &proxy_state {
-                                proxy_state.set(target_state).await;
+                                proxy_state.set(raw_target.clone()).await;
                             }
-                            return match trigger_update(
+                            return match legacy::trigger_update(
                                 config.api_endpoint,
                                 config.api_key,
                                 update_req.opts.force,
@@ -376,11 +418,13 @@ pub async fn start_seek(
                             };
                         }
 
+                        // If there is a legacy supervisor but the target is coming from the
+                        // local API (so no raw target)
                         if let (Some(config), SeekState::Legacy) =
                             (legacy_config.clone(), prev_seek_state)
                         {
-                            // if we get here it means there is no raw target, so we need to keep waiting
-                            return match wait_for_state_settle(
+                            // keep waiting
+                            return match legacy::wait_for_state_settle(
                                 config.api_endpoint,
                                 config.api_key,
                                 interrupt,
@@ -391,6 +435,14 @@ pub async fn start_seek(
                                 Err(StateUpdateError::Interrupted) => Ok(SeekState::Legacy),
                                 Err(e) => Err(e)?,
                             };
+                        }
+
+                        // If the target could not be processed just return the updated status
+                        if device_target_opt.is_none() {
+                            // if we get here, then there was no target state from the backend
+                            // and there is no legacy config so we just reject
+                            error!("cannot process target");
+                            return Ok(SeekState::Local(UpdateStatus::Rejected));
                         }
 
                         Ok(SeekState::Local(status))

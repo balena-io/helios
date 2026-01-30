@@ -6,14 +6,14 @@ use tokio::sync::watch::{Receiver, Sender};
 use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::state::{SeekRequest, UpdateOpts};
+use crate::state::{SeekRequest, TargetState, UpdateOpts};
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
 use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::model::Device as DeviceTarget;
+use super::model::Device as RemoteDeviceTarget;
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
@@ -70,7 +70,7 @@ async fn poll_remote(
 }
 
 #[derive(Deserialize, Clone, Debug)]
-struct TargetState(HashMap<Uuid, DeviceTarget>);
+struct RemoteTargetState(HashMap<Uuid, RemoteDeviceTarget>);
 
 /// An update request coming from the API.
 ///
@@ -218,12 +218,14 @@ pub async fn start_poll(
                 // If there is a new target
                 if let Some(target_state) = target {
                     // put the poll back on the channel
-                    match serde_json::from_value::<TargetState>(target_state.clone()) {
-                        Ok(TargetState(mut map)) => {
-                            if let Some(target) = map.remove(&uuid) {
+                    match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
+                        Ok(RemoteTargetState(mut map)) => {
+                            if let Some(remote_target) = map.remove(&uuid) {
                                 let _ = seek_tx.send(SeekRequest {
-                                    target: target.into(),
-                                    raw_target: Some(target_state),
+                                    target: TargetState::Remote {
+                                        target: Some(remote_target.into()),
+                                        raw_target: target_state,
+                                    },
                                     opts,
                                 });
                             } else {
@@ -231,8 +233,14 @@ pub async fn start_poll(
                             }
                         }
                         Err(e) => {
-                            // FIXME: we'll need to reject the target if it cannot be deserialized
                             warn!("failed to deserialize target state: {e}");
+                            let _ = seek_tx.send(SeekRequest {
+                                target: TargetState::Remote {
+                                    target: None,
+                                    raw_target: target_state,
+                                },
+                                opts,
+                            });
                         }
                     };
                 }
