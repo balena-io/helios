@@ -198,10 +198,14 @@ impl NextTarget {
 }
 
 fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus) {
-    let _ = tx.send(LocalState {
-        device: device.clone(),
-        status: status.clone(),
-    });
+    // FIXME: re-enable reporting once user app support is more advanced.
+    // At that point helios should be the only one reporting
+    if cfg!(feature = "userapps") {
+        let _ = tx.send(LocalState {
+            device: device.clone(),
+            status: status.clone(),
+        });
+    }
 }
 
 #[instrument(name = "seek", skip_all, err)]

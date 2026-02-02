@@ -1,3 +1,4 @@
+use mahler::exception;
 use mahler::worker::Uninitialized;
 use mahler::worker::{Ready, Worker};
 use tokio::sync::RwLock;
@@ -29,10 +30,16 @@ fn worker() -> Worker<Device, Uninitialized> {
 
     if cfg!(feature = "balenahup") {
         worker = with_hostapp_tasks(worker);
+    } else {
+        // ignore hostapps in this case
+        worker = worker.exception("/host/releases", exception::update(|| true))
     }
 
     if cfg!(feature = "userapps") {
         worker = with_userapp_tasks(worker);
+    } else {
+        // ignore user apps when planning
+        worker = worker.exception("/apps", exception::update(|| true));
     }
 
     worker
