@@ -1,4 +1,99 @@
 - commits:
+    - subject: Allow device target for local worker to be None
+      hash: bc88dbf4aec1c0840a47a01ec9d1a681dac53860
+      body: |
+        If the remote target cannot be processed during poll, only the
+        raw_target will be available and will be passed to the legacy supervisor
+        when available.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Fix bug in helios-oci::Image::list()
+      hash: ebd2e9d6d4442535ab86ef7cf708fd481ed8db4e
+      body: |
+        Reading the list of images would fail if parsing an image URI failed,
+        however, the list can contain `<none>:<none>` tags, in which case we
+        want to ignore those errors.
+
+        This also includes the repo_digests list, deduplicating by repo and tag.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use docker-cli v28 to keep compatibility with balena-engine
+      hash: dbaac050f5111c4bfecc56fe4c001fdb3b2531cd
+      body: |
+        Also downgrade the dind version used in integration tests.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Do not limit image progress reporting to worker
+      hash: f93d5a8fa0367313229ba9942d80536ef8dc1fbd
+      body: |
+        This limit can be added in the future, but since the patch happens at
+        most every 10 seconds, is better to make sure it has the most accurate
+        progress for each image on long downloads.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Only interrupt state patch on channel closing
+      hash: 5fac0fb4ecef66e1e956e6fd77c19c13bd7494c7
+      body: |
+        This prevents multiple reports, like during a download interrupting each
+        other which ends up in multiple patch cancellation on the logs without
+        any reports actually being sent.
+
+        The reports are limited by the min poll interval (10s) so on downloads
+        faster than that, no download progress will show on the dashboard.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Debug client errors to remote API
+      hash: 39a69dedccbceb754512ac3980562924097ce139
+      body: |
+        This allows to identify bugs with the patch body
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add reporting for user apps
+      hash: 1a45c8270a62fde39f242791c629c8ca66b551cf
+      body: |
+        Create the state patch to send to the backend from the user app list.
+        This also fixes a bug with the reporting loop that would never send a
+        patch
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add Service status to Worker model
+      hash: a0037f8000e0f7e60c7c4f7eef163a3046e59bb6
+      body: |
+        The Service status is used to identify what status is the service in its
+        lifecycle. This commit also creates a service initialization task that
+        runs before image downloads. The status and early initialization should
+        allow the reporter module to report on downloading services by looking
+        at the service status and the image download progress.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.14.1
+  title: ""
+  date: 2026-02-06T18:23:25.914Z
+- commits:
     - subject: Remove app-id from service labels
       hash: dbda96beb36c0f5396737ff6d62ef443a1b284a0
       body: |
