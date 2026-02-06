@@ -8,8 +8,8 @@ use bollard::{
     },
     secret::ContainerInspectResponse,
 };
-use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt;
 
 use super::image::ImageConfig;
 use super::util::types::ImageUri;

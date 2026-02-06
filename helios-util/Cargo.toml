@@ -16,7 +16,6 @@ version.workspace = true
 axum.workspace = true
 dirs.workspace = true
 fastrand.workspace = true
-futures-lite.workspace = true
 mahler.workspace = true
 regex.workspace = true
 reqwest.workspace = true

@@ -6,7 +6,7 @@ mod worker;
 
 pub mod models;
 pub use config::{StateConfig, prepare};
-pub use seek::{LocalState, SeekRequest, UpdateOpts, UpdateStatus, start_seek};
+pub use seek::{LocalState, SeekRequest, TargetState, UpdateOpts, UpdateStatus, start_seek};
 
 use helios_legacy as legacy;
 use helios_oci as oci;

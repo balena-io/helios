@@ -71,7 +71,7 @@ pub struct Image {
     pub engine_id: Option<String>,
 
     /// Image pull progress
-    pub download_progress: i64,
+    pub download_progress: u8,
 
     /// Image configuration
     #[serde(default)]

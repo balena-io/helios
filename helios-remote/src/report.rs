@@ -1,11 +1,11 @@
-use helios_state::models::Device;
+use helios_state::models::{Device, ImageRef};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
-use crate::state::{LocalState, UpdateStatus};
+use crate::state::{LocalState, models::ServiceStatus as LocalServiceStatus};
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
 use crate::util::request::{Patch, PatchError, RequestConfig};
@@ -13,14 +13,23 @@ use crate::util::types::Uuid;
 
 use super::config::RemoteConfig;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 enum ServiceStatus {
-    // Downloading,
-    // Downloaded,
+    Downloading,
     Installing,
-    // Installed,
+    Installed,
     Running,
     // Stopped,
+}
+
+#[derive(Clone, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateStatus {
+    Done,
+    // Aborted,
+    #[serde(rename = "applying changes")]
+    ApplyingChanges,
+    // Rejected
 }
 
 #[derive(Serialize, Debug)]
@@ -29,7 +38,9 @@ struct ServiceReport {
     image: String,
     /// The service runtime status
     status: ServiceStatus,
-    // TODO: add download_progress
+    // Service image pull progress
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_progress: Option<u8>,
 }
 
 #[derive(Serialize, Debug)]
@@ -76,7 +87,13 @@ impl From<LocalState> for DeviceReport {
         let mut apps = HashMap::new();
 
         let LocalState {
-            device: Device { host, .. },
+            device:
+                Device {
+                    host,
+                    apps: userapps,
+                    images,
+                    ..
+                },
             ..
         } = state;
 
@@ -126,6 +143,7 @@ impl From<LocalState> for DeviceReport {
                             ServiceReport {
                                 image: release.image.repo(),
                                 status: service_status,
+                                download_progress: None,
                             },
                         )]
                         .into(),
@@ -134,7 +152,73 @@ impl From<LocalState> for DeviceReport {
             }
         }
 
-        // TODO: convert the rest of the apps to an accepted report
+        // convert the user apps to an accepted report
+        for (app_uuid, app) in userapps {
+            for (rel_uuid, rel) in app.releases {
+                for (svc_name, svc) in rel.services {
+                    let svc_img = if let ImageRef::Uri(img) = svc.image {
+                        img
+                    } else {
+                        // skip services that don't have an image uri defined
+                        continue;
+                    };
+                    // Get the status of the app as services based on
+                    // whether the running release is the current release
+                    let (update_status, service_status, download_progress) = match svc.status {
+                        LocalServiceStatus::Installing => {
+                            let maybe_img = images.get(&svc_img);
+                            if let Some(img) = maybe_img
+                                && img.download_progress < 100
+                            {
+                                (
+                                    UpdateStatus::ApplyingChanges,
+                                    ServiceStatus::Downloading,
+                                    Some(img.download_progress),
+                                )
+                            } else {
+                                (
+                                    UpdateStatus::ApplyingChanges,
+                                    ServiceStatus::Installing,
+                                    None,
+                                )
+                            }
+                        }
+                        LocalServiceStatus::Installed => {
+                            (UpdateStatus::Done, ServiceStatus::Installed, None)
+                        }
+                    };
+
+                    // Get or create the app
+                    let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
+                        // FIXME: the current release should come from the worker once
+                        // the release has successfully installed
+                        release_uuid: None,
+                        releases: HashMap::new(),
+                    });
+
+                    let release = app
+                        .releases
+                        .entry(rel_uuid.clone())
+                        .or_insert(ReleaseReport {
+                            update_status: update_status.clone(),
+                            services: HashMap::new(),
+                        });
+
+                    if release.update_status < update_status {
+                        release.update_status = update_status;
+                    }
+
+                    release.services.insert(
+                        svc_name,
+                        ServiceReport {
+                            image: svc_img.repo(),
+                            status: service_status,
+                            download_progress,
+                        },
+                    );
+                }
+            }
+        }
 
         DeviceReport { apps: Some(apps) }
     }
@@ -168,7 +252,6 @@ fn get_report_client(config: &RemoteConfig) -> Patch {
 // Return type from send_report
 type LastReport = Option<Value>;
 
-#[allow(dead_code)]
 fn calculate_report_diff(
     device_uuid: String,
     last_report: &Option<Value>,
@@ -224,12 +307,10 @@ async fn send_report(
         .expect("report cannot be empty")
         .clone();
 
-    // FIXME: this is disabled because reporting here and in the legacy supervisor causes
-    // conflicts with service installs on the backend.
-    // Once we implement user app reporting we can report all apps from helios
-    // and block report calls from the legacy supervisor to the backend
-    // let new_report: Value = calculate_report_diff(device_uuid, &last_report, report.into());
-    let new_report = json!({ device_uuid: {} });
+    // FIXME: this may conflict with service installs coming from the supervisor. Needs testing
+    // Once we implement more complete service management, reporting can be done by this service
+    // and we will block report calls from the legacy supervisor to the backend
+    let new_report: Value = calculate_report_diff(device_uuid, &last_report, report.into());
 
     match client.patch(new_report.clone(), Some(interrupt)).await {
         Ok(_) => Some(new_report),
@@ -247,16 +328,14 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
 
     info!("waiting for state changes");
     let mut last_report = LastReport::None;
-    loop {
-        let state_changed = state_rx.changed().await;
-        if state_changed.is_err() {
-            // Not really an error, it just means the API closed
-            trace!("state channel closed");
+    let mut state_changed = false;
+    'report: loop {
+        // loop again if the state changed while waiting for the previous patch to complete
+        if !state_changed && state_rx.changed().await.is_err() {
             break;
         }
 
         let report = state_rx.borrow_and_update().clone().into();
-
         let interrupt = Interrupt::new();
         let report_future = send_report(
             &mut report_client,
@@ -266,22 +345,26 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
         );
         tokio::pin!(report_future);
 
-        // Wait for the report to be sent or cancel the patch if the state changes
-        // before the patch is completed
-        last_report = tokio::select! {
-            res = &mut report_future => res,
-            _ = state_rx.changed() => {
-                // Interrupt the future
-                interrupt.trigger();
-
-                // Wait for the future to complete
-                report_future.await;
-
-                // Reuse the last report since the request was interrupted
-                last_report
+        // Wait for the report to be sent. Only interrupt the patch if the channel closes,
+        // which indicates an error condition. State changes during the request should not
+        // interrupt it - we'll report the new state after this request completes.
+        last_report = loop {
+            tokio::select! {
+                res = &mut report_future => break res,
+                Err(_) = state_rx.changed() => {
+                    // Channel closed - interrupt the request and exit
+                    interrupt.trigger();
+                    report_future.await;
+                    break 'report;
+                }
+                else => {
+                    // mark the state changed and keep waiting
+                    state_changed = true
+                },
             }
         };
     }
+    trace!("state channel closed");
 }
 
 #[cfg(test)]
@@ -294,20 +377,92 @@ mod tests {
 
     #[test]
     fn it_creates_a_device_report_from_a_device() {
-        let device = Device::new("test-uuid".into(), "balenaOS 5.3.1".parse().ok());
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "auths": [],
+            "images": {
+                "ubuntu": {
+                    "engine_id": "sha256:abc",
+                    "download_progress": 100,
+                },
+                "alpine": {
+                    "download_progress": 50,
+                },
+                "fedora": {
+                    "engine_id": "sha256:def",
+                    "download_progress": 100,
+                }
+            },
+            "apps": {
+                "my-app": {
+                    "id": 1,
+                    "releases": {
+                        "new-release": {
+                            "services": {
+                                "one": {
+                                    "id": 1,
+                                    "image": "ubuntu",
+                                    "status": "Installed",
+                                    "config": {}
+                                },
+                                "two": {
+                                    "id": 2,
+                                    "image": "alpine",
+                                    "status": "Installing",
+                                    "config": {}
+                                },
+                                "three": {
+                                    "id": 3,
+                                    "image": "fedora",
+                                    "status": "Installing",
+                                    "config": {},
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "needs_cleanup": true,
+        }))
+        .unwrap();
 
         let report = Report::from(LocalState {
-            status: crate::state::UpdateStatus::Done,
+            status: crate::state::UpdateStatus::ApplyingChanges,
             device,
         });
 
-        let value: Value = report.into();
         assert_eq!(
-            value,
-            json!({"test-uuid": {
-                "apps": {}
-            }})
-        )
+            report
+                .0
+                .get("device-123")
+                .and_then(|device| device.apps.as_ref())
+                .and_then(|apps| apps.get(&Uuid::from("my-app")))
+                .and_then(|app| app.releases.get(&Uuid::from("new-release")))
+                .map(|rel| &rel.update_status),
+            Some(&UpdateStatus::ApplyingChanges),
+        );
+        assert_eq!(
+            report
+                .0
+                .get("device-123")
+                .and_then(|device| device.apps.as_ref())
+                .and_then(|apps| apps.get(&Uuid::from("my-app")))
+                .and_then(|app| app.releases.get(&Uuid::from("new-release")))
+                .and_then(|rel| rel.services.get("two"))
+                .map(|svc| (&svc.status, svc.download_progress)),
+            Some((&ServiceStatus::Downloading, Some(50))),
+        );
+        assert_eq!(
+            report
+                .0
+                .get("device-123")
+                .and_then(|device| device.apps.as_ref())
+                .and_then(|apps| apps.get(&Uuid::from("my-app")))
+                .and_then(|app| app.releases.get(&Uuid::from("new-release")))
+                .and_then(|rel| rel.services.get("three"))
+                .map(|svc| (&svc.status, svc.download_progress)),
+            Some((&ServiceStatus::Installing, None)),
+        );
     }
 
     #[test]

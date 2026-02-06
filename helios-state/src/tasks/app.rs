@@ -8,8 +8,8 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service, ServiceTarget,
-    mark_duplicate_service_config,
+    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service, ServiceStatus,
+    ServiceTarget, mark_duplicate_service_config,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
@@ -178,19 +178,23 @@ fn fetch_apps_images(
                 release
                     .services
                     .iter()
+                    // find all services that need downloading
                     .filter_map(|(svc_name, svc)| {
                         if device
                             .apps
                             .get(app_uuid)
                             .and_then(|app| app.releases.get(commit))
                             .and_then(|rel| rel.services.get(svc_name))
-                            .is_some()
+                            .map(|svc| &svc.status)
+                            != Some(&ServiceStatus::Installing)
                         {
-                            // the service already exists, ignore the image
+                            // the service has already been downloaded, ignore
+                            // the image
                             return None;
                         }
 
                         // only use the target image ref if it is an URI
+                        // (this should always be the case)
                         if let ImageRef::Uri(img_uri) = &svc.image {
                             Some((svc_name, img_uri))
                         } else {
@@ -222,7 +226,7 @@ fn fetch_apps_images(
             acc
         });
 
-    // only download at most 3 images at the time
+    // download at most 3 images at the time
     let mut tasks: Vec<Task> = Vec::new();
     for image in images_to_install.into_iter().take(3) {
         tasks.push(create_image.with_arg("image_name", image.clone()))
@@ -237,10 +241,24 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
     })
 }
 
+/// Create the service in memory before initiating download
+fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
+    let ServiceTarget {
+        id, image, config, ..
+    } = tgt;
+    maybe_svc.create(Service {
+        id,
+        image,
+        status: ServiceStatus::Installing,
+        container_id: None,
+        config,
+    })
+}
+
 /// Install the service if the images exist
 ///
 /// Implement this as a method to allow to make concurrent service installs
-fn maybe_install_service(
+fn install_service_after_fetch(
     System(device): System<Device>,
     Target(tgt): Target<Service>,
 ) -> Option<Task> {
@@ -248,30 +266,20 @@ fn maybe_install_service(
     if let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
     {
-        // FIXME: we need to add current host OS metadata to the
-        // service as env vars via the target
         return Some(install_service.with_target(tgt));
     }
+
     None
 }
 
 /// Install the service
 fn install_service(
-    maybe_svc: View<Option<Service>>,
-    Target(tgt): Target<Service>,
+    mut svc: View<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
 ) -> IO<Service, AppError> {
-    enforce!(maybe_svc.is_none(), "service {svc_name} already exists");
-
-    let ServiceTarget { id, image, .. } = tgt;
-    let svc = maybe_svc.create(Service {
-        id,
-        image,
-        container_id: None,
-        config: tgt.config,
-    });
+    svc.status = ServiceStatus::Installed;
 
     with_io(svc, async move |mut svc| {
         let docker = docker
@@ -386,7 +394,12 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
             [
-                job::create(maybe_install_service),
+                job::create(create_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("initialize service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::update(install_service_after_fetch),
                 job::none(install_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("install service '{service_name}' for release '{commit}'")
