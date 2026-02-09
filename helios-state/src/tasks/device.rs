@@ -6,38 +6,18 @@ use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::Uuid;
-use crate::models::{Device, DeviceTarget};
+use crate::models::Device;
 use crate::oci::RegistryAuthClient;
 use crate::util::store::{Store, StoreError};
-
-/// Make sure a cleanup happens after all tasks have been performed
-///
-/// This should be the first task for every workflow
-fn ensure_cleanup(mut device: View<Device>) -> View<Device> {
-    device.needs_cleanup = true;
-    device
-}
 
 /// Clean up the device state after the target has been reached
 ///
 /// This should be the final task for every workflow
 fn perform_cleanup(
     device: View<Device>,
-    Target(tgt_device): Target<Device>,
     auth_client_res: Res<RwLock<RegistryAuthClient>>,
     store: Res<Store>,
 ) -> IO<Device, StoreError> {
-    // skip the task if we have not reached the target state
-    // (outside the needs_cleanup property)
-    if DeviceTarget::from(Device {
-        needs_cleanup: false,
-        ..device.clone()
-    }) != tgt_device
-        || !device.needs_cleanup
-    {
-        return IO::abort("target state not reached yet");
-    }
-
     with_io(device, |device| async move {
         // Clean up authorizations
         if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
@@ -75,11 +55,12 @@ fn perform_cleanup(
             }
         }
 
+        // TODO: we will need to eventually prune images that are not in the target state
+
         Ok(device)
     })
     .map(|mut device| {
         device.auths.clear();
-        device.needs_cleanup = false;
         device
     })
 }
@@ -106,13 +87,5 @@ pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unini
             "/name",
             job::any(set_device_name).with_description(|| "update device name"),
         )
-        // XXX: this is not added first because of
-        // https://github.com/balena-io-modules/mahler-rs/pull/50
-        .jobs(
-            "",
-            [
-                job::update(ensure_cleanup).with_description(|| "ensure clean-up"),
-                job::update(perform_cleanup).with_description(|| "perform clean-up"),
-            ],
-        )
+        .with_cleanup(perform_cleanup)
 }

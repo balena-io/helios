@@ -35,9 +35,6 @@ pub struct Device {
 
     /// The "hostapp" configuration
     pub host: Option<Host>,
-
-    /// A cleanup sttep is needed
-    pub needs_cleanup: bool,
 }
 
 impl Default for DeviceTarget {
@@ -46,7 +43,6 @@ impl Default for DeviceTarget {
             name: None,
             apps: Map::new(),
             host: None,
-            needs_cleanup: false,
         }
     }
 }
@@ -60,7 +56,6 @@ impl Device {
             images: Map::new(),
             apps: Map::new(),
             host: os.map(Host::new),
-            needs_cleanup: false,
         }
     }
 }
@@ -71,7 +66,6 @@ impl From<Device> for DeviceTarget {
             name,
             apps,
             host,
-            needs_cleanup,
             uuid: _,
             auths: _,
             images: _,
@@ -83,7 +77,6 @@ impl From<Device> for DeviceTarget {
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
             host: host.map(|r| r.into()),
-            needs_cleanup,
         }
     }
 }
@@ -139,7 +132,6 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
             name: Some(name),
             apps: userapps,
             host: hostapp,
-            needs_cleanup: false,
         }
     }
 }
@@ -177,7 +169,6 @@ mod tests {
                 }
 
             },
-            "needs_cleanup": false
         });
 
         let device: Device = serde_json::from_value(json).unwrap();

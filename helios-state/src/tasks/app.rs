@@ -279,6 +279,7 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<Store>,
 ) -> IO<Service, AppError> {
+    enforce!(svc.status < ServiceStatus::Installed);
     svc.status = ServiceStatus::Installed;
 
     with_io(svc, async move |mut svc| {

@@ -103,7 +103,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
             "auths": [],
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -114,7 +113,6 @@ mod tests {
                     "name": "my-app",
                 }
             },
-            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -123,11 +121,7 @@ mod tests {
             .find_workflow(target)
             .unwrap();
 
-        let expected: Dag<&str> = seq!(
-            "ensure clean-up",
-            "initialize app with uuid 'my-app-uuid'",
-            "perform clean-up"
-        );
+        let expected: Dag<&str> = seq!("initialize app with uuid 'my-app-uuid'", "clean-up");
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 
@@ -145,7 +139,6 @@ mod tests {
                     "name": "my-app-old-name",
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -157,7 +150,6 @@ mod tests {
                     "name": "my-app",
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -165,12 +157,10 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = seq!("ensure clean-up")
-            + par!(
-                "update device name",
-                "store name for app with uuid 'my-app-uuid'",
-            )
-            + seq!("perform clean-up");
+        let expected: Dag<&str> = par!(
+            "update device name",
+            "store name for app with uuid 'my-app-uuid'",
+        ) + seq!("clean-up");
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 
@@ -188,7 +178,6 @@ mod tests {
                     "name": "my-app",
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -200,7 +189,6 @@ mod tests {
                     "name": "my-new-app-name",
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -208,12 +196,10 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = seq!("ensure clean-up")
-            + par!(
-                "store id for app with uuid 'my-app-uuid'",
-                "store name for app with uuid 'my-app-uuid'"
-            )
-            + seq!("perform clean-up");
+        let expected: Dag<&str> = par!(
+            "store id for app with uuid 'my-app-uuid'",
+            "store name for app with uuid 'my-app-uuid'"
+        ) + seq!("clean-up");
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 
@@ -230,7 +216,6 @@ mod tests {
                     "name": "my-new-app-name",
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -279,7 +264,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -287,7 +271,7 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = seq!("ensure clean-up", "request registry credentials")
+        let expected: Dag<&str> = seq!("request registry credentials")
             + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + par!(
                 "initialize service 'service1' for release 'my-release-uuid'",
@@ -313,7 +297,7 @@ mod tests {
                 "install service 'service4' for release 'my-release-uuid'",
                 "install service 'service5' for release 'my-release-uuid'",
             )
-            + seq!("perform clean-up");
+            + seq!("clean-up");
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -354,7 +338,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -383,7 +366,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -392,9 +374,8 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
-            "ensure clean-up",
             "store image metadata for service 'one' of release 'my-release-uuid'",
-            "perform clean-up"
+            "clean-up"
         );
 
         let workflow = workflow.unwrap();
@@ -439,7 +420,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -469,7 +449,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -501,7 +480,6 @@ mod tests {
                     "build": "abcd1234",
                 },
             },
-            "needs_cleanup": false
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -518,7 +496,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false
         }))
         .unwrap();
 
@@ -527,11 +504,10 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
-            "ensure clean-up",
             "initialize hostOS release 'target-release'",
             "install hostOS release 'target-release'",
             "complete hostOS release install for 'target-release'",
-            "perform clean-up"
+            "clean-up"
         );
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
@@ -561,7 +537,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -578,7 +553,6 @@ mod tests {
                     }
                 }
             },
-            "needs_cleanup": false,
         }))
         .unwrap();
 
@@ -586,16 +560,15 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("ensure clean-up", "initialize hostOS release 'new-release'",)
-                + par!(
-                    "install hostOS release 'new-release'",
-                    "clean up metadata for previous hostOS release 'old-release'",
-                )
-                + seq!(
-                    "complete hostOS release install for 'new-release'",
-                    "perform clean-up"
-                );
+        let expected: Dag<&str> = seq!("initialize hostOS release 'new-release'",)
+            + par!(
+                "install hostOS release 'new-release'",
+                "clean up metadata for previous hostOS release 'old-release'",
+            )
+            + seq!(
+                "complete hostOS release install for 'new-release'",
+                "clean-up"
+            );
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 }

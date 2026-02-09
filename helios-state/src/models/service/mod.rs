@@ -20,7 +20,7 @@ pub use container_name::*;
 /// The `Downloading` state can be determined by the state
 /// report module by checking if status == Installing and
 /// image download progress < 100
-#[derive(State, Debug, Clone, Default, Eq, PartialEq)]
+#[derive(State, Debug, Clone, Default, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ServiceStatus {
     #[default]
     Installing,
