@@ -571,4 +571,45 @@ mod tests {
             );
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
+
+    #[test]
+    fn it_ignores_a_target_that_deletes_the_hostapp() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "abcd1234",
+                        "status": "Running",
+                        "install_attempts": 1,
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "name": "new-device-name",
+            "uuid": "my-device-uuid",
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!("update device name", "clean-up");
+        assert_eq!(workflow.unwrap().to_string(), expected.to_string());
+    }
 }
