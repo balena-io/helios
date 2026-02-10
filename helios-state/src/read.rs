@@ -134,6 +134,7 @@ pub async fn read(
             // Create the release for the uuid if it doesn't exist
             let release = app.releases.entry(release_uuid.clone()).or_insert(Release {
                 services: Map::new(),
+                networks: Map::new(),
             });
 
             // Create the service configuration from the container and image config

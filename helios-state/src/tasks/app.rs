@@ -8,7 +8,7 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service,
+    App, AppMap, AppTarget, Device, ImageRef, Network, RegistryAuthSet, Release, Service,
     ServiceContainerStatus, ServiceContainerSummary, ServiceTarget, mark_duplicate_service_config,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
@@ -237,8 +237,23 @@ fn fetch_apps_images(
 fn create_release(release: View<Option<Release>>) -> View<Release> {
     release.create(Release {
         services: Map::new(),
+        networks: Map::new(),
     })
 }
+
+/// Create a network in the state tree
+// TODO: add Docker integration once helios-oci has a network client
+fn create_network(net: View<Option<Network>>, Target(tgt): Target<Network>) -> View<Network> {
+    net.create(tgt)
+}
+
+/// Remove a network from the state tree
+// TODO: add Docker integration once helios-oci has a network client
+fn remove_network(net: View<Network>) -> View<Option<Network>> {
+    net.delete()
+}
+
+// TODO: handle network config updates via delete + create
 
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
@@ -437,6 +452,21 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     format!("initialize release '{commit}' for app with uuid '{uuid}'")
                 },
             )],
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}/networks/{network_name}",
+            [
+                job::create(create_network).with_description(
+                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("create network '{network_name}' for app '{app_uuid}'")
+                    },
+                ),
+                job::delete(remove_network).with_description(
+                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove network '{network_name}' for app '{app_uuid}'")
+                    },
+                ),
+            ],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
