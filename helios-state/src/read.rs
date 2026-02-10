@@ -149,6 +149,7 @@ pub async fn read(
                 app.releases.entry(release_uuid.clone()).or_insert(Release {
                     installed,
                     services: Map::new(),
+                    networks: Map::new(),
                 })
             };
 
