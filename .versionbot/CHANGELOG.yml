@@ -1,4 +1,38 @@
 - commits:
+    - subject: Add an exception to delete operations on the hostapp
+      hash: ba0227a653221cf3a702af35711a7c393edad210
+      body: |
+        This allows to find a plan in those cases where the target hostapp has
+        been set to null.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use new cleanup hook feature in mahler 0.25
+      hash: dc23f3e7ccf4218cfcc306cd8a83e495927bc58e
+      body: |
+        This also removes the `Device::needs_cleanup` property that is no longer
+        required.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Update mahler to v0.25.x
+      hash: 9207cf020ddad98933b9f286dd9db4cde3c03fb5
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+        Depends-on: balena-io-modules/mahler-rs#73
+        depends-on: balena-io-modules/mahler-rs#73
+      author: felipe
+      nested: []
+  version: 0.15.0
+  title: ""
+  date: 2026-02-10T18:45:27.950Z
+- commits:
     - subject: Allow device target for local worker to be None
       hash: bc88dbf4aec1c0840a47a01ec9d1a681dac53860
       body: |
