@@ -141,6 +141,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
     #[test]
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
