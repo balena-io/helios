@@ -155,7 +155,8 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-one"))
-        .and_then(|s| s.get("container_id"))
+        .and_then(|s| s.get("container"))
+        .and_then(|c| c.get("id"))
         .unwrap()
         .as_str()
         .unwrap();
@@ -165,7 +166,8 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-two"))
-        .and_then(|s| s.get("container_id"))
+        .and_then(|s| s.get("container"))
+        .and_then(|c| c.get("id"))
         .unwrap()
         .as_str()
         .unwrap();

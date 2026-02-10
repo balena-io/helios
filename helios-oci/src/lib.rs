@@ -12,7 +12,10 @@ mod registry;
 pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 
 mod container;
-pub use container::{Container, ContainerConfig, LocalContainer};
+pub use container::{Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer};
+
+mod datetime;
+pub use datetime::DateTime;
 
 use helios_util as util;
 
@@ -142,6 +145,13 @@ impl From<&str> for Error {
 impl From<String> for Error {
     #[inline]
     fn from(value: String) -> Self {
+        Error::unexpected(value)
+    }
+}
+
+impl From<chrono::ParseError> for Error {
+    #[inline]
+    fn from(value: chrono::ParseError) -> Self {
         Error::unexpected(value)
     }
 }

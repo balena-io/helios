@@ -1,7 +1,11 @@
 use mahler::state::{Map, State};
+use serde::{Deserialize, Serialize};
 
-use crate::oci::{ImageConfig, LocalContainer};
+use crate::oci::{ContainerState, DateTime, ImageConfig, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
+
+// re-export the container status
+pub use crate::oci::ContainerStatus as ServiceContainerStatus;
 
 use super::image::ImageRef;
 
@@ -27,15 +31,22 @@ pub enum ServiceStatus {
     Installed,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct ServiceContainerSummary {
+    pub id: String,
+    pub created: DateTime,
+    pub status: ServiceContainerStatus,
+}
+
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
 
-    /// Service container ID on the engine
+    /// Service container state
     #[mahler(internal)]
-    pub container_id: Option<String>,
+    pub container: Option<ServiceContainerSummary>,
 
     /// The service lifecycle status
     pub status: ServiceStatus,
@@ -114,14 +125,23 @@ impl From<(&ImageConfig, LocalContainer)> for Service {
             .unwrap_or(0);
 
         let container_id = container.id.clone();
+        let ContainerState {
+            status, created, ..
+        } = container.state.clone();
+        let container_state = ServiceContainerSummary {
+            id: container_id,
+            status,
+            created,
+        };
+
         let image = ImageRef::Id(container.image_id.clone());
         let config = (img_config, container).into();
 
         Self {
             id,
+            container: Some(container_state),
             image,
             status: ServiceStatus::Installed,
-            container_id: Some(container_id),
             config,
         }
     }

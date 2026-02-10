@@ -185,8 +185,7 @@ fn fetch_apps_images(
                             .get(app_uuid)
                             .and_then(|app| app.releases.get(commit))
                             .and_then(|rel| rel.services.get(svc_name))
-                            .map(|svc| &svc.status)
-                            != Some(&ServiceStatus::Installing)
+                            .is_none_or(|svc| svc.container.is_some())
                         {
                             // the service has already been downloaded, ignore
                             // the image
@@ -250,7 +249,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         id,
         image,
         status: ServiceStatus::Installing,
-        container_id: None,
+        container: None,
         config,
     })
 }
@@ -279,9 +278,8 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<Store>,
 ) -> IO<Service, AppError> {
-    enforce!(svc.status < ServiceStatus::Installed);
+    enforce!(svc.container.is_none());
     svc.status = ServiceStatus::Installed;
-
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()

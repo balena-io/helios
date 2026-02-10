@@ -6,11 +6,12 @@ use bollard::{
         CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
         RemoveContainerOptions,
     },
-    secret::ContainerInspectResponse,
+    secret::{ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum},
 };
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
+use super::datetime::DateTime;
 use super::image::ImageConfig;
 use super::util::types::ImageUri;
 use super::{Client, Error, Result, WithContext};
@@ -175,13 +176,82 @@ impl TryFrom<ContainerInspectResponse> for LocalContainer {
             .to_owned();
         let config = value.config.map(|c| c.into()).unwrap_or_default();
 
+        let created: DateTime = value
+            .created
+            .ok_or("container creation date should not be nil")?
+            .parse()
+            .map_err(Error::from)
+            .context("container creation date should be a valid date")?;
+
+        let state = value.state.ok_or("container state should not be nil")?;
+        let healthy = state
+            .health
+            .and_then(|health| health.status)
+            .map(|status| status == HealthStatusEnum::HEALTHY)
+            .unwrap_or_default();
+        let status = state
+            .status
+            .ok_or("container status should not be nil")?
+            .into();
+
+        let state = ContainerState {
+            created,
+            error: state.error,
+            healthy,
+            status,
+        };
+
         Ok(Self {
             id,
             name,
             image_id,
             config,
+            state,
         })
     }
+}
+
+/// The container runtime status. This is a simplified state over what the container engine returns
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerStatus {
+    #[default]
+    Installed,
+    Running,
+    Stopped,
+    Dead,
+}
+
+impl From<ContainerStateStatusEnum> for ContainerStatus {
+    fn from(value: ContainerStateStatusEnum) -> Self {
+        use ContainerStateStatusEnum::*;
+        match value {
+            EMPTY => ContainerStatus::Installed,
+            CREATED => ContainerStatus::Installed,
+            RUNNING => ContainerStatus::Running,
+            PAUSED => ContainerStatus::Stopped,
+            RESTARTING => ContainerStatus::Running,
+            REMOVING => ContainerStatus::Stopped,
+            EXITED => ContainerStatus::Stopped,
+            DEAD => ContainerStatus::Dead,
+        }
+    }
+}
+
+/// Container state summary
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ContainerState {
+    /// The container runtime status
+    pub status: ContainerStatus,
+    /// Container health status, `true` means the container
+    /// is healthy, `false` means the container health status is
+    /// undetermined
+    pub healthy: bool,
+    /// Container creation date
+    pub created: DateTime,
+    /// Last error message from the container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Container configuration that is portable between hosts
@@ -232,4 +302,7 @@ pub struct LocalContainer {
 
     /// User-defined portable configuration
     pub config: ContainerConfig,
+
+    /// The container runtime state
+    pub state: ContainerState,
 }
