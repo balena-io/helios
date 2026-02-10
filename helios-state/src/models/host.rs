@@ -1,4 +1,5 @@
 use mahler::state::{Map, State};
+use serde::{Deserialize, Serialize};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::remote_model::HostApp as RemoteHostAppTarget;
@@ -60,11 +61,16 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
     }
 }
 
-#[derive(State, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum HostReleaseStatus {
     Created,
     Installed,
     Running,
+}
+
+impl State for HostReleaseStatus {
+    type Target = Self;
 }
 
 #[derive(State, Debug, Clone)]

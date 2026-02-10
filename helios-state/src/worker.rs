@@ -499,7 +499,7 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "cde2354",
-                        "status": "Running",
+                        "status": "running",
                     }
                 }
             },
@@ -539,7 +539,7 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "abcd1234",
-                        "status": "Running",
+                        "status": "running",
                         "install_attempts": 1,
                     }
                 }
@@ -556,7 +556,7 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "cde2354",
-                        "status": "Running"
+                        "status": "running"
                     }
                 }
             },
@@ -599,7 +599,7 @@ mod tests {
                         "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                         "updater": "bh.cr/balena_os/balenahup",
                         "build": "abcd1234",
-                        "status": "Running",
+                        "status": "running",
                         "install_attempts": 1,
                     }
                 }
