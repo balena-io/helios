@@ -99,6 +99,20 @@ impl Container<'_> {
         Ok(res.id)
     }
 
+    /// Start the container with the given name
+    pub async fn start(&self, name: &str) -> Result<()> {
+        match self.0.inner().start_container(name, None).await {
+            Ok(_) => Ok(()),
+            // service already running, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => Ok(()),
+            Err(e) => {
+                Err(Error::from(e)).with_context(|| format!("failed to start container {name}"))
+            }
+        }
+    }
+
     /// Create a temporary container from the given image
     ///
     /// This is only meant to get access to the container files and not to be started

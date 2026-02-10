@@ -418,7 +418,7 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "status": "Installed",
+                                    "started": false,
                                     "container": {
                                         "id": "abc",
                                         "status": "installed",
@@ -429,13 +429,13 @@ mod tests {
                                 "two": {
                                     "id": 2,
                                     "image": "alpine",
-                                    "status": "Installing",
+                                    "started": false,
                                     "config": {}
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
-                                    "status": "Installing",
+                                    "started": false,
                                     "config": {},
                                 }
                             }
