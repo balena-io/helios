@@ -1,5 +1,6 @@
 pub mod config;
 pub mod crypto;
+pub mod network;
 pub mod dirs;
 pub mod fs;
 pub mod http;
