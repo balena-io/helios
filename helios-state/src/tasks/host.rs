@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use mahler::extract::{Args, Res, System, Target, View};
-use mahler::job;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
+use mahler::{exception, job};
 use tokio::fs;
 use tracing::{debug, warn};
 
@@ -302,32 +302,37 @@ fn remove_old_metadata(
 }
 
 pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
-    worker.jobs(
-        "/host/releases/{release_uuid}",
-        [
-            job::create(init_hostapp_release).with_description(
-                |Args(release_uuid): Args<String>| {
-                    format!("initialize hostOS release '{release_uuid}'")
-                },
-            ),
-            job::update(install_hostapp_release).with_description(
-                |Args(release_uuid): Args<String>| {
-                    format!("install hostOS release '{release_uuid}'")
-                },
-            ),
-            job::update(complete_hostapp_install).with_description(
-                |Args(release_uuid): Args<String>| {
-                    format!("complete hostOS release install for '{release_uuid}'")
-                },
-            ),
-            job::update(update_script_uri).with_description(|Args(release_uuid): Args<String>| {
-                format!("update metadata for release '{release_uuid}'")
-            }),
-            job::delete(remove_old_metadata).with_description(
-                |Args(release_uuid): Args<String>| {
-                    format!("clean up metadata for previous hostOS release '{release_uuid}'",)
-                },
-            ),
-        ],
-    )
+    worker
+        .jobs(
+            "/host/releases/{release_uuid}",
+            [
+                job::create(init_hostapp_release).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("initialize hostOS release '{release_uuid}'")
+                    },
+                ),
+                job::update(install_hostapp_release).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("install hostOS release '{release_uuid}'")
+                    },
+                ),
+                job::update(complete_hostapp_install).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("complete hostOS release install for '{release_uuid}'")
+                    },
+                ),
+                job::update(update_script_uri).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("update metadata for release '{release_uuid}'")
+                    },
+                ),
+                job::delete(remove_old_metadata).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("clean up metadata for previous hostOS release '{release_uuid}'",)
+                    },
+                ),
+            ],
+        )
+        // ignore requests to delete the host field if the target OS is set to null
+        .exception("/host", exception::delete(|| true))
 }

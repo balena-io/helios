@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-util" ]
+members = [
+  "helios",
+  "helios-api",
+  "helios-legacy",
+  "helios-oci",
+  "helios-remote",
+  "helios-remote-model",
+  "helios-state",
+  "helios-util",
+]
 
 [workspace.package]
 version = "0.14.1"
@@ -9,7 +18,7 @@ edition = "2024"
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"
 repository = "https://github.com/balena-io/helios"
-authors = [ "Balena Inc. <hello@balena.io>" ]
+authors = ["Balena Inc. <hello@balena.io>"]
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
@@ -61,12 +70,12 @@ version = "0"
 [workspace.dependencies.axum]
 version = "0.8.6"
 default-features = false
-features = [ "tokio", "http1", "json", "query" ]
+features = ["tokio", "http1", "json", "query"]
 
 [workspace.dependencies.tokio]
 version = "1.47.1"
 default-features = false
-features = [ "rt-multi-thread", "macros", "time", "fs" ]
+features = ["rt-multi-thread", "macros", "time", "fs"]
 
 [workspace.dependencies.tokio-stream]
 version = "0.1.18"
@@ -75,31 +84,31 @@ default-features = false
 [workspace.dependencies.tower-http]
 version = "0.6.6"
 default-features = false
-features = [ "trace" ]
+features = ["trace"]
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3.20"
-features = [ "env-filter", "fmt", "registry", "ansi" ]
+features = ["env-filter", "fmt", "registry", "ansi"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"
 default-features = false
-features = [ "json", "rustls", "brotli", "stream" ]
+features = ["json", "rustls", "brotli", "stream"]
 
 [workspace.dependencies.serde]
 version = "1.0"
-features = [ "derive" ]
+features = ["derive"]
 
 [workspace.dependencies.clap]
 version = "4.5"
-features = [ "derive", "env" ]
+features = ["derive", "env"]
 
 [workspace.dependencies.uuid]
 version = "1.18"
-features = [ "v4" ]
+features = ["v4"]
 
 [workspace.dependencies.mahler]
-version = "0.24"
+version = "0.25"
 
 [workspace.dependencies.sha2]
 version = "0.10.9"
@@ -112,7 +121,7 @@ default-features = false
 [workspace.dependencies.zbus]
 version = "5.11"
 default-features = false
-features = [ "tokio" ]
+features = ["tokio"]
 
 [profile.release]
 opt-level = "z"
