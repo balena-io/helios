@@ -226,6 +226,7 @@ mod tests {
                     "name": "my-new-app-name",
                     "releases": {
                         "my-release-uuid": {
+                            "installed": true,
                             "services": {
                                 "service1": {
                                     "id": 1,
@@ -304,6 +305,7 @@ mod tests {
                 "start service 'service4' for release 'my-release-uuid'",
                 "start service 'service5' for release 'my-release-uuid'",
             )
+            + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + seq!("clean-up");
 
         let workflow = workflow.unwrap();
@@ -329,6 +331,7 @@ mod tests {
                     "name": "my-app-name",
                     "releases": {
                         "my-release-uuid": {
+                            "installed": true,
                             "services": {
                                 "service1": {
                                     "id": 1,
@@ -373,6 +376,7 @@ mod tests {
                     "name": "my-app-name",
                     "releases": {
                         "my-release-uuid": {
+                            "installed": true,
                             "services": {
                                 "service1": {
                                     "id": 1,
@@ -419,6 +423,7 @@ mod tests {
                     "name": "my-app",
                     "releases": {
                         "my-release-uuid": {
+                            "installed": true,
                             "services": {
                                 "one": {
                                     "id": 1,
@@ -447,6 +452,7 @@ mod tests {
                     "name": "my-app",
                     "releases": {
                         "my-release-uuid": {
+                            "installed": true,
                             "services": {
                                 "one": {
                                     "id": 1,
@@ -500,6 +506,7 @@ mod tests {
                     "name": "my-new-app-name",
                     "releases": {
                         "old-release": {
+                            "installed": true,
                             "services": {
                                 "service1": {
                                     "id": 1,
@@ -529,6 +536,7 @@ mod tests {
                     "name": "my-new-app-name",
                     "releases": {
                         "new-release": {
+                            "installed": true,
                             "services": {
                                 "service1": {
                                     "id": 1,

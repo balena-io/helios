@@ -118,23 +118,39 @@ pub async fn read(
                 .unwrap_or(UNKNOWN_APP_UUID.into());
 
             // Create the app if it doesn't exist yet
-            let app = apps.entry(app_uuid.clone()).or_insert_with(|| App {
-                id: 0,
-                name: None,
-                releases: Map::new(),
-            });
-
-            // Read the app name from the local state
-            if app.name.is_none() {
-                app.name = local_store
+            let app = if let Some(app) = apps.get_mut(&app_uuid) {
+                app
+            } else {
+                let name = local_store
                     .read(format!("/apps/{app_uuid}"), "name")
                     .await?;
-            }
+
+                // read the app name from the local store when creating the app
+                apps.entry(app_uuid.clone()).or_insert(App {
+                    id: 0,
+                    name,
+                    releases: Map::new(),
+                })
+            };
 
             // Create the release for the uuid if it doesn't exist
-            let release = app.releases.entry(release_uuid.clone()).or_insert(Release {
-                services: Map::new(),
-            });
+            let release = if let Some(rel) = app.releases.get_mut(&release_uuid) {
+                rel
+            } else {
+                // only read the install state when creating the release
+                let installed = local_store
+                    .read(
+                        format!("/apps/{app_uuid}/releases/{release_uuid}"),
+                        "installed",
+                    )
+                    .await?
+                    .unwrap_or_default();
+
+                app.releases.entry(release_uuid.clone()).or_insert(Release {
+                    installed,
+                    services: Map::new(),
+                })
+            };
 
             // Create the service configuration from the container and image config
             let image = docker.image().inspect(&local_container.image_id).await?;

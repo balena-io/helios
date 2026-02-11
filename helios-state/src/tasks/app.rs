@@ -236,7 +236,40 @@ fn fetch_apps_images(
 /// Initialize an empty release
 fn create_release(release: View<Option<Release>>) -> View<Release> {
     release.create(Release {
+        installed: false,
         services: Map::new(),
+    })
+}
+
+/// Finalize an installed release
+fn finish_release(
+    mut release: View<Release>,
+    Target(target): Target<Release>,
+    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    store: Res<Store>,
+) -> IO<Release, StoreError> {
+    // all target services have been installed
+    enforce!(target.services.iter().all(|(svc_name, tgt_svc)| {
+        release
+            .services
+            .get(svc_name)
+            .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+            .unwrap_or_default()
+    }));
+
+    release.installed = true;
+    with_io(release, async move |release| {
+        // mark the release as installed on the local store
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .write(
+                format!("/apps/{app_uuid}/releases/{commit}"),
+                "installed",
+                &true,
+            )
+            .await?;
+
+        Ok(release)
     })
 }
 
@@ -566,11 +599,18 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}",
-            [job::create(create_release).with_description(
-                |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
-                    format!("initialize release '{commit}' for app with uuid '{uuid}'")
-                },
-            )],
+            [
+                job::create(create_release).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+                job::update(finish_release).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("finish release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+            ],
         )
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/services/{service_name}",
