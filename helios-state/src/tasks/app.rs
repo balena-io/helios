@@ -376,16 +376,43 @@ fn remove_release_services(
     tasks
 }
 
-/// Create a network in the state tree
-// TODO: add Docker integration once helios-oci has a network client
-fn create_network(net: View<Option<Network>>, Target(tgt): Target<Network>) -> View<Network> {
-    net.create(tgt)
+/// Create a network in Docker and the state tree
+fn create_network(
+    net: View<Option<Network>>,
+    Target(tgt): Target<Network>,
+    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Network, AppError> {
+    let net = net.create(tgt);
+
+    with_io(net, async move |net| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker
+            .network()
+            .create(&net.network_name, net.config.clone().into())
+            .await?;
+        Ok(net)
+    })
 }
 
-/// Remove a network from the state tree
-// TODO: add Docker integration once helios-oci has a network client
-fn remove_network(net: View<Network>) -> View<Option<Network>> {
-    net.delete()
+/// Remove a network from Docker and the state tree
+fn remove_network(
+    net: View<Network>,
+    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Option<Network>, AppError> {
+    let docker_name = net.network_name.clone();
+    let net = net.delete();
+
+    with_io(net, async move |net| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker.network().remove(&docker_name).await?;
+        Ok(net)
+    })
 }
 
 /// Create the service in memory before initiating download

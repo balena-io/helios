@@ -74,7 +74,7 @@ mod tests {
         assert!(target.installed);
         assert!(target.networks.contains_key("my-network"));
         let net = target.networks.get("my-network").unwrap();
-        assert_eq!(net.config.driver, "overlay");
+        assert_eq!(net.config.driver.to_string(), "overlay");
         assert_eq!(net.config.ipam.config.len(), 1);
         assert_eq!(
             net.config.ipam.config[0].subnet,
