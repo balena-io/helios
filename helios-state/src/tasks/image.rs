@@ -189,7 +189,7 @@ pub(super) fn create_image(
 /// Condition: the image exists and there are no services referencing it
 /// Effect: remove the image from the state
 /// Action: remove the image from the engine
-fn remove_image(
+pub fn remove_image(
     img_ptr: View<Image>,
     Args(image_name): Args<ImageUri>,
     System(device): System<Device>,

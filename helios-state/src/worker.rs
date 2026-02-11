@@ -314,6 +314,98 @@ mod tests {
         );
     }
 
+    // this never really happens, but it's useful for testing that the tasks
+    // are well defined
+    #[test]
+    fn it_finds_a_workflow_to_stop_and_remove_a_service() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                                "service2": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "started": true,
+                                    "container": {
+                                        "id": "deadc41f",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080" : {
+                    "engine_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "stop service 'service2' for release 'my-release-uuid'",
+            "remove service 'service2' for release 'my-release-uuid'",
+            "delete image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'"
+        ) + seq!("clean-up");
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
     #[test]
     fn it_finds_a_workflow_to_update_services_image_metadata() {
         before();

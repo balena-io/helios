@@ -14,7 +14,7 @@ use crate::models::{
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::image::{create_image, request_registry_credentials};
+use super::image::{create_image, remove_image, request_registry_credentials};
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
@@ -426,6 +426,93 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
     })
 }
 
+/// Stop a service if running and remove the service and its image
+fn stop_and_remove_service(
+    System(device): System<Device>,
+    svc: View<Service>,
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
+    if svc
+        .container
+        .as_ref()
+        .is_some_and(|c| c.status == ServiceContainerStatus::Running)
+    {
+        // stop the service if running
+        tasks.push(stop_service.into_task());
+    }
+
+    // rmeove the service
+    tasks.push(remove_service.into_task());
+
+    if let ImageRef::Uri(svc_img) = &svc.image
+        && device.images.contains_key(svc_img)
+    {
+        let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
+            app.releases.iter().any(|(r_uuid, rel)| {
+                rel.services.iter().any(|(s_name, s)| {
+                    // ignore the current service
+                    if a_uuid == &app_uuid && r_uuid == &commit && s_name == &svc_name {
+                        return false;
+                    }
+
+                    if let ImageRef::Uri(s_img) = &s.image {
+                        s_img == svc_img
+                    } else {
+                        false
+                    }
+                })
+            })
+        });
+
+        // remove the image if it exists and it's not used by other service
+        if !image_is_used {
+            tasks.push(remove_image.with_arg("image_name", svc_img.as_str()));
+        }
+    }
+
+    tasks
+}
+
+/// Remove a stopped service
+fn remove_service(
+    svc: View<Service>,
+    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+    store: Res<Store>,
+) -> IO<Option<Service>, AppError> {
+    let container_id = if let Some(container) = svc.container.as_ref()
+        && container.status != ServiceContainerStatus::Running
+    {
+        container.id.clone()
+    } else {
+        return IO::abort("service container should exist and should be stopped");
+    };
+
+    let svc = svc.delete();
+    with_io(svc, async move |svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let local_store = store.as_ref().expect("store should be available");
+
+        // remove the container
+        docker
+            .container()
+            .remove(&container_id)
+            .await
+            .context("failed to remove container for service")?;
+
+        // remove the service metadata from the local store
+        local_store
+            .delete_all(format!(
+                "/apps/{app_uuid}/releases/{commit}/services/{svc_name}"
+            ))
+            .await?;
+        Ok(svc)
+    })
+}
+
 /// Update a service image metadata in local storage
 fn store_service_image_uri(
     mut img: View<ImageRef>,
@@ -502,6 +589,12 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::update(stop_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("stop service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::delete(stop_and_remove_service),
+                job::none(remove_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove service '{service_name}' for release '{commit}'")
                     },
                 ),
                 job::none(install_service).with_description(
