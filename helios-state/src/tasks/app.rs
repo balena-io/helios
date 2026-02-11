@@ -14,7 +14,7 @@ use crate::models::{
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::image::{create_image, remove_image, request_registry_credentials};
+use super::image::{create_image, remove_image, remove_images, request_registry_credentials};
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
@@ -126,6 +126,24 @@ fn create_app(
         local_store
             .write(format!("/apps/{app_uuid}"), "name", &app.name)
             .await?;
+
+        Ok(app)
+    })
+}
+
+/// Remove an empty app
+fn remove_app(
+    app: View<App>,
+    Args(app_uuid): Args<Uuid>,
+    store: Res<Store>,
+) -> IO<Option<App>, StoreError> {
+    enforce!(app.releases.is_empty());
+
+    let app = app.delete();
+    with_io(app, async move |app| {
+        // remove app metadata
+        let local_store = store.as_ref().expect("store should be available");
+        local_store.delete_all(format!("/apps/{app_uuid}")).await?;
 
         Ok(app)
     })
@@ -271,6 +289,81 @@ fn finish_release(
 
         Ok(release)
     })
+}
+
+/// Remove an empty release
+fn remove_release(
+    release: View<Release>,
+    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    store: Res<Store>,
+) -> IO<Option<Release>, StoreError> {
+    enforce!(release.services.is_empty());
+
+    let release = release.delete();
+    with_io(release, async move |release| {
+        // remove release metadata
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .delete_all(format!("/apps/{app_uuid}/releases/{commit}"))
+            .await?;
+
+        Ok(release)
+    })
+}
+
+/// Remove release methods through a service to help with
+/// operation concurrency
+fn remove_release_services(
+    System(device): System<Device>,
+    release: View<Release>,
+    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
+
+    let mut images_to_remove = Vec::new();
+    for (svc_name, svc) in release.services.iter() {
+        if svc
+            .container
+            .as_ref()
+            .is_some_and(|c| c.status == ServiceContainerStatus::Running)
+        {
+            // stop the service if running
+            tasks.push(stop_service.with_arg("service_name", svc_name));
+        } else {
+            // otherwise remove it
+            tasks.push(remove_service.with_arg("service_name", svc_name));
+
+            if let ImageRef::Uri(svc_img) = &svc.image
+                && device.images.contains_key(svc_img)
+            {
+                // find any services from a different app and release that
+                // are still using the image
+                let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
+                    a_uuid != &app_uuid
+                        && app.releases.iter().any(|(r_uuid, rel)| {
+                            r_uuid != &commit
+                                && rel.services.values().any(|s| {
+                                    if let ImageRef::Uri(s_img) = &s.image {
+                                        s_img == svc_img
+                                    } else {
+                                        false
+                                    }
+                                })
+                        })
+                });
+
+                // remove the image if it exists and it's not used by other service
+                if !image_is_used {
+                    images_to_remove.push(svc_img);
+                }
+            }
+        }
+    }
+
+    // remove all images from removed services
+    tasks.push(remove_images.with_target(images_to_remove));
+
+    tasks
 }
 
 /// Create the service in memory before initiating download
@@ -579,17 +672,27 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::update(fetch_apps_images),
             ],
         )
-        .job(
+        .jobs(
             "/apps/{app_uuid}",
-            job::create(create_app).with_description(|Args(uuid): Args<Uuid>| {
-                format!("initialize app with uuid '{uuid}'")
-            }),
+            [
+                job::create(create_app).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("initialize app with uuid '{uuid}'")
+                }),
+                job::delete(remove_app).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("remove app with uuid '{uuid}'")
+                }),
+            ],
         )
-        .job(
+        .jobs(
             "/apps/{app_uuid}/name",
-            job::any(store_app_name).with_description(|Args(uuid): Args<Uuid>| {
-                format!("store name for app with uuid '{uuid}'")
-            }),
+            [
+                job::create(store_app_name).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("store name for app with uuid '{uuid}'")
+                }),
+                job::update(store_app_name).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("store name for app with uuid '{uuid}'")
+                }),
+            ],
         )
         .job(
             "/apps/{app_uuid}/id",
@@ -608,6 +711,12 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::update(finish_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("finish release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+                job::delete(remove_release_services),
+                job::delete(remove_release).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("remove release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
             ],

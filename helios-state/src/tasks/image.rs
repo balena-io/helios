@@ -224,6 +224,13 @@ pub fn remove_image(
     })
 }
 
+pub fn remove_images(RawTarget(images): RawTarget<Vec<ImageUri>>) -> Vec<Task> {
+    images
+        .iter()
+        .map(|img| remove_image.with_arg("image_name", img.as_str()))
+        .collect()
+}
+
 /// Update worker with image tasks
 pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
@@ -232,6 +239,7 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
             job::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
+        .job("/images", job::none(remove_images))
         .jobs(
             "/images/{image_name}",
             [
