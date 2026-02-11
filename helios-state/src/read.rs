@@ -4,12 +4,15 @@ use tokio::fs;
 use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
 use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::{App, Device, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID};
+use super::models::{
+    App, Device, Network, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID,
+};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -97,7 +100,7 @@ pub async fn read(
         // read the state of containers
         let containers = docker
             .container()
-            .list_with_labels(vec!["io.balena.supervised"])
+            .list_with_labels(vec![LABEL_SUPERVISED])
             .await?;
 
         for container_id in containers {
@@ -113,7 +116,7 @@ pub async fn read(
 
             let labels = local_container.config.labels.as_ref();
             let app_uuid: Uuid = labels
-                .and_then(|l| l.get("io.balena.app-uuid"))
+                .and_then(|l| l.get(LABEL_APP_UUID))
                 .map(|uuid| uuid.as_str().into())
                 .unwrap_or(UNKNOWN_APP_UUID.into());
 
@@ -152,6 +155,39 @@ pub async fn read(
                 .unwrap_or(svc.image);
 
             release.services.insert(service_name, svc);
+        }
+
+        // read the state of networks
+        let networks = docker
+            .network()
+            .list_with_labels(vec![LABEL_SUPERVISED])
+            .await?;
+
+        for network_name in networks {
+            let local_network = docker.network().inspect(&network_name).await?;
+
+            let app_uuid: Uuid = match local_network.labels.get(LABEL_APP_UUID) {
+                Some(uuid) => uuid.as_str().into(),
+                None => continue, // skip orphaned networks with no app-uuid
+            };
+
+            // Extract the network name by stripping the "{app_uuid}_" prefix
+            let net_name = match local_network.name.strip_prefix(&format!("{app_uuid}_")) {
+                Some(name) => name.to_owned(),
+                None => continue, // skip networks with unexpected name format
+            };
+
+            // Find associated release
+            let release = match apps.get_mut(&app_uuid) {
+                Some(app) => match app.releases.values_mut().next() {
+                    Some(release) => release,
+                    None => continue, // skip if no release exists
+                },
+                None => continue, // skip if no matching app
+            };
+
+            let network: Network = local_network.into();
+            release.networks.insert(net_name, network);
         }
     }
 

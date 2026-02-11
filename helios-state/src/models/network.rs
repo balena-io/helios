@@ -2,7 +2,9 @@ use mahler::state::{List, Map, State};
 use serde::{Deserialize, Serialize};
 
 use crate::labels::{LABEL_IPAM_CONFIG, LABEL_SUPERVISED};
-use crate::oci::{NetworkConfig as OciNetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig};
+use crate::oci::{
+    LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig,
+};
 use crate::remote_model::IpamConfig as RemoteIpamConfig;
 use crate::remote_model::Network as RemoteNetwork;
 use crate::remote_model::NetworkIpam as RemoteNetworkIpam;
@@ -95,6 +97,36 @@ impl From<RemoteNetwork> for Network {
             internal: net.internal,
             labels: net.labels.into_iter().collect(),
             ipam: net.ipam.into(),
+        }
+    }
+}
+
+impl From<LocalNetwork> for Network {
+    fn from(net: LocalNetwork) -> Self {
+        let mut labels: Map<String, String> = net.labels.into_iter().collect();
+
+        // Remove labels injected during create that are not part of the
+        // compose definition
+        labels.remove(LABEL_SUPERVISED);
+        labels.remove(LABEL_IPAM_CONFIG);
+
+        Network {
+            driver: net.driver.to_string(),
+            driver_opts: net.driver_opts.into_iter().collect(),
+            enable_ipv6: net.enable_ipv6,
+            internal: net.internal,
+            labels,
+            ipam: net.ipam.into(),
+        }
+    }
+}
+
+impl From<NetworkIpamConfig> for NetworkIpam {
+    fn from(ipam: NetworkIpamConfig) -> Self {
+        NetworkIpam {
+            driver: ipam.driver.to_string(),
+            config: ipam.config.into_iter().map(Into::into).collect(),
+            options: ipam.options.into_iter().collect(),
         }
     }
 }

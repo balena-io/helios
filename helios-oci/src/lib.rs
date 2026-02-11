@@ -19,7 +19,7 @@ pub use datetime::DateTime;
 
 mod network;
 pub use network::{
-    IpamDriver, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
+    IpamDriver, LocalNetwork, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
     NetworkIpamPoolConfig,
 };
 
