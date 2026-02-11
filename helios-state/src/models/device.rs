@@ -4,11 +4,13 @@ use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::RegistryAuth;
+use crate::labels::LABEL_APP_UUID;
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::host::Host;
 use super::image::Image;
+use super::network::Network;
 
 pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
@@ -93,7 +95,17 @@ impl DeviceTarget {
                         .insert(format!("{svc_name}_{rel_uuid}"));
                     svc.config
                         .labels
-                        .insert("io.balena.app-uuid".to_string(), app_uuid.to_string());
+                        .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+                }
+
+                // Ensure every release has an implicit "default" network
+                rel.networks
+                    .entry("default".to_string())
+                    .or_insert_with(Network::default);
+
+                for net in rel.networks.values_mut() {
+                    net.labels
+                        .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
                 }
             }
         }
@@ -141,6 +153,97 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn normalize_injects_default_network() {
+        let target: DeviceTarget = serde_json::from_value(json!({
+            "apps": {
+                "app1": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "rel1": {
+                            "services": {},
+                            "networks": {}
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target = target.normalize();
+        let app = target.apps.get(&"app1".into()).unwrap();
+        let rel = app.releases.get(&"rel1".into()).unwrap();
+        assert!(rel.networks.contains_key("default"));
+        assert_eq!(rel.networks.get("default").unwrap().driver, "bridge");
+    }
+
+    #[test]
+    fn normalize_does_not_overwrite_explicit_default_network() {
+        let target: DeviceTarget = serde_json::from_value(json!({
+            "apps": {
+                "app1": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "rel1": {
+                            "services": {},
+                            "networks": {
+                                "default": {
+                                    "driver": "overlay",
+                                    "driver_opts": {},
+                                    "enable_ipv6": false,
+                                    "internal": false,
+                                    "labels": {},
+                                    "ipam": {
+                                        "driver": "default",
+                                        "config": [],
+                                        "options": {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target = target.normalize();
+        let app = target.apps.get(&"app1".into()).unwrap();
+        let rel = app.releases.get(&"rel1".into()).unwrap();
+        assert_eq!(rel.networks.get("default").unwrap().driver, "overlay");
+    }
+
+    #[test]
+    fn normalize_applies_app_uuid_label_to_default_network() {
+        let target: DeviceTarget = serde_json::from_value(json!({
+            "apps": {
+                "app1": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "rel1": {
+                            "services": {},
+                            "networks": {}
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target = target.normalize();
+        let app = target.apps.get(&"app1".into()).unwrap();
+        let rel = app.releases.get(&"rel1".into()).unwrap();
+        let default_net = rel.networks.get("default").unwrap();
+        assert_eq!(
+            default_net.labels.get("io.balena.app-uuid"),
+            Some(&"app1".to_string())
+        );
+    }
+
     #[test]
     fn device_state_should_be_serializable_into_target() {
         let json = json!({

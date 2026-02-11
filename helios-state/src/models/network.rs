@@ -1,6 +1,8 @@
 use mahler::state::{List, Map, State};
 use serde::{Deserialize, Serialize};
 
+use crate::labels::{LABEL_IPAM_CONFIG, LABEL_SUPERVISED};
+use crate::oci::{NetworkConfig as OciNetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig};
 use crate::remote_model::IpamConfig as RemoteIpamConfig;
 use crate::remote_model::Network as RemoteNetwork;
 use crate::remote_model::NetworkIpam as RemoteNetworkIpam;
@@ -76,6 +78,12 @@ fn ipam_config_from(
     }
 }
 
+impl From<NetworkIpamPoolConfig> for IpamConfig {
+    fn from(pool: NetworkIpamPoolConfig) -> Self {
+        ipam_config_from(pool.subnet, pool.gateway, pool.ip_range, pool.aux_addresses)
+    }
+}
+
 impl From<RemoteNetwork> for Network {
     fn from(net: RemoteNetwork) -> Self {
         Network {
@@ -106,6 +114,49 @@ impl From<RemoteNetworkIpam> for NetworkIpam {
 impl From<RemoteIpamConfig> for IpamConfig {
     fn from(cfg: RemoteIpamConfig) -> Self {
         ipam_config_from(cfg.subnet, cfg.gateway, cfg.ip_range, cfg.aux_addresses)
+    }
+}
+
+impl From<&Network> for OciNetworkConfig {
+    fn from(net: &Network) -> Self {
+        let mut labels: std::collections::HashMap<String, String> =
+            net.labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+        // Mark the network as supervised
+        labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
+
+        // Mark networks with IPAM config so changes trigger network recreation
+        if !net.ipam.config.is_empty() {
+            labels.insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
+        }
+
+        let ipam = NetworkIpamConfig {
+            driver: net.ipam.driver.clone().into(),
+            config: net
+                .ipam
+                .config
+                .iter()
+                .map(|cfg| NetworkIpamPoolConfig {
+                    subnet: cfg.subnet.clone(),
+                    gateway: cfg.gateway.clone(),
+                    ip_range: cfg.ip_range.clone(),
+                    aux_addresses: cfg
+                        .aux_addresses
+                        .as_ref()
+                        .map(|a| a.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                })
+                .collect(),
+            options: net.ipam.options.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        };
+
+        OciNetworkConfig {
+            driver: net.driver.clone().into(),
+            driver_opts: net.driver_opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            enable_ipv6: net.enable_ipv6,
+            internal: net.internal,
+            labels,
+            ipam,
+        }
     }
 }
 
@@ -151,6 +202,92 @@ mod tests {
         let net: Network = remote.into();
         assert_eq!(net.driver, "bridge");
         assert_eq!(net.ipam.driver, "default");
+    }
+
+    #[test]
+    fn test_to_oci_config_maps_all_fields() {
+        let net = Network {
+            driver: "overlay".to_string(),
+            driver_opts: [(
+                "com.docker.network.driver.mtu".to_string(),
+                "1450".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            enable_ipv6: true,
+            internal: true,
+            labels: [
+                ("com.example.label".to_string(), "value".to_string()),
+                ("io.balena.app-uuid".to_string(), "abc123".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ipam: NetworkIpam {
+                driver: "custom".to_string(),
+                config: vec![IpamConfig {
+                    subnet: Some("10.0.0.0/8".to_string()),
+                    gateway: Some("10.0.0.1".to_string()),
+                    ip_range: Some("10.0.1.0/24".to_string()),
+                    aux_addresses: Some(
+                        [("host1".to_string(), "10.0.0.2".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                }]
+                .into_iter()
+                .collect(),
+                options: [("opt1".to_string(), "val1".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        };
+
+        let config: OciNetworkConfig = (&net).into();
+
+        // Basic fields
+        assert_eq!(config.driver.to_string(), "overlay");
+        assert_eq!(
+            config.driver_opts.get("com.docker.network.driver.mtu"),
+            Some(&"1450".to_string())
+        );
+        assert!(config.enable_ipv6);
+        assert!(config.internal);
+
+        // Labels: user labels pass through
+        assert_eq!(
+            config.labels.get("com.example.label"),
+            Some(&"value".to_string())
+        );
+        // Labels: app-uuid passes through
+        assert_eq!(
+            config.labels.get("io.balena.app-uuid"),
+            Some(&"abc123".to_string())
+        );
+        // Labels: supervised label is injected
+        assert_eq!(
+            config.labels.get("io.balena.supervised"),
+            Some(&"".to_string())
+        );
+        // Labels: IPAM config label is injected when config is non-empty
+        assert_eq!(
+            config.labels.get("io.balena.private.ipam.config"),
+            Some(&"true".to_string())
+        );
+
+        // IPAM
+        assert_eq!(config.ipam.driver.to_string(), "custom");
+        assert_eq!(config.ipam.options.get("opt1"), Some(&"val1".to_string()));
+        assert_eq!(config.ipam.config.len(), 1);
+
+        let pool = &config.ipam.config[0];
+        assert_eq!(pool.subnet, Some("10.0.0.0/8".to_string()));
+        assert_eq!(pool.gateway, Some("10.0.0.1".to_string()));
+        assert_eq!(pool.ip_range, Some("10.0.1.0/24".to_string()));
+        let aux = pool
+            .aux_addresses
+            .as_ref()
+            .expect("aux_addresses should be set");
+        assert_eq!(aux.get("host1"), Some(&"10.0.0.2".to_string()));
     }
 
     #[test]
