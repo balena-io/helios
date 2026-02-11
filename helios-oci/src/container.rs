@@ -113,6 +113,20 @@ impl Container<'_> {
         }
     }
 
+    /// Stop the container with the given name
+    pub async fn stop(&self, name: &str) -> Result<()> {
+        match self.0.inner().stop_container(name, None).await {
+            Ok(_) => Ok(()),
+            // service already stopped, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => Ok(()),
+            Err(e) => {
+                Err(Error::from(e)).with_context(|| format!("failed to stop container {name}"))
+            }
+        }
+    }
+
     /// Create a temporary container from the given image
     ///
     /// This is only meant to get access to the container files and not to be started

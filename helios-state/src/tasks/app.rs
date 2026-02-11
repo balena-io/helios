@@ -380,6 +380,53 @@ fn start_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, Oci
     })
 }
 
+/// Stop a running service
+fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+    let container_id = if let Some(container) = svc.container.as_mut()
+        && container.status == ServiceContainerStatus::Running
+    {
+        container.status = ServiceContainerStatus::Stopped;
+        container.id.clone()
+    } else {
+        return IO::abort("service container should exist and should be running");
+    };
+
+    with_io(svc, async move |mut svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        if let Some(container) = svc.container.as_mut() {
+            // set the container status before stopping
+            container.status = ServiceContainerStatus::Stopping;
+        }
+        let _ = svc.flush().await;
+
+        // stop the container
+        // FIXME: this needs update locks
+        docker
+            .container()
+            .stop(&container_id)
+            .await
+            .context("failed to stop container for service")?;
+
+        // re-read container state
+        let local_container = docker
+            .container()
+            .inspect(&container_id)
+            .await
+            .context("failed to inspect container for service")?;
+
+        svc.container.replace(ServiceContainerSummary::from((
+            local_container.id.as_ref(),
+            local_container.state,
+        )));
+
+        Ok(svc)
+    })
+}
+
+/// Update a service image metadata in local storage
 fn store_service_image_uri(
     mut img: View<ImageRef>,
     Target(tgt): Target<ImageUri>,
@@ -450,6 +497,11 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::update(start_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("start service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::update(stop_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("stop service '{service_name}' for release '{commit}'")
                     },
                 ),
                 job::none(install_service).with_description(

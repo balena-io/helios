@@ -1,11 +1,8 @@
 use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
-use crate::oci::{ContainerState, DateTime, ImageConfig, LocalContainer};
+use crate::oci::{ContainerState, ContainerStatus, DateTime, ImageConfig, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
-
-// re-export the container status
-pub use crate::oci::ContainerStatus as ServiceContainerStatus;
 
 use super::image::ImageRef;
 
@@ -14,6 +11,30 @@ mod container_name;
 
 pub use config::*;
 pub use container_name::*;
+
+/// The container runtime status. This is a simplified state over what the container engine returns
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceContainerStatus {
+    #[default]
+    Installed,
+    Running,
+    Stopping,
+    Stopped,
+    Dead,
+}
+
+impl From<ContainerStatus> for ServiceContainerStatus {
+    fn from(value: ContainerStatus) -> Self {
+        use ContainerStatus::*;
+        match value {
+            Installed => Self::Installed,
+            Running => Self::Running,
+            Stopped => Self::Stopped,
+            Dead => Self::Dead,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct ServiceContainerSummary {
@@ -42,7 +63,7 @@ impl From<(&str, ContainerState)> for ServiceContainerSummary {
 
         ServiceContainerSummary {
             id: container_id,
-            status,
+            status: status.into(),
             created,
         }
     }

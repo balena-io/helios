@@ -19,6 +19,7 @@ enum ServiceStatus {
     Installing,
     Installed,
     Running,
+    Stopping,
     Stopped,
     Dead,
 }
@@ -195,6 +196,9 @@ impl From<LocalState> for DeviceReport {
                             ),
                             Some(LocalServiceStatus::Running) => {
                                 (UpdateStatus::Done, ServiceStatus::Running, None)
+                            }
+                            Some(LocalServiceStatus::Stopping) => {
+                                (UpdateStatus::ApplyingChanges, ServiceStatus::Stopping, None)
                             }
                             Some(LocalServiceStatus::Stopped) => {
                                 (UpdateStatus::Done, ServiceStatus::Stopped, None)
