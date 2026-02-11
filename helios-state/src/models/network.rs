@@ -2,7 +2,9 @@ use mahler::state::{List, Map, State};
 use serde::{Deserialize, Serialize};
 
 use crate::labels::{LABEL_IPAM_CONFIG, LABEL_SUPERVISED};
-use crate::oci::{NetworkConfig as OciNetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig};
+use crate::oci::{
+    LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig,
+};
 use crate::remote_model::IpamConfig as RemoteIpamConfig;
 use crate::remote_model::Network as RemoteNetwork;
 use crate::remote_model::NetworkIpam as RemoteNetworkIpam;
@@ -39,6 +41,18 @@ impl Default for Network {
 
 impl State for Network {
     type Target = Self;
+}
+
+impl Network {
+    /// Mark networks with a label indicating custom IPAM config is present
+    fn apply_ipam_label(&mut self) {
+        if !self.ipam.config.is_empty() {
+            self.labels
+                .insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
+        } else {
+            self.labels.remove(LABEL_IPAM_CONFIG);
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -82,16 +96,37 @@ fn ipam_config_from(
     }
 }
 
+impl From<NetworkIpamPoolConfig> for IpamConfig {
+    fn from(pool: NetworkIpamPoolConfig) -> Self {
+        ipam_config_from(pool.subnet, pool.gateway, pool.ip_range, pool.aux_addresses)
+    }
+}
+
 impl From<RemoteNetwork> for Network {
     fn from(net: RemoteNetwork) -> Self {
+        let mut network = Network {
+            driver: net.driver,
+            driver_opts: net.driver_opts.into_iter().collect(),
+            enable_ipv6: net.enable_ipv6,
+            internal: net.internal,
+            labels: net.labels.into_iter().collect(),
+            config_only: net.config_only,
+            ipam: net.ipam.into(),
+        };
+        network.apply_ipam_label();
+        network
+    }
+}
+
+impl From<LocalNetwork> for Network {
+    fn from(net: LocalNetwork) -> Self {
         let mut labels: Map<String, String> = net.labels.into_iter().collect();
 
-        // Mark networks with IPAM config so changes trigger network recreation
-        if !net.ipam.config.is_empty() {
-            labels.insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
-        }
+        // Remove the supervised label injected during create that is not part of the
+        // compose definition
+        labels.remove(LABEL_SUPERVISED);
 
-        Network {
+        let mut network = Network {
             driver: net.driver,
             driver_opts: net.driver_opts.into_iter().collect(),
             enable_ipv6: net.enable_ipv6,
@@ -99,6 +134,18 @@ impl From<RemoteNetwork> for Network {
             labels,
             config_only: net.config_only,
             ipam: net.ipam.into(),
+        };
+        network.apply_ipam_label();
+        network
+    }
+}
+
+impl From<NetworkIpamConfig> for NetworkIpam {
+    fn from(ipam: NetworkIpamConfig) -> Self {
+        NetworkIpam {
+            driver: ipam.driver,
+            config: ipam.config.into_iter().map(Into::into).collect(),
+            options: ipam.options.into_iter().collect(),
         }
     }
 }

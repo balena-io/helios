@@ -15,7 +15,9 @@ mod container;
 pub use container::{Container, ContainerConfig, LocalContainer};
 
 mod network;
-pub use network::{NetworkClient, NetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig};
+pub use network::{
+    LocalNetwork, NetworkClient, NetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig,
+};
 
 use helios_util as util;
 
