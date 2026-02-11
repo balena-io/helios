@@ -1,4 +1,5 @@
 mod config;
+mod labels;
 mod read;
 mod seek;
 mod tasks;

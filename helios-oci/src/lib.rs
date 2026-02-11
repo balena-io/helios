@@ -14,6 +14,11 @@ pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
 mod container;
 pub use container::{Container, ContainerConfig, LocalContainer};
 
+mod network;
+pub use network::{
+    LocalNetwork, NetworkClient, NetworkConfig, NetworkIpamConfig, NetworkIpamPoolConfig,
+};
+
 use helios_util as util;
 
 #[derive(Debug, Clone)]
@@ -54,6 +59,12 @@ impl Client {
     #[inline]
     pub fn container(&self) -> Container<'_> {
         Container::new(self)
+    }
+
+    /// Exposes methods to work with networks
+    #[inline]
+    pub fn network(&self) -> NetworkClient<'_> {
+        NetworkClient::new(self)
     }
 }
 
