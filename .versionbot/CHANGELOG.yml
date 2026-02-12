@@ -1,4 +1,43 @@
 - commits:
+    - subject: Serialize the host status using lowercase
+      hash: e530856206fb371bd7d14dfdd87def5ac1f297df
+      body: |
+        This is for consistency with other statuses returned by helios API
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Add task to start service
+      hash: 1dee43a21c6558fbaf8977b66a89600cdd2d294d
+      body: |
+        This also updates the Service model adding a `started` property that
+        replaces the service `status` property. The `started` property is meant
+        to indicate that the container has been started successfully and the
+        engine restart policy has taken over.
+
+        The `start_service` task will run when the target has `started: true`.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Add container state to service model
+      hash: ffa7db7b8b7e53ca11c41a8bc8fbfb524636c064
+      body: |
+        Helios now queries the container state from the engine and adds the
+        information to the service model under the `container` property.
+
+        `Service::container::id` now replaces `Service::container_id`
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+  version: 0.16.0
+  title: ""
+  date: 2026-02-12T00:02:04.587Z
+- commits:
     - subject: Add an exception to delete operations on the hostapp
       hash: ba0227a653221cf3a702af35711a7c393edad210
       body: |

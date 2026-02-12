@@ -3,7 +3,7 @@ resolver = "3"
 members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-util" ]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.16.0"
 rust-version = "1.89"
 edition = "2024"
 description = "Balena's on-device agent"
@@ -66,7 +66,7 @@ features = [ "tokio", "http1", "json", "query" ]
 [workspace.dependencies.chrono]
 version = "0.4"
 default-features = false
-features = ["alloc", "core-error"]
+features = [ "alloc", "core-error" ]
 
 [workspace.dependencies.tokio]
 version = "1.47.1"
