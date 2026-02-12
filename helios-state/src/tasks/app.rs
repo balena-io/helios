@@ -9,7 +9,7 @@ use mahler::worker::{Uninitialized, Worker};
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Device, ImageRef, Network, RegistryAuthSet, Release, Service,
-    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget, mark_duplicate_service_config,
+    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
@@ -486,8 +486,7 @@ fn install_service(
 
             // convert the service configuration to a container configuration
             // and mark duplicates from the image
-            let mut container_config = svc.config.clone().into();
-            mark_duplicate_service_config(&mut container_config, &image.config);
+            let container_config = svc.config.clone().into_container_config(&image.config);
 
             let container_id = docker
                 .container()
@@ -501,7 +500,7 @@ fn install_service(
                 .inspect(&container_id)
                 .await
                 .context("failed to inspect container for service")?;
-            *svc = Service::from((&image.config, local_container));
+            *svc = Service::from_local_container(local_container, &image.config);
             svc.image = ImageRef::Uri(svc_img);
 
             // store the image uri that corresponds to the current release service
