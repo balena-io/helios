@@ -147,8 +147,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
     }
 }
 
-impl From<(&ImageConfig, LocalContainer)> for Service {
-    fn from((img_config, container): (&ImageConfig, LocalContainer)) -> Self {
+impl Service {
+    pub fn from_local_container(container: LocalContainer, image_config: &ImageConfig) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
@@ -167,7 +167,8 @@ impl From<(&ImageConfig, LocalContainer)> for Service {
         // FIXME: we probably want to handle the host/network manager race condition
         // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
         let started = container_summary.status != ServiceContainerStatus::Installed;
-        let config = (img_config, container).into();
+        let config =
+            ServiceConfig::from_container_config(&container.name, container.config, image_config);
 
         Self {
             id,
