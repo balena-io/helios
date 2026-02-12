@@ -19,6 +19,7 @@ enum ServiceStatus {
     Installing,
     Installed,
     Running,
+    Stopping,
     Stopped,
     Dead,
 }
@@ -155,6 +156,7 @@ impl From<LocalState> for DeviceReport {
 
         // convert the user apps to an accepted report
         for (app_uuid, app) in userapps {
+            let release_is_unique = app.releases.len() == 1;
             for (rel_uuid, rel) in app.releases {
                 for (svc_name, svc) in rel.services {
                     let svc_img = if let ImageRef::Uri(img) = svc.image {
@@ -196,6 +198,9 @@ impl From<LocalState> for DeviceReport {
                             Some(LocalServiceStatus::Running) => {
                                 (UpdateStatus::Done, ServiceStatus::Running, None)
                             }
+                            Some(LocalServiceStatus::Stopping) => {
+                                (UpdateStatus::ApplyingChanges, ServiceStatus::Stopping, None)
+                            }
                             Some(LocalServiceStatus::Stopped) => {
                                 (UpdateStatus::Done, ServiceStatus::Stopped, None)
                             }
@@ -204,11 +209,16 @@ impl From<LocalState> for DeviceReport {
                             }
                         };
 
+                    // if the release has been finalized, then report it as the current release
+                    let cur_release_uuid = if release_is_unique && rel.installed {
+                        Some(rel_uuid.clone())
+                    } else {
+                        None
+                    };
+
                     // Get or create the app
                     let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
-                        // FIXME: the current release should come from the worker once
-                        // the release has successfully installed
-                        release_uuid: None,
+                        release_uuid: cur_release_uuid,
                         releases: HashMap::new(),
                     });
 
@@ -414,6 +424,7 @@ mod tests {
                     "id": 1,
                     "releases": {
                         "new-release": {
+                            "installed": false,
                             "services": {
                                 "one": {
                                     "id": 1,

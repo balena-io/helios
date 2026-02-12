@@ -113,6 +113,20 @@ impl Container<'_> {
         }
     }
 
+    /// Stop the container with the given name
+    pub async fn stop(&self, name: &str) -> Result<()> {
+        match self.0.inner().stop_container(name, None).await {
+            Ok(_) => Ok(()),
+            // service already stopped, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => Ok(()),
+            Err(e) => {
+                Err(Error::from(e)).with_context(|| format!("failed to stop container {name}"))
+            }
+        }
+    }
+
     /// Create a temporary container from the given image
     ///
     /// This is only meant to get access to the container files and not to be started
@@ -130,25 +144,26 @@ impl Container<'_> {
 
     /// Remove a stopped container
     pub async fn remove(&self, container_name: &str) -> Result<()> {
-        if let Err(e) = self
+        match self
             .0
             .inner()
-            .remove_container(container_name, None::<RemoveContainerOptions>)
+            .remove_container(
+                container_name,
+                Some(RemoveContainerOptions {
+                    v: true,
+                    ..Default::default()
+                }),
+            )
             .await
         {
-            if let bollard::errors::Error::DockerResponseServerError { status_code, .. } = e {
-                // do not fail if the container doesn't exist
-                if status_code != 404 {
-                    return Err(Error::from(e)
-                        .context(format!("failed to remove container {container_name}")));
-                }
-            } else {
-                return Err(
-                    Error::from(e).context(format!("failed to remove container {container_name}"))
-                );
+            Ok(_) => Ok(()),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(e) => {
+                Err(Error::from(e).context(format!("failed to remove container {container_name}")))
             }
         }
-        Ok(())
     }
 
     /// Reads a container directory contents into an array of bytes using tar representation
