@@ -1,4 +1,43 @@
 - commits:
+    - subject: Add tasks to uninstall release and apps
+      hash: 84b2e6c6e0d15d405d35cadb165aa392fc586e3e
+      body: |
+        This allows to uninstall apps when moving between fleets
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add task to finalize a release
+      hash: cafa4d66e285c79da2a2a593dd2e72f1d79e3c21
+      body: |
+        Finalizing a release marks it locally as `installed`, allowing to report
+        it as current release on the backend.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add tasks to remove a service and its image
+      hash: d86c187dca924ab46f174369759c9b00b1b4fe39
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add task to stop a running service
+      hash: a7dd251ea192cd6ba2329a330140ba323a0aa975
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.16.1
+  title: ""
+  date: 2026-02-12T18:49:25.344Z
+- commits:
     - subject: Serialize the host status using lowercase
       hash: e530856206fb371bd7d14dfdd87def5ac1f297df
       body: |
