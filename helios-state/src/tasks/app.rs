@@ -426,10 +426,15 @@ fn remove_network(
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id, image, config, ..
+        id,
+        container_name,
+        image,
+        config,
+        ..
     } = tgt;
     maybe_svc.create(Service {
         id,
+        container_name,
         image,
         started: false,
         container: None,
@@ -472,7 +477,6 @@ fn install_service(
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
         let container_name = svc
-            .config
             .container_name
             .clone()
             .expect("container name should be available");

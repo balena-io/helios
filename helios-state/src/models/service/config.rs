@@ -8,9 +8,6 @@ use crate::oci::{ContainerConfig, ImageConfig};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ServiceConfig {
-    /// Custom service container name
-    pub container_name: Option<String>,
-
     /// Command to run specified as a list of strings.
     pub command: Option<List<String>>,
 
@@ -24,7 +21,7 @@ impl State for ServiceConfig {
 
 impl ServiceConfig {
     /// Convert from an OCI container to a service configuration
-    pub fn from_container_config(name: &str, config: ContainerConfig, image: &ImageConfig) -> Self {
+    pub fn from_container_config(config: ContainerConfig, image: &ImageConfig) -> Self {
         let mut labels = config.labels.unwrap_or_default();
 
         // Remove labels that are present on the image from the labels
@@ -64,7 +61,6 @@ impl ServiceConfig {
         let command = command.map(|cmd| cmd.into_iter().collect());
 
         Self {
-            container_name: Some(name.to_owned()),
             command,
             labels: labels.into_iter().collect(),
         }

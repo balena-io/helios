@@ -75,6 +75,9 @@ pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
 
+    /// Custom service container name
+    pub container_name: Option<String>,
+
     /// Service container state
     #[mahler(internal)]
     pub container: Option<ServiceContainerSummary>,
@@ -97,6 +100,7 @@ impl From<Service> for ServiceTarget {
     fn from(svc: Service) -> Self {
         let Service {
             id,
+            container_name,
             image,
             config,
             started,
@@ -104,6 +108,7 @@ impl From<Service> for ServiceTarget {
         } = svc;
         ServiceTarget {
             id,
+            container_name,
             image,
             config,
             started,
@@ -134,15 +139,12 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         ServiceTarget {
             id,
+            // set the name to None by default, but a name will be set when transforming
+            // from the target state
+            container_name: None,
             image: image.into(),
             started: true,
-            config: ServiceConfig {
-                // set the name to None by default, but a name will be set when transforming
-                // from the target state
-                container_name: None,
-                command,
-                labels,
-            },
+            config: ServiceConfig { command, labels },
         }
     }
 }
@@ -167,11 +169,11 @@ impl Service {
         // FIXME: we probably want to handle the host/network manager race condition
         // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
         let started = container_summary.status != ServiceContainerStatus::Installed;
-        let config =
-            ServiceConfig::from_container_config(&container.name, container.config, image_config);
+        let config = ServiceConfig::from_container_config(container.config, image_config);
 
         Self {
             id,
+            container_name: Some(container.name),
             container: Some(container_summary),
             image,
             started,
