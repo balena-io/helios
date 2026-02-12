@@ -4,18 +4,17 @@ use std::collections::HashSet;
 
 use crate::oci::{ContainerConfig, ImageConfig, LocalContainer};
 
+#[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct ServiceConfig {
     /// Custom service container name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_name: Option<String>,
 
     /// Command to run specified as a list of strings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<List<String>>,
 
     /// User-defined key/value metadata
-    #[serde(default)]
     pub labels: Map<String, String>,
 }
 
