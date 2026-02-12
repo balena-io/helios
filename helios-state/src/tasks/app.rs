@@ -18,7 +18,7 @@ use super::image::{create_image, remove_image, remove_images, request_registry_c
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
-pub enum AppError {
+enum Error {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -382,7 +382,7 @@ fn create_network(
     Target(tgt): Target<Network>,
     Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
-) -> IO<Network, AppError> {
+) -> IO<Network, Error> {
     let net = net.create(tgt);
 
     with_io(net, async move |mut net| {
@@ -410,7 +410,7 @@ fn remove_network(
     net: View<Network>,
     Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
-) -> IO<Option<Network>, AppError> {
+) -> IO<Option<Network>, Error> {
     let docker_name = net.network_name.clone();
     let net = net.delete();
 
@@ -465,7 +465,7 @@ fn install_service(
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
-) -> IO<Service, AppError> {
+) -> IO<Service, Error> {
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -678,7 +678,7 @@ fn remove_service(
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
-) -> IO<Option<Service>, AppError> {
+) -> IO<Option<Service>, Error> {
     let container_id = if let Some(container) = svc.container.as_ref()
         && container.status != ServiceContainerStatus::Running
     {
