@@ -824,7 +824,6 @@ dependencies = [
  "axum",
  "dirs",
  "fastrand",
- "futures-lite",
  "mahler",
  "mockito",
  "regex",

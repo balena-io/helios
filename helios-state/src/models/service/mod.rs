@@ -1,7 +1,11 @@
 use mahler::state::{Map, State};
+use serde::{Deserialize, Serialize};
 
-use crate::oci::{ImageConfig, LocalContainer};
+use crate::oci::{ContainerState, DateTime, ImageConfig, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
+
+// re-export the container status
+pub use crate::oci::ContainerStatus as ServiceContainerStatus;
 
 use super::image::ImageRef;
 
@@ -11,20 +15,37 @@ mod container_name;
 pub use config::*;
 pub use container_name::*;
 
-/// The worker service status
-///
-/// Note: there is no Downloading/Downloaded status because
-/// that is not necessary for planning and complicates the task
-/// definitions.
-///
-/// The `Downloading` state can be determined by the state
-/// report module by checking if status == Installing and
-/// image download progress < 100
-#[derive(State, Debug, Clone, Default, Eq, PartialEq, PartialOrd, Ord)]
-pub enum ServiceStatus {
-    #[default]
-    Installing,
-    Installed,
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct ServiceContainerSummary {
+    pub id: String,
+    pub created: DateTime,
+    pub status: ServiceContainerStatus,
+}
+
+impl ServiceContainerSummary {
+    /// A mock container summary to use as part of planning tasks
+    pub fn mock() -> Self {
+        Self {
+            id: String::default(),
+            created: DateTime::default(),
+            status: ServiceContainerStatus::Installed,
+        }
+    }
+}
+
+impl From<(&str, ContainerState)> for ServiceContainerSummary {
+    fn from((container_id, container_state): (&str, ContainerState)) -> Self {
+        let container_id = container_id.to_owned();
+        let ContainerState {
+            status, created, ..
+        } = container_state;
+
+        ServiceContainerSummary {
+            id: container_id,
+            status,
+            created,
+        }
+    }
 }
 
 #[derive(State, Debug, Clone)]
@@ -33,12 +54,16 @@ pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
 
-    /// Service container ID on the engine
+    /// Service container state
     #[mahler(internal)]
-    pub container_id: Option<String>,
+    pub container: Option<ServiceContainerSummary>,
 
-    /// The service lifecycle status
-    pub status: ServiceStatus,
+    /// Flag to indicate that the service has been started.
+    ///
+    /// A service is considered started once the restart policy of
+    /// the engine takes place, i.e. after the service has successfully started
+    /// at least once
+    pub started: bool,
 
     /// Service image URI
     pub image: ImageRef,
@@ -53,14 +78,14 @@ impl From<Service> for ServiceTarget {
             id,
             image,
             config,
-            status,
+            started,
             ..
         } = svc;
         ServiceTarget {
             id,
             image,
             config,
-            status,
+            started,
         }
     }
 }
@@ -89,8 +114,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         ServiceTarget {
             id,
             image: image.into(),
-            // FIXME: this should depend on the running state
-            status: ServiceStatus::Installed,
+            started: true,
             config: ServiceConfig {
                 // set the name to None by default, but a name will be set when transforming
                 // from the target state
@@ -113,15 +137,22 @@ impl From<(&ImageConfig, LocalContainer)> for Service {
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
-        let container_id = container.id.clone();
         let image = ImageRef::Id(container.image_id.clone());
+        let container_summary =
+            ServiceContainerSummary::from((container.id.as_str(), container.state.clone()));
+
+        // the service is considered started after the engine policy takes over
+        // for now this just means that the container status is different than `Installed`
+        // FIXME: we probably want to handle the host/network manager race condition
+        // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
+        let started = container_summary.status != ServiceContainerStatus::Installed;
         let config = (img_config, container).into();
 
         Self {
             id,
+            container: Some(container_summary),
             image,
-            status: ServiceStatus::Installed,
-            container_id: Some(container_id),
+            started,
             config,
         }
     }

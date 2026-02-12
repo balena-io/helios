@@ -8,8 +8,8 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service, ServiceStatus,
-    ServiceTarget, mark_duplicate_service_config,
+    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service,
+    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget, mark_duplicate_service_config,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
@@ -185,10 +185,9 @@ fn fetch_apps_images(
                             .get(app_uuid)
                             .and_then(|app| app.releases.get(commit))
                             .and_then(|rel| rel.services.get(svc_name))
-                            .map(|svc| &svc.status)
-                            != Some(&ServiceStatus::Installing)
+                            .is_none_or(|svc| svc.container.is_some())
                         {
-                            // the service has already been downloaded, ignore
+                            // the service already has a container, ignore
                             // the image
                             return None;
                         }
@@ -249,8 +248,8 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
     maybe_svc.create(Service {
         id,
         image,
-        status: ServiceStatus::Installing,
-        container_id: None,
+        started: false,
+        container: None,
         config,
     })
 }
@@ -258,7 +257,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
 /// Install the service if the images exist
 ///
 /// Implement this as a method to allow to make concurrent service installs
-fn install_service_after_fetch(
+fn install_service_when_image_is_ready(
     System(device): System<Device>,
     Target(tgt): Target<Service>,
 ) -> Option<Task> {
@@ -279,9 +278,11 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<Store>,
 ) -> IO<Service, AppError> {
-    enforce!(svc.status < ServiceStatus::Installed);
-    svc.status = ServiceStatus::Installed;
+    enforce!(svc.container.is_none(), "service container already exists");
 
+    // simulate a service install by creating a mock container
+    // the mock will never be seen by users
+    svc.container.replace(ServiceContainerSummary::mock());
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()
@@ -329,6 +330,51 @@ fn install_service(
                 )
                 .await?;
         }
+
+        Ok(svc)
+    })
+}
+
+/// Start the service if it is not running yet
+fn start_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+    enforce!(
+        svc.container
+            .as_ref()
+            .is_some_and(|c| c.status != ServiceContainerStatus::Running),
+        "service container should exist and should not be running"
+    );
+
+    svc.started = true;
+    with_io(svc, async move |mut svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        // this is guaranteed by the enforce above
+        let container_id = svc
+            .container
+            .as_ref()
+            .map(|c| &c.id)
+            .expect("container should be available");
+
+        // start the container
+        docker
+            .container()
+            .start(container_id)
+            .await
+            .context("failed to start container for service")?;
+
+        // re-read container state
+        let local_container = docker
+            .container()
+            .inspect(container_id)
+            .await
+            .context("failed to inspect container for service")?;
+
+        svc.container.replace(ServiceContainerSummary::from((
+            local_container.id.as_ref(),
+            local_container.state,
+        )));
 
         Ok(svc)
     })
@@ -400,7 +446,12 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("initialize service '{service_name}' for release '{commit}'")
                     },
                 ),
-                job::update(install_service_after_fetch),
+                job::update(install_service_when_image_is_ready),
+                job::update(start_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("start service '{service_name}' for release '{commit}'")
+                    },
+                ),
                 job::none(install_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("install service '{service_name}' for release '{commit}'")

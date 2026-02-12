@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
-use crate::state::{LocalState, models::ServiceStatus as LocalServiceStatus};
+use crate::state::{LocalState, models::ServiceContainerStatus as LocalServiceStatus};
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
 use crate::util::request::{Patch, PatchError, RequestConfig};
@@ -19,7 +19,8 @@ enum ServiceStatus {
     Installing,
     Installed,
     Running,
-    // Stopped,
+    Stopped,
+    Dead,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -164,29 +165,44 @@ impl From<LocalState> for DeviceReport {
                     };
                     // Get the status of the app as services based on
                     // whether the running release is the current release
-                    let (update_status, service_status, download_progress) = match svc.status {
-                        LocalServiceStatus::Installing => {
-                            let maybe_img = images.get(&svc_img);
-                            if let Some(img) = maybe_img
-                                && img.download_progress < 100
-                            {
-                                (
-                                    UpdateStatus::ApplyingChanges,
-                                    ServiceStatus::Downloading,
-                                    Some(img.download_progress),
-                                )
-                            } else {
-                                (
-                                    UpdateStatus::ApplyingChanges,
-                                    ServiceStatus::Installing,
-                                    None,
-                                )
+                    let (update_status, service_status, download_progress) =
+                        match svc.container.as_ref().map(|c| &c.status) {
+                            // there is no container yet, the service is either
+                            // downloading or installing depending on the download
+                            // progress
+                            None => {
+                                let maybe_img = images.get(&svc_img);
+                                if let Some(img) = maybe_img
+                                    && img.download_progress < 100
+                                {
+                                    (
+                                        UpdateStatus::ApplyingChanges,
+                                        ServiceStatus::Downloading,
+                                        Some(img.download_progress),
+                                    )
+                                } else {
+                                    (
+                                        UpdateStatus::ApplyingChanges,
+                                        ServiceStatus::Installing,
+                                        None,
+                                    )
+                                }
                             }
-                        }
-                        LocalServiceStatus::Installed => {
-                            (UpdateStatus::Done, ServiceStatus::Installed, None)
-                        }
-                    };
+                            Some(LocalServiceStatus::Installed) => (
+                                UpdateStatus::ApplyingChanges,
+                                ServiceStatus::Installed,
+                                None,
+                            ),
+                            Some(LocalServiceStatus::Running) => {
+                                (UpdateStatus::Done, ServiceStatus::Running, None)
+                            }
+                            Some(LocalServiceStatus::Stopped) => {
+                                (UpdateStatus::Done, ServiceStatus::Stopped, None)
+                            }
+                            Some(LocalServiceStatus::Dead) => {
+                                (UpdateStatus::Done, ServiceStatus::Dead, None)
+                            }
+                        };
 
                     // Get or create the app
                     let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
@@ -402,19 +418,24 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "status": "Installed",
+                                    "started": false,
+                                    "container": {
+                                        "id": "abc",
+                                        "status": "installed",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
                                     "config": {}
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "alpine",
-                                    "status": "Installing",
+                                    "started": false,
                                     "config": {}
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
-                                    "status": "Installing",
+                                    "started": false,
                                     "config": {},
                                 }
                             }
@@ -440,6 +461,17 @@ mod tests {
                 .and_then(|app| app.releases.get(&Uuid::from("new-release")))
                 .map(|rel| &rel.update_status),
             Some(&UpdateStatus::ApplyingChanges),
+        );
+        assert_eq!(
+            report
+                .0
+                .get("device-123")
+                .and_then(|device| device.apps.as_ref())
+                .and_then(|apps| apps.get(&Uuid::from("my-app")))
+                .and_then(|app| app.releases.get(&Uuid::from("new-release")))
+                .and_then(|rel| rel.services.get("one"))
+                .map(|svc| (&svc.status, svc.download_progress)),
+            Some((&ServiceStatus::Installed, None)),
         );
         assert_eq!(
             report
