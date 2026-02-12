@@ -71,6 +71,9 @@ impl Container<'_> {
     }
 
     /// Create the container with the passed options
+    ///
+    /// Returns a reference to the container, either the newly created id or
+    /// the container name if the container already exists
     pub async fn create(
         &self,
         name: &str,
@@ -87,15 +90,14 @@ impl Container<'_> {
         // TODO: add networking and host config which should be passed as arguments to this
         // function
 
-        let res = self
-            .0
-            .inner()
-            .create_container(options, config)
-            .await
-            .map_err(Error::from)
-            .with_context(|| format!("failed to create container {name}"))?;
-
-        Ok(res.id)
+        match self.0.inner().create_container(options, config).await {
+            Ok(c) => Ok(c.id),
+            // container already exists, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 409, ..
+            }) => Ok(name.to_owned()),
+            Err(e) => Err(Error::from(e).context(format!("failed to create container {name}"))),
+        }
     }
 
     /// Start the container with the given name

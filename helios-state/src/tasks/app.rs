@@ -518,12 +518,24 @@ fn install_service(
 }
 
 /// Start the service if it is not running yet
-fn start_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+fn start_service(
+    mut svc: View<Service>,
+    Target(tgt_svc): Target<Service>,
+    docker: Res<Docker>,
+) -> IO<Service, OciError> {
     enforce!(
         svc.container
             .as_ref()
             .is_some_and(|c| c.status != ServiceContainerStatus::Running),
         "service container should exist and should not be running"
+    );
+
+    // creating the container will not fail if the container already exists, however
+    // that doesn't guarantee the configuration will be the same. In that case we'll
+    // need to loop again to re-create the container
+    enforce!(
+        svc.config == tgt_svc.config,
+        "service configuration should match the target before"
     );
 
     svc.started = true;
