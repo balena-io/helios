@@ -8,7 +8,6 @@ use bollard::{
     },
     secret::{ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum},
 };
-use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
 use super::datetime::DateTime;
@@ -107,9 +106,7 @@ impl Container<'_> {
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 304, ..
             }) => Ok(()),
-            Err(e) => {
-                Err(Error::from(e)).with_context(|| format!("failed to start container {name}"))
-            }
+            Err(e) => Err(Error::from(e).context(format!("failed to start container {name}"))),
         }
     }
 
@@ -121,9 +118,7 @@ impl Container<'_> {
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 304, ..
             }) => Ok(()),
-            Err(e) => {
-                Err(Error::from(e)).with_context(|| format!("failed to stop container {name}"))
-            }
+            Err(e) => Err(Error::from(e).context(format!("failed to stop container {name}"))),
         }
     }
 
@@ -241,8 +236,7 @@ impl TryFrom<ContainerInspectResponse> for LocalContainer {
 }
 
 /// The container runtime status. This is a simplified state over what the container engine returns
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub enum ContainerStatus {
     #[default]
     Installed,
@@ -268,7 +262,7 @@ impl From<ContainerStateStatusEnum> for ContainerStatus {
 }
 
 /// Container state summary
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerState {
     /// The container runtime status
     pub status: ContainerStatus,
@@ -279,12 +273,11 @@ pub struct ContainerState {
     /// Container creation date
     pub created: DateTime,
     /// Last error message from the container
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 /// Container configuration that is portable between hosts
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ContainerConfig {
     /// Command to run specified as an array of strings
     pub cmd: Option<Vec<String>>,
