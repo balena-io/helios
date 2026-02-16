@@ -307,7 +307,7 @@ mod tests {
     // this never really happens, but it's useful for testing that the tasks
     // are well defined
     #[test]
-    fn it_finds_a_workflow_to_stop_and_remove_a_service() {
+    fn it_finds_a_workflow_to_uninstall_service() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
@@ -387,7 +387,6 @@ mod tests {
         let expected: Dag<&str> = seq!(
             "stop service 'service2' for release 'my-release-uuid'",
             "remove service 'service2' for release 'my-release-uuid'",
-            "delete image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'"
         ) + seq!("clean-up");
 
         let workflow = workflow.unwrap();
@@ -472,8 +471,6 @@ mod tests {
                 "remove service 'service2' for release 'my-release-uuid'",
             )
         ) + seq!(
-            "delete image 'ubuntu:latest'",
-            "delete image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "remove app with uuid 'my-app-uuid'"
         ) + seq!("clean-up");

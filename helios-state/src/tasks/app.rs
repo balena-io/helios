@@ -14,7 +14,7 @@ use crate::models::{
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::image::{create_image, remove_images, request_registry_credentials};
+use super::image::{create_image, request_registry_credentials};
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
@@ -132,21 +132,15 @@ fn create_app(
 }
 
 /// Remove an empty app
-fn remove_app(
-    app: View<App>,
-    Args(app_uuid): Args<Uuid>,
-    store: Res<Store>,
-) -> IO<Option<App>, StoreError> {
-    enforce!(app.releases.is_empty());
-
-    let app = app.delete();
-    with_io(app, async move |app| {
-        // remove app metadata
-        let local_store = store.as_ref().expect("store should be available");
-        local_store.delete_all(format!("/apps/{app_uuid}")).await?;
-
-        Ok(app)
-    })
+fn remove_app(mut app: View<Option<App>>) -> View<Option<App>> {
+    if app
+        .as_ref()
+        .map(|a| a.releases.is_empty())
+        .unwrap_or_default()
+    {
+        app.take();
+    }
+    app
 }
 
 /// Update the local app id
@@ -302,73 +296,16 @@ fn finish_release(
 }
 
 /// Remove an empty release
-fn remove_release(
-    release: View<Release>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
-    store: Res<Store>,
-) -> IO<Option<Release>, StoreError> {
-    enforce!(release.services.is_empty());
-
-    let release = release.delete();
-    with_io(release, async move |release| {
-        // remove release metadata
-        let local_store = store.as_ref().expect("store should be available");
-        local_store
-            .delete_all(format!("/apps/{app_uuid}/releases/{commit}"))
-            .await?;
-
-        Ok(release)
-    })
-}
-
-/// Remove release methods through a service to help with
-/// operation concurrency
-fn uninstall_services_for_release(
-    System(device): System<Device>,
-    release: View<Release>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
-) -> Vec<Task> {
-    let mut tasks = Vec::new();
-
-    let mut images_to_remove = Vec::new();
-    for (svc_name, svc) in release.services.iter() {
-        tasks.push(uninstall_service_when_requirements_are_met.with_arg("service_name", svc_name));
-
-        // if the container is stopped then add images to the remove list
-        if svc
-            .container
-            .as_ref()
-            .is_none_or(|c| c.status != ServiceContainerStatus::Running)
-            && let ImageRef::Uri(svc_img) = &svc.image
-            && device.images.contains_key(svc_img)
-        {
-            // find any services from a different app and release that
-            // are still using the image
-            let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
-                a_uuid != &app_uuid
-                    && app.releases.iter().any(|(r_uuid, rel)| {
-                        r_uuid != &commit
-                            && rel.services.values().any(|s| {
-                                if let ImageRef::Uri(s_img) = &s.image {
-                                    s_img == svc_img
-                                } else {
-                                    false
-                                }
-                            })
-                    })
-            });
-
-            // remove the image if it exists and it's not used by other service
-            if !image_is_used {
-                images_to_remove.push(svc_img);
-            }
-        }
+fn remove_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
+    // remove the release if it has no services
+    if release
+        .as_ref()
+        .map(|r| r.services.is_empty())
+        .unwrap_or_default()
+    {
+        release.take();
     }
-
-    // remove all images from removed services
-    tasks.push(remove_images.with_target(images_to_remove));
-
-    tasks
+    release
 }
 
 /// Create a network in Docker and the state tree
@@ -692,12 +629,7 @@ fn uninstall_service_when_requirements_are_met(svc: View<Service>) -> Vec<Task> 
 }
 
 /// Remove a stopped service
-fn uninstall_service(
-    svc: View<Service>,
-    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
-    docker: Res<Docker>,
-    store: Res<Store>,
-) -> IO<Option<Service>, Error> {
+fn uninstall_service(svc: View<Service>, docker: Res<Docker>) -> IO<Option<Service>, Error> {
     let container_id = if let Some(container) = svc.container.as_ref()
         && container.status != ServiceContainerStatus::Running
     {
@@ -711,7 +643,6 @@ fn uninstall_service(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let local_store = store.as_ref().expect("store should be available");
 
         // remove the container
         docker
@@ -720,12 +651,6 @@ fn uninstall_service(
             .await
             .context("failed to remove container for service")?;
 
-        // remove the service metadata from the local store
-        local_store
-            .delete_all(format!(
-                "/apps/{app_uuid}/releases/{commit}/services/{svc_name}"
-            ))
-            .await?;
         Ok(svc)
     })
 }
@@ -804,7 +729,6 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("finish release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
-                job::delete(uninstall_services_for_release),
                 job::delete(remove_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("remove release '{commit}' for app with uuid '{uuid}'")
