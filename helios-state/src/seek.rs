@@ -2,7 +2,7 @@ use std::future::{self, Future};
 use std::pin::Pin;
 use std::time::Instant;
 
-use mahler::worker::{WorkerEvent, WorkflowStatus};
+use mahler::worker::{Ready, Worker, WorkerEvent, WorkflowStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{
@@ -207,6 +207,84 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
     }
 }
 
+async fn seek_target(
+    worker: Worker<Device, Ready>,
+    current_state: &mut Device,
+    target: DeviceTarget,
+    interrupt: &Interrupt,
+    state_tx: &Sender<LocalState>,
+) -> Result<UpdateStatus, SeekError> {
+    info!("applying target state");
+    debug!("searching workflow");
+
+    // Show pending changes at debug level
+    // FIXME: changes here are likely to contain sensitive information
+    // like env-vars that we want to mask
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let changes = worker.distance(&target)?;
+        if !changes.is_empty() {
+            debug!("pending changes:");
+            for change in changes {
+                debug!("- {}", change);
+            }
+        }
+    }
+
+    let now = Instant::now();
+
+    // TODO:  retry the loop on an abort return from the workflow
+    if let Some(workflow) = worker.find_workflow(target)? {
+        if workflow.is_empty() {
+            debug!("nothing to do");
+            Ok(UpdateStatus::Done)
+        } else {
+            info!(time = ?now.elapsed(), "workflow found");
+
+            if tracing::enabled!(tracing::Level::WARN) && !workflow.exceptions().is_empty() {
+                warn!("the following operations were ignored during planning");
+                for path in workflow.exceptions() {
+                    warn!("{path}");
+                }
+            }
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                debug!("will execute the following tasks:");
+                for line in workflow.to_string().lines() {
+                    debug!("{line}");
+                }
+            }
+
+            let now = Instant::now();
+            info!("executing workflow");
+
+            let mut stream = std::pin::pin!(worker.run_workflow(workflow));
+
+            loop {
+                let event = tokio::select! {
+                    _ = interrupt.wait() => return Ok(UpdateStatus::Interrupted),
+                    Some(evt) = stream.next() => evt,
+                    else => unreachable!("stream should not close before workflow terminates")
+                };
+
+                match event? {
+                    WorkerEvent::StateUpdated(new_state) => {
+                        *current_state = new_state;
+                        report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
+                    }
+                    WorkerEvent::WorkflowFinished(status) => {
+                        info!(time = ?now.elapsed(), "workflow executed successfully");
+                        return Ok(status.into());
+                    }
+                }
+            }
+        }
+    } else {
+        warn!(time = ?now.elapsed(), "workflow not found");
+        Ok(UpdateStatus::Aborted(vec![
+            "workflow not found".to_string(),
+        ]))
+    }
+}
+
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     runtime: Resources,
@@ -358,7 +436,6 @@ pub async fn start_seek(
                         if let Some(target) = device_target_opt
                             && !matches!(prev_seek_state, SeekState::Legacy)
                         {
-                            info!("applying target state");
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
                             if let Some(proxy_state) = &proxy_state {
@@ -367,78 +444,9 @@ pub async fn start_seek(
 
                             // Look for a plan to the normalized target
                             let target = target.clone().normalize();
-                            debug!("searching workflow");
-
-                            // Show pending changes at debug level
-                            // FIXME: changes here are likely to contain sensitive information
-                            // like env-vars that we want to mask
-                            if tracing::enabled!(tracing::Level::DEBUG) {
-                                let changes = worker.distance(&target)?;
-                                if !changes.is_empty() {
-                                    debug!("pending changes:");
-                                    for change in changes {
-                                        debug!("- {}", change);
-                                    }
-                                }
-                            }
-
-                            let now = Instant::now();
-
-                            if let Some(workflow) = worker.find_workflow(target)? {
-                                if workflow.is_empty() {
-                                    debug!("nothing to do");
-                                } else {
-                                    info!(time = ?now.elapsed(), "workflow found");
-
-                                    if tracing::enabled!(tracing::Level::WARN)
-                                        && !workflow.exceptions().is_empty()
-                                    {
-                                        warn!(
-                                            "the following operations were ignored during planning"
-                                        );
-                                        for path in workflow.exceptions() {
-                                            warn!("{path}");
-                                        }
-                                    }
-                                    if tracing::enabled!(tracing::Level::DEBUG) {
-                                        debug!("will execute the following tasks:");
-                                        for line in workflow.to_string().lines() {
-                                            debug!("{line}");
-                                        }
-                                    }
-
-                                    let now = Instant::now();
-                                    info!("executing workflow");
-
-                                    let mut stream = std::pin::pin!(worker.run_workflow(workflow));
-
-                                    loop {
-                                        let event = tokio::select! {
-                                            _ = interrupt.wait() => return Ok(SeekState::Local(UpdateStatus::Interrupted)),
-                                            Some(evt) = stream.next() => evt,
-                                            else => break,
-                                        };
-
-                                        match event? {
-                                            WorkerEvent::StateUpdated(new_state) => {
-                                                *current_state = new_state;
-                                                report_state(
-                                                    state_tx,
-                                                    current_state,
-                                                    &update_status,
-                                                );
-                                            }
-                                            WorkerEvent::WorkflowFinished(status) => {
-                                                info!(time = ?now.elapsed(), "workflow executed successfully");
-                                                update_status = status.into();
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                warn!(time = ?now.elapsed(), "workflow not found");
-                            }
+                            update_status =
+                                seek_target(worker, current_state, target, &interrupt, state_tx)
+                                    .await?;
                         }
 
                         // If there is a legacy supervisor and the target state is coming from
