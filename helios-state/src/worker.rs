@@ -63,7 +63,7 @@ mod tests {
     use super::*;
     use crate::models::DeviceTarget;
 
-    use mahler::dag::{Dag, par, seq};
+    use mahler::dag::{Dag, dag, par, seq};
     use mahler::worker::FindWorkflow;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -462,12 +462,15 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = par!(
-            "stop service 'service1' for release 'my-release-uuid'",
-            "stop service 'service2' for release 'my-release-uuid'",
-        ) + par!(
-            "remove service 'service1' for release 'my-release-uuid'",
-            "remove service 'service2' for release 'my-release-uuid'",
+        let expected: Dag<&str> = dag!(
+            seq!(
+                "stop service 'service1' for release 'my-release-uuid'",
+                "remove service 'service1' for release 'my-release-uuid'",
+            ),
+            seq!(
+                "stop service 'service2' for release 'my-release-uuid'",
+                "remove service 'service2' for release 'my-release-uuid'",
+            )
         ) + seq!(
             "delete image 'ubuntu:latest'",
             "delete image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",

@@ -14,7 +14,7 @@ use crate::models::{
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::image::{create_image, remove_image, remove_images, request_registry_credentials};
+use super::image::{create_image, remove_images, request_registry_credentials};
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
@@ -323,7 +323,7 @@ fn remove_release(
 
 /// Remove release methods through a service to help with
 /// operation concurrency
-fn remove_release_services(
+fn uninstall_services_for_release(
     System(device): System<Device>,
     release: View<Release>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
@@ -332,40 +332,35 @@ fn remove_release_services(
 
     let mut images_to_remove = Vec::new();
     for (svc_name, svc) in release.services.iter() {
+        tasks.push(uninstall_service_when_requirements_are_met.with_arg("service_name", svc_name));
+
+        // if the container is stopped then add images to the remove list
         if svc
             .container
             .as_ref()
-            .is_some_and(|c| c.status == ServiceContainerStatus::Running)
+            .is_none_or(|c| c.status != ServiceContainerStatus::Running)
+            && let ImageRef::Uri(svc_img) = &svc.image
+            && device.images.contains_key(svc_img)
         {
-            // stop the service if running
-            tasks.push(stop_service.with_arg("service_name", svc_name));
-        } else {
-            // otherwise remove it
-            tasks.push(remove_service.with_arg("service_name", svc_name));
+            // find any services from a different app and release that
+            // are still using the image
+            let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
+                a_uuid != &app_uuid
+                    && app.releases.iter().any(|(r_uuid, rel)| {
+                        r_uuid != &commit
+                            && rel.services.values().any(|s| {
+                                if let ImageRef::Uri(s_img) = &s.image {
+                                    s_img == svc_img
+                                } else {
+                                    false
+                                }
+                            })
+                    })
+            });
 
-            if let ImageRef::Uri(svc_img) = &svc.image
-                && device.images.contains_key(svc_img)
-            {
-                // find any services from a different app and release that
-                // are still using the image
-                let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
-                    a_uuid != &app_uuid
-                        && app.releases.iter().any(|(r_uuid, rel)| {
-                            r_uuid != &commit
-                                && rel.services.values().any(|s| {
-                                    if let ImageRef::Uri(s_img) = &s.image {
-                                        s_img == svc_img
-                                    } else {
-                                        false
-                                    }
-                                })
-                        })
-                });
-
-                // remove the image if it exists and it's not used by other service
-                if !image_is_used {
-                    images_to_remove.push(svc_img);
-                }
+            // remove the image if it exists and it's not used by other service
+            if !image_is_used {
+                images_to_remove.push(svc_img);
             }
         }
     }
@@ -442,16 +437,29 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
     })
 }
 
-/// Install the service if the images exist
+/// Install the service when requirements are met for this operation
 ///
-/// Implement this as a method to allow to make concurrent service installs
-fn install_service_when_image_is_ready(
+/// A service can be installed after
+/// - the image has been pulled
+/// - any networks and volumes exist with the right configuration (TODO)
+/// - if upgrading between releases, and there is an identically named service in
+///   a previous release, the services are for different images and have different
+///   configurations, otherwise the old service just requires as migration
+///
+/// These requirements may vary a little depending on the update strategy
+fn install_service_when_requirements_are_met(
     System(device): System<Device>,
     Target(tgt): Target<Service>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
     // Skip the task if the image for the service doesn't exist yet
+    // or there is an identically named service with the same image and
+    // config. In the last scenario, the service will be created by the `uninstall_service`
+    // operation
     if let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
+        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name)
+            .is_none_or(|svc| svc.image.digest() != tgt.image.digest() || svc.config != tgt.config)
     {
         return Some(install_service.with_target(tgt));
     }
@@ -521,6 +529,27 @@ fn install_service(
     })
 }
 
+/// Start a service when all the requirements have been met
+///
+/// A service can be started if:
+/// - The container has been created and is not already running
+/// - If updating between releases, there is no equally named service from a previous release of the same app
+/// - Any service dependencies have been started/running/healthy (TODO)
+///
+/// These requirements may vary a little depending on the update strategy
+fn start_service_when_requirements_are_met(
+    System(device): System<Device>,
+    Target(tgt_svc): Target<Service>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    // only start the service if there are no services from a previous release
+    if find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none() {
+        return Some(start_service.with_target(tgt_svc));
+    }
+
+    None
+}
+
 /// Start the service if it is not running yet
 fn start_service(
     mut svc: View<Service>,
@@ -578,6 +607,16 @@ fn start_service(
     })
 }
 
+/// Stop a service and its dependents when all the requirements are met
+///
+/// A service can be stopped if:
+/// - Locks are taken (TODO)
+/// - Any services depending on it that have `restart: true` are stopped  (TODO)
+fn stop_service_when_requirements_are_met() -> Vec<Task> {
+    // just stop the service for now
+    vec![stop_service.into_task()]
+}
+
 /// Stop a running service
 fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
     let container_id = if let Some(container) = svc.container.as_mut()
@@ -624,12 +663,18 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
     })
 }
 
-/// Stop a service if running and remove the service and its image
-fn stop_and_remove_service(
-    System(device): System<Device>,
-    svc: View<Service>,
-    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
-) -> Vec<Task> {
+/// Stop a service if running and remove the service if requirements are met
+///
+/// A service can be uninstalled if
+/// - Locks have been taken by this service (TODO)
+/// - If upgrading between releases, all the target images have been pulled
+///   has been created (TODO)
+/// - If upgrading between releases and there is an identically named service in the new release:
+///     - if the service has the same image and configuration, the old service should be migrated (TODO)
+///     - otherwise the container for the new service should exist before uninstalling the old one (TODO)
+///
+/// These requirements may vary a little depending on the update strategy
+fn uninstall_service_when_requirements_are_met(svc: View<Service>) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc
         .container
@@ -637,43 +682,17 @@ fn stop_and_remove_service(
         .is_some_and(|c| c.status == ServiceContainerStatus::Running)
     {
         // stop the service if running
-        tasks.push(stop_service.into_task());
+        tasks.push(stop_service_when_requirements_are_met.into_task());
     }
 
-    // rmeove the service
-    tasks.push(remove_service.into_task());
-
-    if let ImageRef::Uri(svc_img) = &svc.image
-        && device.images.contains_key(svc_img)
-    {
-        let image_is_used = device.apps.iter().any(|(a_uuid, app)| {
-            app.releases.iter().any(|(r_uuid, rel)| {
-                rel.services.iter().any(|(s_name, s)| {
-                    // ignore the current service
-                    if a_uuid == &app_uuid && r_uuid == &commit && s_name == &svc_name {
-                        return false;
-                    }
-
-                    if let ImageRef::Uri(s_img) = &s.image {
-                        s_img == svc_img
-                    } else {
-                        false
-                    }
-                })
-            })
-        });
-
-        // remove the image if it exists and it's not used by other service
-        if !image_is_used {
-            tasks.push(remove_image.with_arg("image_name", svc_img.as_str()));
-        }
-    }
+    // remove the service
+    tasks.push(uninstall_service.into_task());
 
     tasks
 }
 
 /// Remove a stopped service
-fn remove_service(
+fn uninstall_service(
     svc: View<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
@@ -785,7 +804,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("finish release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
-                job::delete(remove_release_services),
+                job::delete(uninstall_services_for_release),
                 job::delete(remove_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("remove release '{commit}' for app with uuid '{uuid}'")
@@ -821,26 +840,28 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("initialize service '{service_name}' for release '{commit}'")
                     },
                 ),
-                job::update(install_service_when_image_is_ready),
-                job::update(start_service).with_description(
+                job::update(install_service_when_requirements_are_met),
+                job::none(install_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("install service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::update(start_service_when_requirements_are_met),
+                job::none(start_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("start service '{service_name}' for release '{commit}'")
                     },
                 ),
-                job::update(stop_service).with_description(
+                job::update(stop_service_when_requirements_are_met),
+                job::none(stop_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("stop service '{service_name}' for release '{commit}'")
                     },
                 ),
-                job::delete(stop_and_remove_service),
-                job::none(remove_service).with_description(
+                job::delete(uninstall_service_when_requirements_are_met),
+                job::none(uninstall_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("remove service '{service_name}' for release '{commit}'")
-                    },
-                ),
-                job::none(install_service).with_description(
-                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("install service '{service_name}' for release '{commit}'")
                     },
                 ),
             ],
