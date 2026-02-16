@@ -1,23 +1,13 @@
 use mahler::exception;
-use mahler::worker::Uninitialized;
-use mahler::worker::{Ready, Worker};
+use mahler::worker::{Uninitialized, Worker};
 use tokio::sync::RwLock;
 
-use crate::oci::{Client as Docker, Error as DockerError, RegistryAuthClient};
+use crate::oci::{Client as Docker, RegistryAuthClient};
 use crate::util::store::Store;
 
 use super::config::HostRuntimeDir;
 use super::models::Device;
 use super::tasks::{with_device_tasks, with_hostapp_tasks, with_image_tasks, with_userapp_tasks};
-
-#[derive(Debug, thiserror::Error)]
-pub enum CreateError {
-    #[error("failed to connect to Docker daemon: {0}")]
-    DockerConnection(#[from] DockerError),
-
-    #[error("failed to initialize worker: {0}")]
-    WorkerInit(#[from] mahler::error::Error),
-}
 
 /// Configure the worker jobs
 ///
@@ -45,16 +35,15 @@ fn worker() -> Worker<Device, Uninitialized> {
     worker
 }
 
-type LocalWorker = Worker<Device, Ready>;
+pub type LocalWorker = Worker<Device, Uninitialized>;
 
-/// Create and initialize the worker
+/// Create worker with necessary resources
 pub fn create(
     docker: Docker,
     local_store: Store,
     host_runtime_dir: HostRuntimeDir,
     registry_auth_client: Option<RegistryAuthClient>,
-    initial: Device,
-) -> Result<LocalWorker, CreateError> {
+) -> LocalWorker {
     // Create the worker and set-up resources
     let mut worker = worker().resource(docker);
 
@@ -66,8 +55,7 @@ pub fn create(
 
     worker.use_resource(host_runtime_dir);
     worker.use_resource(local_store);
-
-    Ok(worker.initial_state(initial)?)
+    worker
 }
 
 #[cfg(test)]
