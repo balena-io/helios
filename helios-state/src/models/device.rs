@@ -89,7 +89,7 @@ impl DeviceTarget {
         for (app_uuid, app) in self.apps.iter_mut() {
             for (rel_uuid, rel) in app.releases.iter_mut() {
                 for (svc_name, svc) in rel.services.iter_mut() {
-                    let _ = svc.container_name.insert(format!("{svc_name}_{rel_uuid}"));
+                    svc.container_name = format!("{svc_name}_{rel_uuid}");
                     svc.config
                         .labels
                         .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());

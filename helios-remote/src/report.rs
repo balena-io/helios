@@ -430,6 +430,7 @@ mod tests {
                                     "id": 1,
                                     "image": "ubuntu",
                                     "started": false,
+                                    "container_name": "new-release_one",
                                     "container": {
                                         "id": "abc",
                                         "status": "installed",
@@ -441,12 +442,14 @@ mod tests {
                                     "id": 2,
                                     "image": "alpine",
                                     "started": false,
+                                    "container_name": "new-release_two",
                                     "config": {}
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
                                     "started": false,
+                                    "container_name": "new-release_three",
                                     "config": {},
                                 }
                             }

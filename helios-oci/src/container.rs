@@ -4,7 +4,7 @@ use bollard::{
     models::ContainerCreateBody,
     query_parameters::{
         CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
-        RemoveContainerOptions,
+        RemoveContainerOptions, RenameContainerOptions,
     },
     secret::{ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum},
 };
@@ -122,6 +122,23 @@ impl Container<'_> {
             }) => Ok(()),
             Err(e) => Err(Error::from(e).context(format!("failed to stop container {name}"))),
         }
+    }
+
+    /// Rename the container with the given name
+    pub async fn rename(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.0
+            .inner()
+            .rename_container(
+                old_name,
+                RenameContainerOptions {
+                    name: new_name.to_owned(),
+                },
+            )
+            .await
+            .map_err(Error::from)
+            .with_context(|| format!("failed to rename container {old_name}"))?;
+
+        Ok(())
     }
 
     /// Create a temporary container from the given image

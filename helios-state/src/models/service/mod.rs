@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::oci::{ContainerState, ContainerStatus, DateTime, ImageConfig, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
+use crate::util::crypto::{LC_ALPHA_NUM, pseudorandom_string};
 
 use super::image::ImageRef;
 
@@ -76,7 +77,7 @@ pub struct Service {
     pub id: u32,
 
     /// Custom service container name
-    pub container_name: Option<String>,
+    pub container_name: String,
 
     /// Service container state
     #[mahler(internal)]
@@ -139,9 +140,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         ServiceTarget {
             id,
-            // set the name to None by default, but a name will be set when transforming
+            // set the name to a random string by default, but a name will be set when transforming
             // from the target state
-            container_name: None,
+            container_name: pseudorandom_string(LC_ALPHA_NUM, 24),
             image: image.into(),
             started: true,
             config: ServiceConfig { command, labels },
@@ -173,7 +174,7 @@ impl Service {
 
         Self {
             id,
-            container_name: Some(container.name),
+            container_name: container.name,
             container: Some(container_summary),
             image,
             started,

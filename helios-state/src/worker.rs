@@ -219,12 +219,14 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
+                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "config": {},
                                 },
@@ -233,6 +235,7 @@ mod tests {
                                     // different image same digest
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
                                     "started": true,
+                                    "container_name": "my-release-uuid_service3",
                                     "config": {},
                                 },
                                 // additional images to test download batching
@@ -240,11 +243,13 @@ mod tests {
                                     "id": 4,
                                     "image": "alpine:latest",
                                     "started": true,
+                                    "container_name": "my-release-uuid_service4",
                                     "config": {},
                                 },
                                 "service5": {
                                     "id": 5,
                                     "image": "alpine:3.20",
+                                    "container_name": "my-release-uuid_service5",
                                     "started": true,
                                     "config": {},
                                 },
@@ -304,6 +309,175 @@ mod tests {
         );
     }
 
+    #[test]
+    fn it_finds_a_workflow_to_reconfigure_a_service() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "container_name": "old_container",
+                                    "started": true,
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {
+                                        "command": ["sleep", "infinity"]
+                                    },
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "engine_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "container_name": "new_container",
+                                    "started": true,
+                                    "config": {
+                                        "command": ["sleep", "10"]
+                                    },
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "stop service 'my-service' for release 'my-release-uuid'",
+            "remove container for service 'my-service' for release 'my-release-uuid'",
+            "install service 'my-service' for release 'my-release-uuid'",
+            "start service 'my-service' for release 'my-release-uuid'"
+        ) + seq!("clean-up");
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_rename_a_service_container() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "container_name": "old_container",
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "engine_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "container_name": "new_container",
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> =
+            seq!("rename container for service 'my-service' for release 'my-release-uuid'",)
+                + seq!("clean-up");
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
     // this never really happens, but it's useful for testing that the tasks
     // are well defined
     #[test]
@@ -324,6 +498,7 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
+                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "container": {
                                         "id": "deadbeef",
@@ -335,6 +510,7 @@ mod tests {
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "container": {
                                         "id": "deadc41f",
@@ -369,6 +545,7 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
+                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
                                 },
@@ -415,6 +592,7 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
+                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "container": {
                                         "id": "deadbeef",
@@ -426,6 +604,7 @@ mod tests {
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "container": {
                                         "id": "deadc41f",
@@ -501,12 +680,14 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "sha256:deadbeef",
+                                    "container_name": "my-release-uuid_one",
                                     "started": true,
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "my-release-uuid_two",
                                     "started": true,
                                     "config": {},
                                 },
@@ -530,12 +711,14 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "my-release-uuid_one",
                                     "started": true,
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "my-release-uuid_two",
                                     "started": true,
                                     "config": {},
                                 },
@@ -584,12 +767,14 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "old-release_service1",
                                     "started": true,
                                     "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
+                                    "container_name": "old-release_service2",
                                     "started": true,
                                     "config": {},
                                 },
@@ -614,12 +799,14 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "new-release_service1",
                                     "started": true,
                                     "config": {},
                                 },
                                 "service2":  {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                    "container_name": "new-release_service2",
                                     "started": true,
                                     "config": {},
                                 },
@@ -673,6 +860,7 @@ mod tests {
                                 "service1": {
                                     "id": 1,
                                     "started": true,
+                                    "container_name": "my-release-uuid_service1",
                                     "image": "ubuntu:latest",
                                     "config": {},
                                 },

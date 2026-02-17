@@ -407,6 +407,7 @@ fn install_service_when_requirements_are_met(
 /// Install the service
 fn install_service(
     mut svc: View<Service>,
+    Target(tgt): Target<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
@@ -416,15 +417,14 @@ fn install_service(
     // simulate a service install by creating a mock container
     // the mock will never be seen by users
     svc.container.replace(ServiceContainerSummary::mock());
+    svc.started = false;
+    svc.config = tgt.config;
+    svc.container_name = tgt.container_name;
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
-        let container_name = svc
-            .container_name
-            .clone()
-            .expect("container name should be available");
 
         if let ImageRef::Uri(svc_img) = svc.image.clone() {
             let image = docker
@@ -439,7 +439,7 @@ fn install_service(
 
             let container_id = docker
                 .container()
-                .create(&container_name, &svc_img, container_config)
+                .create(&svc.container_name, &svc_img, container_config)
                 .await?;
 
             // check that the container was created and generate the Service configuration
@@ -544,13 +544,60 @@ fn start_service(
     })
 }
 
+/// Rename the service container
+fn rename_service_container(
+    mut svc: View<Service>,
+    Target(tgt): Target<Service>,
+    docker: Res<Docker>,
+) -> IO<Service, OciError> {
+    let container_id = if let Some(id) = svc.container.as_ref().map(|c| c.id.clone())
+        && svc.container_name != tgt.container_name
+    {
+        id
+    } else {
+        return IO::abort("service container should exist with a different name");
+    };
+    enforce!(
+        svc.config == tgt.config,
+        "service should already have the correct configuration"
+    );
+
+    // update the name
+    svc.container_name = tgt.container_name;
+    with_io(svc, async move |svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        docker
+            .container()
+            .rename(&container_id, &svc.container_name)
+            .await
+            .context("failed to rename container for service")?;
+
+        Ok(svc)
+    })
+}
+
+/// Change a service configuration by uninstalling and re-installing the service
+fn reconfigure_service(svc: View<Service>, Target(tgt): Target<Service>) -> Vec<Task> {
+    let mut tasks = Vec::new();
+    if svc.config != tgt.config {
+        tasks.push(stop_service_when_requirements_are_met.with_target(&tgt));
+        tasks.push(remove_service_container.into_task());
+        tasks.push(install_service_when_requirements_are_met.with_target(&tgt));
+    }
+
+    tasks
+}
+
 /// Stop a service and its dependents when all the requirements are met
 ///
 /// A service can be stopped if:
 /// - Locks are taken (TODO)
 /// - Any services depending on it that have `restart: true` are stopped  (TODO)
 fn stop_service_when_requirements_are_met() -> Vec<Task> {
-    // just stop the service for now
+    // just push the stop service task for now
     vec![stop_service.into_task()]
 }
 
@@ -628,14 +675,43 @@ fn uninstall_service_when_requirements_are_met(svc: View<Service>) -> Vec<Task> 
     tasks
 }
 
-/// Remove a stopped service
-fn uninstall_service(svc: View<Service>, docker: Res<Docker>) -> IO<Option<Service>, Error> {
-    let container_id = if let Some(container) = svc.container.as_ref()
+/// Remove a stopped service container
+///
+/// NOTE: This doesn't remove the service from the current state
+fn remove_service_container(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, Error> {
+    let container_id = if let Some(container) = svc.container.take()
         && container.status != ServiceContainerStatus::Running
     {
-        container.id.clone()
+        container.id
     } else {
-        return IO::abort("service container should exist and should be stopped");
+        return IO::abort("service container should exist and be stopped");
+    };
+
+    svc.started = false;
+    with_io(svc, async move |svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        // remove the container
+        docker
+            .container()
+            .remove(&container_id)
+            .await
+            .context("failed to remove container for service")?;
+
+        Ok(svc)
+    })
+}
+
+/// Remove a stopped service and its container
+fn uninstall_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Option<Service>, Error> {
+    let container_id = if let Some(container) = svc.container.take()
+        && container.status != ServiceContainerStatus::Running
+    {
+        container.id
+    } else {
+        return IO::abort("service container should exist and be stopped");
     };
 
     let svc = svc.delete();
@@ -776,7 +852,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("start service '{service_name}' for release '{commit}'")
                     },
                 ),
-                job::update(stop_service_when_requirements_are_met),
+                job::none(stop_service_when_requirements_are_met),
                 job::none(stop_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("stop service '{service_name}' for release '{commit}'")
@@ -786,6 +862,21 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::none(uninstall_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("remove service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::none(remove_service_container).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!(
+                            "remove container for service '{service_name}' for release '{commit}'"
+                        )
+                    },
+                ),
+                job::update(reconfigure_service),
+                job::update(rename_service_container).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!(
+                            "rename container for service '{service_name}' for release '{commit}'"
+                        )
                     },
                 ),
             ],
