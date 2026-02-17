@@ -116,7 +116,20 @@ impl From<LocalNetwork> for Network {
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
-        labels.remove(LABEL_IPAM_CONFIG);
+        let has_ipam_config = labels.remove(LABEL_IPAM_CONFIG).is_some();
+
+        // Only preserve IPAM config if it was explicitly set by the user.
+        // Engine-assigned IPAM (subnet, gateway) would cause a mismatch
+        // against the target, which has no IPAM config.
+        let ipam = if has_ipam_config {
+            net.ipam.into()
+        } else {
+            NetworkIpam {
+                driver: net.ipam.driver,
+                config: Default::default(),
+                options: net.ipam.options.into_iter().collect(),
+            }
+        };
 
         Network {
             network_name,
@@ -126,7 +139,7 @@ impl From<LocalNetwork> for Network {
                 enable_ipv6: net.enable_ipv6,
                 internal: net.internal,
                 labels,
-                ipam: net.ipam.into(),
+                ipam,
             },
         }
     }
@@ -440,6 +453,34 @@ mod tests {
             network.config.ipam.options.get("opt1"),
             Some(&"val1".to_string())
         );
+    }
+
+    #[test]
+    fn test_from_local_network_discards_engine_assigned_ipam() {
+        let local = LocalNetwork {
+            name: "app1_default".to_string(),
+            labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
+                .into_iter()
+                .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::default(),
+                config: vec![NetworkIpamPoolConfig {
+                    subnet: Some("172.18.0.0/16".to_string()),
+                    gateway: Some("172.18.0.1".to_string()),
+                    ip_range: None,
+                    aux_addresses: None,
+                }],
+                options: Default::default(),
+            },
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // Without LABEL_IPAM_CONFIG, engine-assigned IPAM config is discarded
+        assert!(network.config.ipam.config.is_empty());
+        // IPAM driver is still preserved
+        assert_eq!(network.config.ipam.driver, NetworkIpamDriver::default());
     }
 
     #[test]
