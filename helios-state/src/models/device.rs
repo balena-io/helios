@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
-use crate::labels::LABEL_APP_UUID;
+use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME};
 use crate::oci::RegistryAuth;
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
@@ -93,6 +93,9 @@ impl DeviceTarget {
                     svc.config
                         .labels
                         .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+                    svc.config
+                        .labels
+                        .insert(LABEL_SERVICE_NAME.to_string(), svc_name.clone());
                 }
 
                 // Ensure every release has an implicit "default" network

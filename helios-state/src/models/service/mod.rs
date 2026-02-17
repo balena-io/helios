@@ -8,10 +8,8 @@ use crate::util::crypto::{LC_ALPHA_NUM, pseudorandom_string};
 use super::image::ImageRef;
 
 mod config;
-mod container_name;
 
 pub use config::*;
-pub use container_name::*;
 
 /// The container runtime status. This is a simplified state over what the container engine returns
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
