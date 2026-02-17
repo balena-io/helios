@@ -1,4 +1,28 @@
 - commits:
+    - subject: Re-try seeking target from the local worker on a runtime error
+      hash: 5437828e1509f88070d5e28d3c885b7b81c3fdcc
+      body: |
+        Avoids giving up too early when transient errors happen
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Fix issue with new target not being applied
+      hash: 85bd59d7deff157013478f74977122464f7ec76c
+      body: |
+        There was an issue with the exit status from the local seek target
+        operation on the helios-state module. This operation was not terminating
+        with the right status, resulting in new target states being ignored.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.16.2
+  title: ""
+  date: 2026-02-17T20:33:46.935Z
+- commits:
     - subject: Add tasks to uninstall release and apps
       hash: 84b2e6c6e0d15d405d35cadb165aa392fc586e3e
       body: |
