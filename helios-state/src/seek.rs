@@ -18,7 +18,7 @@ use crate::util::interrupt::Interrupt;
 use super::config::Resources;
 use super::models::{Device, DeviceTarget};
 use super::read::{ReadStateError, read as read_state};
-use super::worker::{CreateError as WorkerCreateError, create};
+use super::worker::{LocalWorker, create};
 
 /// Represents the service update status according to
 /// https://docs.balena.io/learn/manage/device-statuses/#update-statuses
@@ -133,9 +133,6 @@ pub enum SeekError {
     #[error("failed to read state: {0}")]
     ReadState(#[from] ReadStateError),
 
-    #[error("failed to create worker: {0}")]
-    CreateWorker(#[from] WorkerCreateError),
-
     #[error("failed to reach target state: {0}")]
     SeekTargetState(#[from] mahler::error::Error),
 
@@ -207,6 +204,95 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
     }
 }
 
+async fn seek_target(
+    worker: &LocalWorker,
+    current_state: &mut Device,
+    target: DeviceTarget,
+    interrupt: &Interrupt,
+    state_tx: &Sender<LocalState>,
+) -> Result<UpdateStatus, SeekError> {
+    info!("applying target state");
+
+    while !interrupt.is_set() {
+        let worker = worker.clone().initial_state(current_state.clone())?;
+        debug!("searching workflow");
+
+        // Show pending changes at debug level
+        // FIXME: changes here are likely to contain sensitive information
+        // like env-vars that we want to mask
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let changes = worker.distance(&target)?;
+            if !changes.is_empty() {
+                debug!("pending changes:");
+                for change in changes {
+                    debug!("- {change}");
+                }
+            }
+        }
+
+        let now = Instant::now();
+        if let Some(workflow) = worker.find_workflow(&target)? {
+            if tracing::enabled!(tracing::Level::WARN) && !workflow.exceptions().is_empty() {
+                warn!("the following operations were ignored during planning");
+                for op in workflow.exceptions() {
+                    warn!("- {op}");
+                }
+            }
+            if workflow.is_empty() {
+                debug!("nothing to do");
+                return Ok(UpdateStatus::Done);
+            } else {
+                info!(time = ?now.elapsed(), "workflow found");
+                if tracing::enabled!(tracing::Level::DEBUG) {
+                    debug!("will execute the following tasks:");
+                    for line in workflow.to_string().lines() {
+                        debug!("{line}");
+                    }
+                }
+
+                let now = Instant::now();
+                info!("executing workflow");
+
+                let mut stream = std::pin::pin!(worker.run_workflow(workflow));
+
+                loop {
+                    let event = tokio::select! {
+                        _ = interrupt.wait() => {
+                            info!(time = ?now.elapsed(), "workflow interrupted");
+                            return Ok(UpdateStatus::Interrupted)
+                        },
+                        Some(evt) = stream.next() => evt,
+                        else => unreachable!("stream should not close before workflow terminates")
+                    };
+
+                    match event? {
+                        WorkerEvent::StateUpdated(new_state) => {
+                            *current_state = new_state;
+                            report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
+                        }
+                        WorkerEvent::WorkflowFinished(WorkflowStatus::Success) => {
+                            info!(time = ?now.elapsed(), "workflow executed successfully");
+                            return Ok(UpdateStatus::Done);
+                        }
+                        // if a recoverable error happened, we try-again
+                        WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
+                            info!(time = ?now.elapsed(), "workflow terminated with errors, re-trying");
+                            // break-the inner loop
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            warn!(time = ?now.elapsed(), "workflow not found");
+            return Ok(UpdateStatus::Aborted(vec![
+                "workflow not found".to_string(),
+            ]));
+        }
+    }
+    Ok(UpdateStatus::Interrupted)
+}
+
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
     runtime: Resources,
@@ -230,6 +316,14 @@ pub async fn start_seek(
         registry_auth_client,
         host_runtime_dir,
     } = runtime;
+
+    // Create an uninitialized local worker
+    let worker = create(
+        docker.clone(),
+        local_store.clone(),
+        host_runtime_dir.clone(),
+        registry_auth_client.clone(),
+    );
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
@@ -312,16 +406,9 @@ pub async fn start_seek(
                 drop(apply_future);
                 interrupt = Interrupt::new();
 
-                // We create a new worker each time as the state of the system may have changed
+                // We re-initialize the worker each time as the state of the system may have changed
                 // outside of what is monitored by the worker
                 current_state = read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
-                let worker = create(
-                    docker.clone(),
-                    local_store.clone(),
-                    host_runtime_dir.clone(),
-                    registry_auth_client.clone(),
-                    current_state.clone(),
-                )?;
 
                 // Set the update status immediately
                 update_status = UpdateStatus::ApplyingChanges;
@@ -336,6 +423,7 @@ pub async fn start_seek(
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
+                    let worker = &worker;
                     let current_state = &mut current_state;
 
                     // If this is the case we already know the target won't be processed by the
@@ -358,7 +446,6 @@ pub async fn start_seek(
                         if let Some(target) = device_target_opt
                             && !matches!(prev_seek_state, SeekState::Legacy)
                         {
-                            info!("applying target state");
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
                             if let Some(proxy_state) = &proxy_state {
@@ -367,78 +454,9 @@ pub async fn start_seek(
 
                             // Look for a plan to the normalized target
                             let target = target.clone().normalize();
-                            debug!("searching workflow");
-
-                            // Show pending changes at debug level
-                            // FIXME: changes here are likely to contain sensitive information
-                            // like env-vars that we want to mask
-                            if tracing::enabled!(tracing::Level::DEBUG) {
-                                let changes = worker.distance(&target)?;
-                                if !changes.is_empty() {
-                                    debug!("pending changes:");
-                                    for change in changes {
-                                        debug!("- {}", change);
-                                    }
-                                }
-                            }
-
-                            let now = Instant::now();
-
-                            if let Some(workflow) = worker.find_workflow(target)? {
-                                if workflow.is_empty() {
-                                    debug!("nothing to do");
-                                } else {
-                                    info!(time = ?now.elapsed(), "workflow found");
-
-                                    if tracing::enabled!(tracing::Level::WARN)
-                                        && !workflow.exceptions().is_empty()
-                                    {
-                                        warn!(
-                                            "the following operations were ignored during planning"
-                                        );
-                                        for path in workflow.exceptions() {
-                                            warn!("{path}");
-                                        }
-                                    }
-                                    if tracing::enabled!(tracing::Level::DEBUG) {
-                                        debug!("will execute the following tasks:");
-                                        for line in workflow.to_string().lines() {
-                                            debug!("{line}");
-                                        }
-                                    }
-
-                                    let now = Instant::now();
-                                    info!("executing workflow");
-
-                                    let mut stream = std::pin::pin!(worker.run_workflow(workflow));
-
-                                    loop {
-                                        let event = tokio::select! {
-                                            _ = interrupt.wait() => return Ok(SeekState::Local(UpdateStatus::Interrupted)),
-                                            Some(evt) = stream.next() => evt,
-                                            else => break,
-                                        };
-
-                                        match event? {
-                                            WorkerEvent::StateUpdated(new_state) => {
-                                                *current_state = new_state;
-                                                report_state(
-                                                    state_tx,
-                                                    current_state,
-                                                    &update_status,
-                                                );
-                                            }
-                                            WorkerEvent::WorkflowFinished(status) => {
-                                                info!(time = ?now.elapsed(), "workflow executed successfully");
-                                                update_status = status.into();
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                warn!(time = ?now.elapsed(), "workflow not found");
-                            }
+                            update_status =
+                                seek_target(worker, current_state, target, &interrupt, state_tx)
+                                    .await?;
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

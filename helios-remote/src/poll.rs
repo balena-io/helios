@@ -94,7 +94,6 @@ impl Default for PollRequest {
 
 #[derive(Debug, Clone)]
 enum PollAction {
-    Terminate,
     Poll(PollRequest),
     Complete {
         target: Option<Value>,
@@ -146,7 +145,7 @@ pub async fn start_poll(
             _ = tokio::time::sleep_until(next_poll_time) => {
                 PollAction::Poll(PollRequest {
                     opts: UpdateOpts::default(),
-                        reemit: false,
+                    reemit: false,
                 })
             }
 
@@ -161,23 +160,18 @@ pub async fn start_poll(
             }
 
             // Handle a poll request
-            update_requested = poll_rx.changed() => {
-                if update_requested.is_err() {
-                    // Not really an error, it just means the API closed
-                    trace!("request channel closed");
-                    PollAction::Terminate
-                } else {
-                    let update_req = poll_rx.borrow_and_update().clone();
-                    PollAction::Poll(update_req)
-                }
+            Ok(_) = poll_rx.changed() => {
+                let update_req = poll_rx.borrow_and_update().clone();
+                PollAction::Poll(update_req)
+            }
+
+            else => {
+                trace!("request channel closed");
+                break;
             }
         };
 
         match action {
-            PollAction::Terminate => {
-                break;
-            }
-
             PollAction::Poll(update_req) => {
                 // Interrupt the poll in progress
                 interrupt.trigger();
