@@ -139,7 +139,7 @@ impl From<String> for NetworkIpamDriver {
 }
 
 /// Network configuration used to create a Docker network
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkConfig {
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
@@ -150,7 +150,7 @@ pub struct NetworkConfig {
 }
 
 /// IPAM configuration for a Docker network
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkIpamConfig {
     pub driver: NetworkIpamDriver,
     pub config: Vec<NetworkIpamPoolConfig>,
@@ -158,7 +158,7 @@ pub struct NetworkIpamConfig {
 }
 
 /// IPAM pool configuration for a Docker network
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkIpamPoolConfig {
     pub subnet: Option<String>,
     pub gateway: Option<String>,

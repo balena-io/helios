@@ -1,4 +1,6 @@
-use mahler::state::{List, Map, State};
+use std::ops::{Deref, DerefMut};
+
+use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SUPERVISED;
@@ -8,9 +10,7 @@ use crate::oci::{
     LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig,
     NetworkIpamDriver, NetworkIpamPoolConfig,
 };
-use crate::remote_model::IpamConfig as RemoteIpamConfig;
 use crate::remote_model::Network as RemoteNetwork;
-use crate::remote_model::NetworkIpam as RemoteNetworkIpam;
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Network {
@@ -23,78 +23,51 @@ impl State for Network {
     type Target = Self;
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct NetworkConfig {
-    pub driver: NetworkDriver,
-    pub driver_opts: Map<String, String>,
-    pub enable_ipv6: bool,
-    pub internal: bool,
-    pub labels: Map<String, String>,
-    pub ipam: NetworkIpam,
-}
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct NetworkConfig(OciNetworkConfig);
 
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        NetworkConfig {
-            driver: NetworkDriver::default(),
-            driver_opts: Map::new(),
-            enable_ipv6: false,
-            internal: false,
-            labels: Map::new(),
-            ipam: NetworkIpam {
-                driver: NetworkIpamDriver::default(),
-                config: Default::default(),
-                options: Map::new(),
-            },
-        }
+impl Deref for NetworkConfig {
+    type Target = OciNetworkConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct NetworkIpam {
-    pub driver: NetworkIpamDriver,
-    pub config: List<IpamConfig>,
-    pub options: Map<String, String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct IpamConfig {
-    pub subnet: Option<String>,
-    pub gateway: Option<String>,
-    pub ip_range: Option<String>,
-    pub aux_addresses: Option<Map<String, String>>,
-}
-
-fn ipam_config_from(
-    subnet: Option<String>,
-    gateway: Option<String>,
-    ip_range: Option<String>,
-    aux_addresses: Option<impl IntoIterator<Item = (String, String)>>,
-) -> IpamConfig {
-    IpamConfig {
-        subnet,
-        gateway,
-        ip_range,
-        aux_addresses: aux_addresses.map(|a| a.into_iter().collect()),
-    }
-}
-
-impl From<NetworkIpamPoolConfig> for IpamConfig {
-    fn from(pool: NetworkIpamPoolConfig) -> Self {
-        ipam_config_from(pool.subnet, pool.gateway, pool.ip_range, pool.aux_addresses)
+impl DerefMut for NetworkConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl From<RemoteNetwork> for NetworkConfig {
     fn from(net: RemoteNetwork) -> Self {
-        NetworkConfig {
+        NetworkConfig(OciNetworkConfig {
             driver: net.driver.map(NetworkDriver::from).unwrap_or_default(),
             driver_opts: net.driver_opts.into_iter().collect(),
             enable_ipv6: net.enable_ipv6,
             internal: net.internal,
             labels: net.labels.into_iter().collect(),
-            ipam: net.ipam.into(),
-        }
+            ipam: NetworkIpamConfig {
+                driver: net
+                    .ipam
+                    .driver
+                    .map(NetworkIpamDriver::from)
+                    .unwrap_or_default(),
+                config: net
+                    .ipam
+                    .config
+                    .into_iter()
+                    .map(|cfg| NetworkIpamPoolConfig {
+                        subnet: cfg.subnet,
+                        gateway: cfg.gateway,
+                        ip_range: cfg.ip_range,
+                        aux_addresses: cfg.aux_addresses,
+                    })
+                    .collect(),
+                options: net.ipam.options.into_iter().collect(),
+            },
+        })
     }
 }
 
@@ -111,7 +84,7 @@ impl From<RemoteNetwork> for Network {
 impl From<LocalNetwork> for Network {
     fn from(net: LocalNetwork) -> Self {
         let network_name = net.name;
-        let mut labels: Map<String, String> = net.labels.into_iter().collect();
+        let mut labels = net.labels;
 
         // Remove labels injected during create that are not part of the
         // compose definition
@@ -122,94 +95,46 @@ impl From<LocalNetwork> for Network {
         // Engine-assigned IPAM (subnet, gateway) would cause a mismatch
         // against the target, which has no IPAM config.
         let ipam = if has_ipam_config {
-            net.ipam.into()
+            net.ipam
         } else {
-            NetworkIpam {
+            NetworkIpamConfig {
                 driver: net.ipam.driver,
-                config: Default::default(),
-                options: net.ipam.options.into_iter().collect(),
+                config: Vec::new(),
+                options: net.ipam.options,
             }
         };
 
         Network {
             network_name,
-            config: NetworkConfig {
+            config: NetworkConfig(OciNetworkConfig {
                 driver: net.driver,
-                driver_opts: net.driver_opts.into_iter().collect(),
+                driver_opts: net.driver_opts,
                 enable_ipv6: net.enable_ipv6,
                 internal: net.internal,
                 labels,
                 ipam,
-            },
+            }),
         }
-    }
-}
-
-impl From<NetworkIpamConfig> for NetworkIpam {
-    fn from(ipam: NetworkIpamConfig) -> Self {
-        NetworkIpam {
-            driver: ipam.driver,
-            config: ipam.config.into_iter().map(Into::into).collect(),
-            options: ipam.options.into_iter().collect(),
-        }
-    }
-}
-
-impl From<RemoteNetworkIpam> for NetworkIpam {
-    fn from(ipam: RemoteNetworkIpam) -> Self {
-        NetworkIpam {
-            driver: ipam.driver.map(NetworkIpamDriver::from).unwrap_or_default(),
-            config: ipam.config.into_iter().map(Into::into).collect(),
-            options: ipam.options.into_iter().collect(),
-        }
-    }
-}
-
-impl From<RemoteIpamConfig> for IpamConfig {
-    fn from(cfg: RemoteIpamConfig) -> Self {
-        ipam_config_from(cfg.subnet, cfg.gateway, cfg.ip_range, cfg.aux_addresses)
     }
 }
 
 impl From<NetworkConfig> for OciNetworkConfig {
     fn from(net: NetworkConfig) -> Self {
-        let mut labels: std::collections::HashMap<String, String> =
-            net.labels.into_iter().collect();
+        let mut inner = net.0;
 
         // Mark the network as supervised
-        labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
+        inner
+            .labels
+            .insert(LABEL_SUPERVISED.to_string(), "".to_string());
 
         // Mark networks with IPAM config so changes trigger network recreation
-        if !net.ipam.config.is_empty() {
-            labels.insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
+        if !inner.ipam.config.is_empty() {
+            inner
+                .labels
+                .insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
         }
 
-        let ipam = NetworkIpamConfig {
-            driver: net.ipam.driver,
-            config: net
-                .ipam
-                .config
-                .into_iter()
-                .map(|cfg| NetworkIpamPoolConfig {
-                    subnet: cfg.subnet,
-                    gateway: cfg.gateway,
-                    ip_range: cfg.ip_range,
-                    aux_addresses: cfg
-                        .aux_addresses
-                        .map(|a| a.into_iter().collect()),
-                })
-                .collect(),
-            options: net.ipam.options.into_iter().collect(),
-        };
-
-        OciNetworkConfig {
-            driver: net.driver,
-            driver_opts: net.driver_opts.into_iter().collect(),
-            enable_ipv6: net.enable_ipv6,
-            internal: net.internal,
-            labels,
-            ipam,
-        }
+        inner
     }
 }
 
@@ -289,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_to_oci_config_maps_all_fields() {
-        let config = NetworkConfig {
+        let config = NetworkConfig(OciNetworkConfig {
             driver: NetworkDriver::from("overlay".to_string()),
             driver_opts: [(
                 "com.docker.network.driver.mtu".to_string(),
@@ -305,9 +230,9 @@ mod tests {
             ]
             .into_iter()
             .collect(),
-            ipam: NetworkIpam {
+            ipam: NetworkIpamConfig {
                 driver: NetworkIpamDriver::from("custom".to_string()),
-                config: vec![IpamConfig {
+                config: vec![NetworkIpamPoolConfig {
                     subnet: Some("10.0.0.0/8".to_string()),
                     gateway: Some("10.0.0.1".to_string()),
                     ip_range: Some("10.0.1.0/24".to_string()),
@@ -316,14 +241,12 @@ mod tests {
                             .into_iter()
                             .collect(),
                     ),
-                }]
-                .into_iter()
-                .collect(),
+                }],
                 options: [("opt1".to_string(), "val1".to_string())]
                     .into_iter()
                     .collect(),
             },
-        };
+        });
 
         let oci_config: OciNetworkConfig = config.into();
 
