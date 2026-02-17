@@ -5,8 +5,8 @@ use crate::labels::LABEL_SUPERVISED;
 
 const LABEL_IPAM_CONFIG: &str = "io.balena.private.ipam.config";
 use crate::oci::{
-    NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver,
-    NetworkIpamPoolConfig,
+    LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig,
+    NetworkIpamDriver, NetworkIpamPoolConfig,
 };
 use crate::remote_model::IpamConfig as RemoteIpamConfig;
 use crate::remote_model::Network as RemoteNetwork;
@@ -104,6 +104,40 @@ impl From<RemoteNetwork> for Network {
             // Placeholder name, filled in during normalization
             network_name: String::new(),
             config: net.into(),
+        }
+    }
+}
+
+impl From<LocalNetwork> for Network {
+    fn from(net: LocalNetwork) -> Self {
+        let network_name = net.name;
+        let mut labels: Map<String, String> = net.labels.into_iter().collect();
+
+        // Remove labels injected during create that are not part of the
+        // compose definition
+        labels.remove(LABEL_SUPERVISED);
+        labels.remove(LABEL_IPAM_CONFIG);
+
+        Network {
+            network_name,
+            config: NetworkConfig {
+                driver: net.driver,
+                driver_opts: net.driver_opts.into_iter().collect(),
+                enable_ipv6: net.enable_ipv6,
+                internal: net.internal,
+                labels,
+                ipam: net.ipam.into(),
+            },
+        }
+    }
+}
+
+impl From<NetworkIpamConfig> for NetworkIpam {
+    fn from(ipam: NetworkIpamConfig) -> Self {
+        NetworkIpam {
+            driver: ipam.driver,
+            config: ipam.config.into_iter().map(Into::into).collect(),
+            options: ipam.options.into_iter().collect(),
         }
     }
 }
@@ -337,6 +371,74 @@ mod tests {
             !oci_config
                 .labels
                 .contains_key("io.balena.private.ipam.config")
+        );
+    }
+
+    #[test]
+    fn test_from_local_network_strips_injected_labels() {
+        let local = LocalNetwork {
+            name: "app1_my-net".to_string(),
+            driver: NetworkDriver::from("overlay".to_string()),
+            driver_opts: [("mtu".to_string(), "1450".to_string())]
+                .into_iter()
+                .collect(),
+            enable_ipv6: true,
+            internal: true,
+            labels: [
+                // injected labels that should be stripped
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (LABEL_IPAM_CONFIG.to_string(), "true".to_string()),
+                // user label that should survive
+                ("com.example.label".to_string(), "value".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::from("custom".to_string()),
+                config: vec![NetworkIpamPoolConfig {
+                    subnet: Some("10.0.0.0/8".to_string()),
+                    gateway: Some("10.0.0.1".to_string()),
+                    ip_range: None,
+                    aux_addresses: None,
+                }],
+                options: [("opt1".to_string(), "val1".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        };
+
+        let network: Network = local.into();
+
+        // network_name comes from LocalNetwork.name
+        assert_eq!(network.network_name, "app1_my-net");
+
+        // Injected labels are stripped
+        assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
+        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG));
+
+        // User label survives
+        assert_eq!(
+            network.config.labels.get("com.example.label"),
+            Some(&"value".to_string())
+        );
+
+        // All other fields pass through
+        assert_eq!(network.config.driver.to_string(), "overlay");
+        assert_eq!(
+            network.config.driver_opts.get("mtu"),
+            Some(&"1450".to_string())
+        );
+        assert!(network.config.enable_ipv6);
+        assert!(network.config.internal);
+        assert_eq!(network.config.ipam.driver.to_string(), "custom");
+        assert_eq!(network.config.ipam.config.len(), 1);
+        assert_eq!(
+            network.config.ipam.config[0].subnet,
+            Some("10.0.0.0/8".to_string())
+        );
+        assert_eq!(
+            network.config.ipam.options.get("opt1"),
+            Some(&"val1".to_string())
         );
     }
 

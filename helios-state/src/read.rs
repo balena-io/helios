@@ -4,12 +4,16 @@ use tokio::fs;
 use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
 use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
-use super::models::{App, Device, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID};
+use super::models::{
+    App, Device, Network, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID,
+    UNKNOWN_RELEASE_UUID,
+};
 
 #[derive(Debug, Error)]
 pub enum ReadStateError {
@@ -24,6 +28,30 @@ pub enum ReadStateError {
 
     #[error(transparent)]
     IO(#[from] std::io::Error),
+}
+
+/// Find or create an app entry
+async fn get_or_create_app<'a>(
+    apps: &'a mut Map<Uuid, App>,
+    app_uuid: &Uuid,
+    local_store: &Store,
+) -> Result<&'a mut App, ReadStateError> {
+    if !apps.contains_key(app_uuid) {
+        let name = local_store
+            .read(format!("/apps/{app_uuid}"), "name")
+            .await?;
+
+        apps.insert(
+            app_uuid.clone(),
+            App {
+                id: 0,
+                name,
+                releases: Map::new(),
+            },
+        );
+    }
+
+    Ok(apps.get_mut(app_uuid).expect("app was just inserted"))
 }
 
 /// Read the state of system
@@ -97,7 +125,7 @@ pub async fn read(
         // read the state of containers
         let containers = docker
             .container()
-            .list_with_labels(vec!["io.balena.supervised"])
+            .list_with_labels(vec![LABEL_SUPERVISED])
             .await?;
 
         for container_id in containers {
@@ -113,25 +141,12 @@ pub async fn read(
 
             let labels = local_container.config.labels.as_ref();
             let app_uuid: Uuid = labels
-                .and_then(|l| l.get("io.balena.app-uuid"))
-                .map(|uuid| uuid.as_str().into())
-                .unwrap_or(UNKNOWN_APP_UUID.into());
+                .and_then(|l| l.get(LABEL_APP_UUID))
+                .map(|uuid| uuid.as_str())
+                .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
 
-            // Create the app if it doesn't exist yet
-            let app = if let Some(app) = apps.get_mut(&app_uuid) {
-                app
-            } else {
-                let name = local_store
-                    .read(format!("/apps/{app_uuid}"), "name")
-                    .await?;
-
-                // read the app name from the local store when creating the app
-                apps.entry(app_uuid.clone()).or_insert(App {
-                    id: 0,
-                    name,
-                    releases: Map::new(),
-                })
-            };
+            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
             // Create the release for the uuid if it doesn't exist
             let release = if let Some(rel) = app.releases.get_mut(&release_uuid) {
@@ -168,6 +183,49 @@ pub async fn read(
                 .unwrap_or(svc.image);
 
             release.services.insert(service_name, svc);
+        }
+
+        // read the state of networks
+        let networks = docker
+            .network()
+            .list_with_labels(vec![LABEL_SUPERVISED])
+            .await?;
+
+        for network_name in networks {
+            let local_network = docker.network().inspect(&network_name).await?;
+
+            let app_uuid: Uuid = local_network
+                .labels
+                .get(LABEL_APP_UUID)
+                .map(|uuid| uuid.as_str())
+                .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
+
+            // Extract the network name by stripping the "{app_uuid}_" prefix
+            let net_name = local_network
+                .name
+                .strip_prefix(&format!("{app_uuid}_"))
+                .unwrap_or(&local_network.name)
+                .to_owned();
+
+            let network: Network = local_network.into();
+
+            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+
+            // If app_uuid is unknown, insert orphaned network under
+            // unknown release to prepare for cleanup
+            let release = if let Some(release) = app.releases.values_mut().next() {
+                release
+            } else {
+                app.releases
+                    .entry(UNKNOWN_RELEASE_UUID.into())
+                    .or_insert(Release {
+                        installed: false,
+                        services: Map::new(),
+                        networks: Map::new(),
+                    })
+            };
+            release.networks.insert(net_name, network);
         }
     }
 

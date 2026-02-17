@@ -19,8 +19,8 @@ pub use datetime::DateTime;
 
 mod network;
 pub use network::{
-    NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver,
-    NetworkIpamPoolConfig,
+    LocalNetwork, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
+    NetworkIpamDriver, NetworkIpamPoolConfig,
 };
 
 use helios_util as util;

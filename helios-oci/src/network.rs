@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use bollard::models::{Ipam, IpamConfig, NetworkCreateRequest};
+use bollard::models::{Ipam, IpamConfig, NetworkCreateRequest, NetworkInspect};
 use bollard::query_parameters::ListNetworksOptions;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,25 @@ impl NetworkClient<'_> {
                 Err(Error::from(e)).with_context(|| format!("failed to remove network {name}"))
             }
         }
+    }
+
+    /// Returns low-level information about a network.
+    pub async fn inspect(&self, name: &str) -> Result<LocalNetwork> {
+        let network_info = self
+            .0
+            .inner()
+            .inspect_network(
+                name,
+                None::<bollard::query_parameters::InspectNetworkOptions>,
+            )
+            .await
+            .map_err(|e| Error::from(e).context(format!("failed to inspect network '{name}'")))?;
+
+        let network = network_info
+            .try_into()
+            .with_context(|| format!("failed to inspect network '{name}'"))?;
+
+        Ok(network)
     }
 
     /// Returns the list of network names on the server
@@ -145,6 +164,62 @@ pub struct NetworkIpamPoolConfig {
     pub gateway: Option<String>,
     pub ip_range: Option<String>,
     pub aux_addresses: Option<HashMap<String, String>>,
+}
+
+/// Information about a network on the local Docker engine
+#[derive(Debug, Clone, Default)]
+pub struct LocalNetwork {
+    pub name: String,
+    pub driver: NetworkDriver,
+    pub driver_opts: HashMap<String, String>,
+    pub enable_ipv6: bool,
+    pub internal: bool,
+    pub labels: HashMap<String, String>,
+    pub ipam: NetworkIpamConfig,
+}
+
+impl TryFrom<NetworkInspect> for LocalNetwork {
+    type Error = Error;
+
+    fn try_from(value: NetworkInspect) -> Result<Self> {
+        let name = value.name.ok_or("network name should not be nil")?;
+        let driver = NetworkDriver::from(value.driver.unwrap_or_else(|| "bridge".to_string()));
+        let driver_opts = value.options.unwrap_or_default();
+        let enable_ipv6 = value.enable_ipv6.unwrap_or(false);
+        let internal = value.internal.unwrap_or(false);
+        let labels = value.labels.unwrap_or_default();
+
+        let ipam = match value.ipam {
+            Some(ipam) => NetworkIpamConfig {
+                driver: NetworkIpamDriver::from(
+                    ipam.driver.unwrap_or_else(|| "default".to_string()),
+                ),
+                config: ipam
+                    .config
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|pool| NetworkIpamPoolConfig {
+                        subnet: pool.subnet,
+                        gateway: pool.gateway,
+                        ip_range: pool.ip_range,
+                        aux_addresses: pool.auxiliary_addresses,
+                    })
+                    .collect(),
+                options: ipam.options.unwrap_or_default(),
+            },
+            None => NetworkIpamConfig::default(),
+        };
+
+        Ok(LocalNetwork {
+            name,
+            driver,
+            driver_opts,
+            enable_ipv6,
+            internal,
+            labels,
+            ipam,
+        })
+    }
 }
 
 impl From<NetworkConfig> for NetworkCreateRequest {

@@ -385,7 +385,7 @@ fn create_network(
 ) -> IO<Network, AppError> {
     let net = net.create(tgt);
 
-    with_io(net, async move |net| {
+    with_io(net, async move |mut net| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
@@ -393,6 +393,14 @@ fn create_network(
             .network()
             .create(&net.network_name, net.config.clone().into())
             .await?;
+
+        // Re-read the network from Docker to capture engine-assigned values
+        let local_network = docker
+            .network()
+            .inspect(&net.network_name)
+            .await
+            .with_context(|| format!("failed to inspect network '{}'", net.network_name))?;
+        *net = Network::from(local_network);
         Ok(net)
     })
 }
