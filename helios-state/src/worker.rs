@@ -646,6 +646,429 @@ mod tests {
     }
 
     #[test]
+    fn it_finds_a_workflow_to_create_networks() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "started": true,
+                                    "image": "ubuntu:latest",
+                                    "config": {},
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> =
+            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "create network 'my-network' for app 'my-app-uuid'",
+                    "initialize service 'service1' for release 'my-release-uuid'",
+                )
+                + seq!("pull image 'ubuntu:latest'")
+                + seq!("install service 'service1' for release 'my-release-uuid'")
+                + seq!("start service 'service1' for release 'my-release-uuid'")
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up"
+                );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_remove_networks() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "old-network": {
+                                    "network_name": "my-app-uuid_old-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "remove network 'old-network' for app 'my-app-uuid'",
+            "clean-up"
+        );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_create_and_remove_networks() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "network-a": {
+                                    "network_name": "my-app-uuid_network-a",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "network-b": {
+                                    "network_name": "my-app-uuid_network-b",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = par!(
+            "remove network 'network-a' for app 'my-app-uuid'",
+            "create network 'network-b' for app 'my-app-uuid'",
+        ) + seq!("clean-up");
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    // Network config updates are handled by removing the old network
+    // and creating it with the new config
+    #[test]
+    fn it_finds_a_workflow_for_updating_networks() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "overlay",
+                                        "driver_opts": {},
+                                        "enable_ipv6": true,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "remove network 'my-network' for app 'my-app-uuid'",
+            "create network 'my-network' for app 'my-app-uuid'",
+            "clean-up"
+        );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_create_multiple_networks_and_finalizes_release_after_network_create()
+    {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "net-a": {
+                                    "network_name": "my-app-uuid_net-a",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                                "net-b": {
+                                    "network_name": "my-app-uuid_net-b",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": true,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> =
+            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "create network 'net-a' for app 'my-app-uuid'",
+                    "create network 'net-b' for app 'my-app-uuid'",
+                )
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up",
+                );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
     fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
         before();
 

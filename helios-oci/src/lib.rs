@@ -17,6 +17,12 @@ pub use container::{Container, ContainerConfig, ContainerState, ContainerStatus,
 mod datetime;
 pub use datetime::DateTime;
 
+mod network;
+pub use network::{
+    LocalNetwork, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
+    NetworkIpamDriver, NetworkIpamPoolConfig,
+};
+
 use helios_util as util;
 
 #[derive(Debug, Clone)]
@@ -57,6 +63,12 @@ impl Client {
     #[inline]
     pub fn container(&self) -> Container<'_> {
         Container::new(self)
+    }
+
+    /// Exposes methods to work with networks
+    #[inline]
+    pub fn network(&self) -> NetworkClient<'_> {
+        NetworkClient::new(self)
     }
 }
 

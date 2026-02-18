@@ -8,7 +8,7 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, RegistryAuthSet, Release, Service,
+    App, AppMap, AppTarget, Device, ImageRef, Network, RegistryAuthSet, Release, Service,
     ServiceContainerStatus, ServiceContainerSummary, ServiceTarget, mark_duplicate_service_config,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
@@ -256,6 +256,7 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
     release.create(Release {
         installed: false,
         services: Map::new(),
+        networks: Map::new(),
     })
 }
 
@@ -272,6 +273,15 @@ fn finish_release(
             .services
             .get(svc_name)
             .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+            .unwrap_or_default()
+    }));
+
+    // all target networks have been created
+    enforce!(target.networks.iter().all(|(net_name, tgt_net)| {
+        release
+            .networks
+            .get(net_name)
+            .map(|net| tgt_net == net)
             .unwrap_or_default()
     }));
 
@@ -364,6 +374,53 @@ fn remove_release_services(
     tasks.push(remove_images.with_target(images_to_remove));
 
     tasks
+}
+
+/// Create a network in Docker and the state tree
+fn create_network(
+    net: View<Option<Network>>,
+    Target(tgt): Target<Network>,
+    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Network, AppError> {
+    let net = net.create(tgt);
+
+    with_io(net, async move |mut net| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker
+            .network()
+            .create(&net.network_name, net.config.clone().into())
+            .await?;
+
+        // Re-read the network from Docker to capture engine-assigned values
+        let local_network = docker
+            .network()
+            .inspect(&net.network_name)
+            .await
+            .with_context(|| format!("failed to inspect network '{}'", net.network_name))?;
+        *net = Network::from(local_network);
+        Ok(net)
+    })
+}
+
+/// Remove a network from Docker and the state tree
+fn remove_network(
+    net: View<Network>,
+    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Option<Network>, AppError> {
+    let docker_name = net.network_name.clone();
+    let net = net.delete();
+
+    with_io(net, async move |net| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker.network().remove(&docker_name).await?;
+        Ok(net)
+    })
 }
 
 /// Create the service in memory before initiating download
@@ -717,6 +774,26 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::delete(remove_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("remove release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+            ],
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}/networks/{network_name}",
+            [
+                job::create(create_network).with_description(
+                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("create network '{network_name}' for app '{app_uuid}'")
+                    },
+                ),
+                job::update(remove_network).with_description(
+                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove network '{network_name}' for app '{app_uuid}'")
+                    },
+                ),
+                job::delete(remove_network).with_description(
+                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove network '{network_name}' for app '{app_uuid}'")
                     },
                 ),
             ],

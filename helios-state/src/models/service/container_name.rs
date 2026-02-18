@@ -6,15 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common_types::Uuid;
 
-// We don't want to fail if the service is supervised but it doesn't have an app-uuid,
-// this could mean the container was tampered with or it is leftover from an old version of the
-// supervisor.
-pub const UNKNOWN_APP_UUID: &str = "10c401";
-
-// We don't want to fail if the service is supervised but it has the wrong
-// container name, that just means that we need to rename it (or remove it)
-// so we use a fake release uuid for this.
-const UNKNOWN_RELEASE_UUID: &str = "10ca12e1ea5e";
+use crate::models::defaults::UNKNOWN_RELEASE_UUID;
 
 pub struct ServiceContainerName {
     pub service_name: String,
