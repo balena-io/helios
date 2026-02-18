@@ -20,12 +20,12 @@ pub fn find_installed_service<'a>(
 
 /// Find an new service for a different commit
 pub fn find_future_service<'a>(
-    device: &'a DeviceTarget,
+    t_device: &'a DeviceTarget,
     app_uuid: &'a Uuid,
     commit: &'a Uuid,
     service_name: &'a String,
 ) -> Option<(&'a Uuid, &'a ServiceTarget)> {
-    device.apps.get(app_uuid).and_then(|app| {
+    t_device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()
             .filter(|(c, _)| c != &commit)

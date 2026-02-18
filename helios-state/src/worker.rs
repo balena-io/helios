@@ -750,7 +750,7 @@ mod tests {
     // The worker doesn't have any tasks to update services or delete releases
     // so this plan should fail
     #[test]
-    fn it_fails_to_find_a_workflow_for_updating_services() {
+    fn it_finds_a_workflow_for_updating_services() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
@@ -764,24 +764,79 @@ mod tests {
                         "old-release": {
                             "installed": true,
                             "services": {
+                                // this service is being updated
                                 "service1": {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                                     "container_name": "old-release_service1",
                                     "started": true,
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
                                     "config": {},
                                 },
+                                // so is this service, however is not currently running
                                 "service2":  {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
                                     "container_name": "old-release_service2",
                                     "started": true,
+                                    "container": {
+                                        "id": "deadc41f",
+                                        "status": "stopped",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                                // this service should be migrated
+                                "service3":  {
+                                    "id": 3,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a333333333333333333333333333333333333333333333333333333333333333",
+                                    "container_name": "old-release_service3",
+                                    "started": true,
+                                    "container": {
+                                        "id": "badbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                                // this service is being removed
+                                "service4a":  {
+                                    "id": 3,
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc4@sha256:a444444444444444444444444444444444444444444444444444444444444444",
+                                    "container_name": "old-release_service4a",
+                                    "started": true,
+                                    "container": {
+                                        "id": "badc41f",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
                                     "config": {},
                                 },
 
                             }
                         }
                     }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "engine_id": "111"
+                },
+                "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222": {
+                    "config": {},
+                    "download_progress": 100,
+                    "engine_id": "222"
+                },
+                "registry2.balena-cloud.com/v2/oldsvc3@sha256:a333333333333333333333333333333333333333333333333333333333333333": {
+                    "config": {},
+                    "download_progress": 100,
+                    "engine_id": "333"
                 }
             },
         }))
@@ -810,7 +865,22 @@ mod tests {
                                     "started": true,
                                     "config": {},
                                 },
-
+                                "service3":  {
+                                    "id": 3,
+                                    // same image hash as the service from the old release
+                                    "image": "registry2.balena-cloud.com/v2/newsvc3@sha256:a333333333333333333333333333333333333333333333333333333333333333",
+                                    "container_name": "new-release_service3",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                // this is a new service
+                                "service4b":  {
+                                    "id": 3,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc4@sha256:b444444444444444444444444444444444444444444444444444444444444444",
+                                    "container_name": "new-release_service4b",
+                                    "started": true,
+                                    "config": {},
+                                },
                             }
                         }
                     }
@@ -825,10 +895,55 @@ mod tests {
             .find_workflow(target)
             .unwrap();
 
-        assert!(
-            workflow.is_none(),
-            "unexpected plan:\n{}",
-            workflow.unwrap()
+        let expected: Dag<&str> = seq!(
+            "request registry credentials",
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+        ) + par!(
+            "initialize service 'service1' for release 'new-release'",
+            "initialize service 'service2' for release 'new-release'",
+            "initialize service 'service3' for release 'new-release'",
+            "initialize service 'service4b' for release 'new-release'"
+        ) + par!(
+            "pull image 'registry2.balena-cloud.com/v2/newsvc1@sha256:b111111111111111111111111111111111111111111111111111111111111111'",
+            "pull image 'registry2.balena-cloud.com/v2/newsvc2@sha256:b222222222222222222222222222222222222222222222222222222222222222'",
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc3@sha256:a333333333333333333333333333333333333333333333333333333333333333' as 'registry2.balena-cloud.com/v2/newsvc3@sha256:a333333333333333333333333333333333333333333333333333333333333333'"
+        ) + seq!(
+            "pull image 'registry2.balena-cloud.com/v2/newsvc4@sha256:b444444444444444444444444444444444444444444444444444444444444444'"
+        ) + dag!(
+            // all the operations below can happen concurrently
+            // uninstalls cannot happen until all images have been downloaded
+            seq!("install service 'service1' for release 'new-release'"),
+            seq!("install service 'service2' for release 'new-release'"),
+            seq!("install service 'service4b' for release 'new-release'"),
+            seq!(
+                "stop service 'service1' for release 'old-release'",
+                "uninstall service 'service1' for release 'old-release'"
+            ),
+            seq!("uninstall service 'service2' for release 'old-release'"),
+            par!(
+                "remove data for 'service3' for release 'old-release'",
+                "migrate service 'service3' to release 'new-release'"
+            ),
+            seq!(
+                "stop service 'service4a' for release 'old-release'",
+                "uninstall service 'service4a' for release 'old-release'"
+            ),
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "start service 'service1' for release 'new-release'",
+            "start service 'service2' for release 'new-release'",
+            "rename container for service 'service3' for release 'new-release'",
+            "start service 'service4b' for release 'new-release'",
+        ) + seq!(
+            "update image metadata for service 'service3' of release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "clean-up"
+        );
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
         );
     }
 

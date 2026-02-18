@@ -33,44 +33,33 @@ fn request_registry_token_for_new_images(
     // Find all images for new services in the target state
     let images_to_install: Vec<&ImageUri> = tgt_apps
         .iter()
-        .flat_map(|(app_uuid, app)| {
-            app.releases.iter().flat_map(|(commit, release)| {
-                release
+        .flat_map(|(t_app_uuid, t_app)| {
+            t_app.releases.iter().flat_map(|(t_rel_uuid, t_rel)| {
+                t_rel
                     .services
                     .iter()
-                    .filter_map(|(svc_name, svc)| {
+                    .filter_map(|(t_svc_name, t_svc)| {
                         if device
                             .apps
-                            .get(app_uuid)
-                            .and_then(|app| app.releases.get(commit))
-                            .and_then(|rel| rel.services.get(svc_name))
+                            .get(t_app_uuid)
+                            .and_then(|app| app.releases.get(t_rel_uuid))
+                            .and_then(|rel| rel.services.get(t_svc_name))
                             .is_some()
                         {
-                            // the service already exists, ignore it
+                            // the service already exists in the current state
+                            // ignore it. This ensures the request task happens before
+                            // creating services
                             return None;
                         }
 
-                        if let ImageRef::Uri(img_uri) = &svc.image {
-                            Some((svc_name, img_uri))
+                        if let ImageRef::Uri(img_uri) = &t_svc.image {
+                            Some(img_uri)
                         } else {
                             None
                         }
                     })
-                    .filter(|(svc_name, svc_img)| {
-                        // ignore the image if it already exists
-                        if device.images.contains_key(svc_img) {
-                            return false;
-                        }
-
-                        // if the image is for a new service or the existing service has a
-                        // different digest (which means a new download), then add it to the
-                        // authorization list
-                        find_installed_service(&device, app_uuid, commit, svc_name).is_none_or(
-                            |s| s.image.digest().is_none() || s.image.digest() != svc_img.digest(),
-                        )
-                    })
-                    // then select the image
-                    .map(|(_, svc_img)| svc_img)
+                    // ignore the image if it already exists
+                    .filter(|t_svc_img| !device.images.contains_key(t_svc_img))
             })
         })
         .collect();
@@ -185,18 +174,18 @@ fn fetch_apps_images(
     // Find all images for new services in the target state
     let images_to_install: Vec<&ImageUri> = tgt_apps
         .iter()
-        .flat_map(|(app_uuid, app)| {
-            app.releases.iter().flat_map(|(commit, release)| {
-                release
+        .flat_map(|(t_app_uuid, t_app)| {
+            t_app.releases.iter().flat_map(|(t_rel_uuid, t_rel)| {
+                t_rel
                     .services
                     .iter()
                     // find all services that need downloading
-                    .filter_map(|(svc_name, svc)| {
+                    .filter_map(|(t_svc_name, t_svc)| {
                         if device
                             .apps
-                            .get(app_uuid)
-                            .and_then(|app| app.releases.get(commit))
-                            .and_then(|rel| rel.services.get(svc_name))
+                            .get(t_app_uuid)
+                            .and_then(|app| app.releases.get(t_rel_uuid))
+                            .and_then(|rel| rel.services.get(t_svc_name))
                             .is_none_or(|svc| svc.container.is_some())
                         {
                             // the service already has a container, ignore
@@ -206,28 +195,18 @@ fn fetch_apps_images(
 
                         // only use the target image ref if it is an URI
                         // (this should always be the case)
-                        if let ImageRef::Uri(img_uri) = &svc.image {
-                            Some((svc_name, img_uri))
+                        if let ImageRef::Uri(img_uri) = &t_svc.image {
+                            Some(img_uri)
                         } else {
                             None
                         }
                     })
-                    .filter(|(svc_name, svc_img)| {
-                        // ignore the image if it already exists
-                        if device.images.contains_key(svc_img) {
-                            return false;
-                        }
-
-                        // select the image if it is for a new service or the existing service image has the
-                        // same digest (which means we are just re-tagging)
-                        find_installed_service(&device, app_uuid, commit, svc_name).is_none_or(
-                            |s| s.image.digest().is_some() && svc_img.digest() == s.image.digest(),
-                        )
-                    })
+                    // ignore the image if it already exists
+                    .filter(|t_svc_img| !device.images.contains_key(t_svc_img))
             })
         })
         // remove duplicate digests
-        .fold(Vec::<&ImageUri>::new(), |mut acc, (_, svc_img)| {
+        .fold(Vec::<&ImageUri>::new(), |mut acc, svc_img| {
             if acc
                 .iter()
                 .all(|img| img.digest().is_none() || img.digest() != svc_img.digest())
@@ -668,33 +647,52 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
 /// These requirements may vary a little depending on the update strategy
 fn uninstall_service_when_requirements_are_met(
     svc: View<Service>,
-    SystemTarget(device): SystemTarget<Device>,
+    System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
-    if svc
-        .container
-        .as_ref()
-        .is_some_and(|c| c.status == ServiceContainerStatus::Running)
-    {
-        // stop the service if running
-        tasks.push(stop_service_when_requirements_are_met.into_task());
+
+    // wait until all target images have been downloaded
+    if t_device.apps.values().any(|t_app| {
+        t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
+            t_rel_uuid != &rel_uuid
+                && t_rel.services.values().any(|t_svc| {
+                    if let ImageRef::Uri(t_img_uri) = &t_svc.image
+                        && device.images.contains_key(t_img_uri)
+                    {
+                        false
+                    } else {
+                        true
+                    }
+                })
+        })
+    }) {
+        return tasks;
     }
 
     // If there is a new target service for a different release with the same
     // config and image, then do a migration
-    if let Some((tgt_rel_uuid, tgt_svc)) =
-        find_future_service(&device, &app_uuid, &rel_uuid, &svc_name)
+    if let Some((t_rel_uuid, tgt_svc)) =
+        find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
         && tgt_svc.image.digest() == svc.image.digest()
         && svc.config == tgt_svc.config
     {
         tasks.push(remove_service.into_task());
         tasks.push(
             migrate_service
-                .with_arg("release_uuid", tgt_rel_uuid.as_str())
+                .with_arg("commit", t_rel_uuid.as_str())
                 .with_target(&*svc),
         );
     } else {
+        if svc
+            .container
+            .as_ref()
+            .is_some_and(|c| c.status == ServiceContainerStatus::Running)
+        {
+            // stop the service if running
+            tasks.push(stop_service_when_requirements_are_met.into_task());
+        }
         // otherwise uninstall the service
         tasks.push(uninstall_service.into_task());
     }
