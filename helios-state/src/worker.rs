@@ -563,7 +563,7 @@ mod tests {
             .unwrap();
         let expected: Dag<&str> = seq!(
             "stop service 'service2' for release 'my-release-uuid'",
-            "remove service 'service2' for release 'my-release-uuid'",
+            "uninstall service 'service2' for release 'my-release-uuid'",
         ) + seq!("clean-up");
 
         let workflow = workflow.unwrap();
@@ -643,11 +643,11 @@ mod tests {
         let expected: Dag<&str> = dag!(
             seq!(
                 "stop service 'service1' for release 'my-release-uuid'",
-                "remove service 'service1' for release 'my-release-uuid'",
+                "uninstall service 'service1' for release 'my-release-uuid'",
             ),
             seq!(
                 "stop service 'service2' for release 'my-release-uuid'",
-                "remove service 'service2' for release 'my-release-uuid'",
+                "uninstall service 'service2' for release 'my-release-uuid'",
             )
         ) + seq!(
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
@@ -735,7 +735,7 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
-            "store image metadata for service 'one' of release 'my-release-uuid'",
+            "update image metadata for service 'one' of release 'my-release-uuid'",
             "clean-up"
         );
 

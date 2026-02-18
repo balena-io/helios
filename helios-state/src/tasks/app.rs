@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mahler::extract::{Args, Res, System, Target, View};
+use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
 use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
@@ -15,7 +15,7 @@ use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext}
 use crate::util::store::{Store, StoreError};
 
 use super::image::{create_image, request_registry_credentials};
-use super::utils::find_installed_service;
+use super::utils::{find_future_service, find_installed_service};
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -374,6 +374,14 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
     })
 }
 
+/// Migrate a service to the current release from another location
+fn migrate_service(
+    maybe_svc: View<Option<Service>>,
+    RawTarget(tgt): RawTarget<Service>,
+) -> View<Service> {
+    maybe_svc.create(tgt)
+}
+
 /// Install the service when requirements are met for this operation
 ///
 /// A service can be installed after
@@ -658,7 +666,11 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
 ///     - otherwise the container for the new service should exist before uninstalling the old one (TODO)
 ///
 /// These requirements may vary a little depending on the update strategy
-fn uninstall_service_when_requirements_are_met(svc: View<Service>) -> Vec<Task> {
+fn uninstall_service_when_requirements_are_met(
+    svc: View<Service>,
+    SystemTarget(device): SystemTarget<Device>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc
         .container
@@ -669,10 +681,33 @@ fn uninstall_service_when_requirements_are_met(svc: View<Service>) -> Vec<Task> 
         tasks.push(stop_service_when_requirements_are_met.into_task());
     }
 
-    // remove the service
-    tasks.push(uninstall_service.into_task());
+    // If there is a new target service for a different release with the same
+    // config and image, then do a migration
+    if let Some((tgt_rel_uuid, tgt_svc)) =
+        find_future_service(&device, &app_uuid, &rel_uuid, &svc_name)
+        && tgt_svc.image.digest() == svc.image.digest()
+        && svc.config == tgt_svc.config
+    {
+        tasks.push(remove_service.into_task());
+        tasks.push(
+            migrate_service
+                .with_arg("release_uuid", tgt_rel_uuid.as_str())
+                .with_target(&*svc),
+        );
+    } else {
+        // otherwise uninstall the service
+        tasks.push(uninstall_service.into_task());
+    }
 
     tasks
+}
+
+/// Remove service from the current release state
+///
+/// NOTE: this does not remove the container, is an in-memory only operation
+/// that is used when migrating a service
+fn remove_service(svc: View<Service>) -> View<Option<Service>> {
+    svc.delete()
 }
 
 /// Remove a stopped service container
@@ -861,7 +896,17 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::delete(uninstall_service_when_requirements_are_met),
                 job::none(uninstall_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("remove service '{service_name}' for release '{commit}'")
+                        format!("uninstall service '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::none(remove_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove data for '{service_name}' for release '{commit}'")
+                    },
+                ),
+                job::none(migrate_service).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("migrate service '{service_name}' to release '{commit}'")
                     },
                 ),
                 job::none(remove_service_container).with_description(
@@ -886,7 +931,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             job::update(store_service_image_uri).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
-                        "store image metadata for service '{service_name}' of release '{commit}'"
+                        "update image metadata for service '{service_name}' of release '{commit}'"
                     )
                 },
             ),
