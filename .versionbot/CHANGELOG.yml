@@ -1,4 +1,49 @@
 - commits:
+    - subject: Make `container_name` a property of Service
+      hash: 8fb12b6d8d72113047210ef2588db8a571abac0c
+      body: |
+        It was a configuration before, but that could be confusing as
+        `container_name` is not a supported composition property.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Make OCI error handling more uniform
+      hash: cf038934d89df5e6db2abbd8d71e7339add16b59
+      body: |
+        Ignore conflicts when creating/removing a resource that has already been
+        created/removed
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Improve type conversions of Service and ServiceConfig models
+      hash: 8afdc548bfb5109c484889ebb60d5e8c7eb778f8
+      body: |
+        Uses custom conversion function for more readable code rather than the
+        `From` trait
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Clean-up some type definitions
+      hash: e5020ca3fde2ccb46e36c6de5988c74e9c4d8c1b
+      body: |
+        Remove unnecessary `Serialize` implementations from oci container types
+        and uses `serde_with` and struct level attributes to clean up
+        `ServiceConfig` definition.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.16.4
+  title: ""
+  date: 2026-02-18T23:59:53.101Z
+- commits:
     - subject: Make NetworkConfig a newtype over OCI NetworkConfig
       hash: 923cafd3a3a99e43a7e2b7c234ce4b87fae96196
       body: |
