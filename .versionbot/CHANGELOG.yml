@@ -1,4 +1,112 @@
 - commits:
+    - subject: Make NetworkConfig a newtype over OCI NetworkConfig
+      hash: 923cafd3a3a99e43a7e2b7c234ce4b87fae96196
+      body: |
+        - Wrap crate::oci::NetworkConfig in a newtype with Deref/DerefMut
+        - Remove duplicate NetworkIpam and IpamConfig state structs
+        - Add serde and eq derives to OCI network config types
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Discard engine-assigned IPAM config on network read-back
+      hash: 282fea13ab8b92ba751427c6f1caf91320645cbc
+      body: |
+        When a network is created without explicit IPAM configuration, Docker
+        auto-assigns a subnet and gateway. On read-back these engine-derived
+        values would cause a mismatch against the target (which has empty IPAM
+        config). Use the LABEL_IPAM_CONFIG marker to distinguish user-specified
+        IPAM from engine-assigned IPAM: if the label is absent, discard the
+        IPAM pool config so the state matches the target.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Read Docker network state at startup
+      hash: 4010a373d2951f2c6be66f06d02aa276a054fc03
+      body: |
+        Add LocalNetwork struct and inspect method to helios-oci, paralleling
+        the existing LocalContainer/Container::inspect pattern. On startup,
+        read supervised networks from Docker and associate them with the
+        appropriate app release in the state tree.
+
+        Re-read the network from Docker after create to capture
+        engine-assigned values (e.g. IPAM subnet/gateway).
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add network Docker client and wire into state IO tasks
+      hash: 1ef6621360bd39d0d2710afe93b72ae1161313a9
+      body: |
+        - Add NetworkClient to helios-oci with create, remove, and
+          list_with_labels methods
+        - Add NetworkDriver and NetworkIpamDriver newtypes to helios-oci,
+          adopt them in state model replacing raw String fields
+        - Convert create_network/remove_network from pure-state to IO tasks
+          that call Docker
+        - Add Network-to-OciNetworkConfig conversion with supervised and
+          IPAM labels injected at the OCI boundary
+        - Move LABEL_IPAM_CONFIG to network model module
+        - Ensure default network for each app in DeviceTarget::normalize()
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add network create and remove tasks for planner
+      hash: d9912dde4df08a6457bb9be2ee74a76fd26806e1
+      body: >
+        Register create_network and remove_network as jobs at the network path
+
+        so the planner can generate steps when diffing current vs target state.
+
+        Both are pure state operations for now until Docker integration.
+
+
+        Declare update_network job as well, which is equivalent to a
+        remove_network
+
+        job.
+
+
+        Enforce that a release isn't finalized until networks are created.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add network model for remote and state layers
+      hash: a5a4d4f48cbd2c1551cd7b43cceb0c84b0c3acc2
+      body: |
+        - Add remote model types (Network, NetworkIpam, IpamConfig) with
+          Option<String> drivers that defer default assignment to conversion
+        - Add state model types with From conversions from remote model
+        - Add Network to Release and DeviceTarget::normalize()
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+  version: 0.16.3
+  title: ""
+  date: 2026-02-18T18:44:10.723Z
+- commits:
     - subject: Re-try seeking target from the local worker on a runtime error
       hash: 5437828e1509f88070d5e28d3c885b7b81c3fdcc
       body: |
