@@ -74,11 +74,17 @@ impl Image<'_> {
             tag,
         };
 
-        let res = self.0.inner().tag_image(name, Some(opts)).await;
-        res.map_err(Error::from)
-            .with_context(|| format!("failed to tag image {name} as {}", new_name.as_str()))?;
-
-        Ok(())
+        match self.0.inner().tag_image(name, Some(opts)).await {
+            Ok(_) => Ok(()),
+            // tag already exists, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 409, ..
+            }) => Ok(()),
+            Err(e) => Err(Error::from(e).context(format!(
+                "failed to tag image {name} as {}",
+                new_name.as_str()
+            ))),
+        }
     }
 
     /// Pulls an image from a registry.
@@ -100,6 +106,36 @@ impl Image<'_> {
         PullProgress {
             inner: Box::pin(self.0.inner().create_image(opts, None, creds)),
             image: image.as_str().to_owned(),
+        }
+    }
+
+    /// Returns low-level information about an image.
+    pub async fn inspect(&self, image: &str) -> Result<LocalImage> {
+        self.0
+            .inner()
+            .inspect_image(image)
+            .await
+            .map_err(Error::from)
+            .and_then(LocalImage::try_from)
+            .with_context(|| format!("failed to inspect image {image}"))
+    }
+
+    /// Removes an image, along with any untagged parent images that were referenced by that image.
+    pub async fn remove(&self, image: &ImageUri) -> Result<()> {
+        match self
+            .0
+            .inner()
+            .remove_image(image.as_str(), Option::<RemoveImageOptions>::None, None)
+            .await
+        {
+            Ok(_) => Ok(()),
+            // image doesn't exist, ignore
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(e) => {
+                Err(Error::from(e).context(format!("failed to remove image {}", image.as_str())))
+            }
         }
     }
 }
@@ -136,39 +172,14 @@ impl Stream for PullProgress {
     }
 }
 
-impl Image<'_> {
-    /// Returns low-level information about an image.
-    pub async fn inspect(&self, image: &str) -> Result<LocalImage> {
-        let res = self.0.inner().inspect_image(image).await;
-        let info = res
-            .map_err(Error::from)
-            .with_context(|| format!("failed to inspect image {image}"))?;
-
-        info.try_into()
-            .with_context(|| format!("failed to inspect image {image}"))
-    }
-
-    /// Removes an image, along with any untagged parent images that were referenced by that image.
-    pub async fn remove(&self, image: &ImageUri) -> Result<()> {
-        self.0
-            .inner()
-            .remove_image(image.as_str(), Option::<RemoveImageOptions>::None, None)
-            .await
-            .map_err(Error::from)
-            .with_context(|| format!("failed to remove image {}", image.as_str()))?;
-
-        Ok(())
-    }
-}
-
+#[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct ImageConfig {
     /// Command to run specified as an array of strings
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmd: Option<Vec<String>>,
 
     /// User-defined key/value metadata
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<HashMap<String, String>>,
 }
 

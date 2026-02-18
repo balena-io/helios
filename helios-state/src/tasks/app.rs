@@ -9,7 +9,7 @@ use mahler::worker::{Uninitialized, Worker};
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Device, ImageRef, Network, RegistryAuthSet, Release, Service,
-    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget, mark_duplicate_service_config,
+    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget,
 };
 use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
 use crate::util::store::{Store, StoreError};
@@ -18,7 +18,7 @@ use super::image::{create_image, remove_image, remove_images, request_registry_c
 use super::utils::find_installed_service;
 
 #[derive(Debug, thiserror::Error)]
-pub enum AppError {
+enum Error {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -382,7 +382,7 @@ fn create_network(
     Target(tgt): Target<Network>,
     Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
-) -> IO<Network, AppError> {
+) -> IO<Network, Error> {
     let net = net.create(tgt);
 
     with_io(net, async move |mut net| {
@@ -410,7 +410,7 @@ fn remove_network(
     net: View<Network>,
     Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
-) -> IO<Option<Network>, AppError> {
+) -> IO<Option<Network>, Error> {
     let docker_name = net.network_name.clone();
     let net = net.delete();
 
@@ -426,10 +426,15 @@ fn remove_network(
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id, image, config, ..
+        id,
+        container_name,
+        image,
+        config,
+        ..
     } = tgt;
     maybe_svc.create(Service {
         id,
+        container_name,
         image,
         started: false,
         container: None,
@@ -460,7 +465,7 @@ fn install_service(
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
-) -> IO<Service, AppError> {
+) -> IO<Service, Error> {
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -472,7 +477,6 @@ fn install_service(
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
         let container_name = svc
-            .config
             .container_name
             .clone()
             .expect("container name should be available");
@@ -486,8 +490,7 @@ fn install_service(
 
             // convert the service configuration to a container configuration
             // and mark duplicates from the image
-            let mut container_config = svc.config.clone().into();
-            mark_duplicate_service_config(&mut container_config, &image.config);
+            let container_config = svc.config.clone().into_container_config(&image.config);
 
             let container_id = docker
                 .container()
@@ -501,7 +504,7 @@ fn install_service(
                 .inspect(&container_id)
                 .await
                 .context("failed to inspect container for service")?;
-            *svc = Service::from((&image.config, local_container));
+            *svc = Service::from_local_container(local_container, &image.config);
             svc.image = ImageRef::Uri(svc_img);
 
             // store the image uri that corresponds to the current release service
@@ -519,12 +522,24 @@ fn install_service(
 }
 
 /// Start the service if it is not running yet
-fn start_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+fn start_service(
+    mut svc: View<Service>,
+    Target(tgt_svc): Target<Service>,
+    docker: Res<Docker>,
+) -> IO<Service, OciError> {
     enforce!(
         svc.container
             .as_ref()
             .is_some_and(|c| c.status != ServiceContainerStatus::Running),
         "service container should exist and should not be running"
+    );
+
+    // creating the container will not fail if the container already exists, however
+    // that doesn't guarantee the configuration will be the same. In that case we'll
+    // need to loop again to re-create the container
+    enforce!(
+        svc.config == tgt_svc.config,
+        "service configuration should match the target before"
     );
 
     svc.started = true;
@@ -663,7 +678,7 @@ fn remove_service(
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<Store>,
-) -> IO<Option<Service>, AppError> {
+) -> IO<Option<Service>, Error> {
     let container_id = if let Some(container) = svc.container.as_ref()
         && container.status != ServiceContainerStatus::Running
     {

@@ -95,6 +95,11 @@ features = [ "json", "rustls", "brotli", "stream" ]
 version = "1.0"
 features = [ "derive" ]
 
+[workspace.dependencies.serde_with]
+version = "3.16"
+default-features = false
+features = ["macros"]
+
 [workspace.dependencies.clap]
 version = "4.5"
 features = [ "derive", "env" ]
