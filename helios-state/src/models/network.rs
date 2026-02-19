@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
 use mahler::state::State;
@@ -6,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::labels::LABEL_SUPERVISED;
 
 const LABEL_IPAM_CONFIG: &str = "io.balena.private.ipam.config";
+const LABEL_DRIVER_OPTS: &str = "io.balena.private.driver.opts";
 use crate::oci::{
     LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig,
     NetworkIpamDriver, NetworkIpamPoolConfig,
@@ -91,6 +93,19 @@ impl From<LocalNetwork> for Network {
         labels.remove(LABEL_SUPERVISED);
         let has_ipam_config = labels.remove(LABEL_IPAM_CONFIG).is_some();
 
+        // Only preserve driver_opts keys that were explicitly set by the user.
+        // Engine-injected keys (e.g. com.docker.network.enable_ipv4) would
+        // cause a mismatch against the target, which has no such key.
+        let driver_opts = if let Some(keys_json) = labels.remove(LABEL_DRIVER_OPTS) {
+            let allowed: HashSet<String> = serde_json::from_str(&keys_json).unwrap_or_default();
+            net.driver_opts
+                .into_iter()
+                .filter(|(k, _)| allowed.contains(k))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
         // Only preserve IPAM config if it was explicitly set by the user.
         // Engine-assigned IPAM (subnet, gateway) would cause a mismatch
         // against the target, which has no IPAM config.
@@ -108,7 +123,7 @@ impl From<LocalNetwork> for Network {
             network_name,
             config: NetworkConfig(OciNetworkConfig {
                 driver: net.driver,
-                driver_opts: net.driver_opts,
+                driver_opts,
                 enable_ipv6: net.enable_ipv6,
                 internal: net.internal,
                 labels,
@@ -132,6 +147,18 @@ impl From<NetworkConfig> for OciNetworkConfig {
             inner
                 .labels
                 .insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
+        }
+
+        // Mark networks with user-provided driver_opts so engine-injected
+        // options can be filtered out on read-back
+        if !inner.driver_opts.is_empty() {
+            let mut keys: Vec<&str> = inner.driver_opts.keys().map(|k| k.as_str()).collect();
+            keys.sort();
+            let keys_json = serde_json::to_string(&keys)
+                .expect("driver_opts keys should be serializable to JSON");
+            inner
+                .labels
+                .insert(LABEL_DRIVER_OPTS.to_string(), keys_json);
         }
 
         inner
@@ -279,6 +306,12 @@ mod tests {
             oci_config.labels.get("io.balena.private.ipam.config"),
             Some(&"true".to_string())
         );
+        // Labels: driver_opts label is injected with sorted keys as JSON array
+        // when user-defined driver_opts are present
+        assert_eq!(
+            oci_config.labels.get(LABEL_DRIVER_OPTS),
+            Some(&r#"["com.docker.network.driver.mtu"]"#.to_string())
+        );
 
         // IPAM
         assert_eq!(oci_config.ipam.driver.to_string(), "custom");
@@ -308,6 +341,7 @@ mod tests {
                 .labels
                 .contains_key("io.balena.private.ipam.config")
         );
+        assert!(!oci_config.labels.contains_key(LABEL_DRIVER_OPTS));
     }
 
     #[test]
@@ -324,6 +358,7 @@ mod tests {
                 // injected labels that should be stripped
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
                 (LABEL_IPAM_CONFIG.to_string(), "true".to_string()),
+                (LABEL_DRIVER_OPTS.to_string(), r#"["mtu"]"#.to_string()),
                 // user label that should survive
                 ("com.example.label".to_string(), "value".to_string()),
             ]
@@ -351,6 +386,7 @@ mod tests {
         // Injected labels are stripped
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
         assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG));
+        assert!(!network.config.labels.contains_key(LABEL_DRIVER_OPTS));
 
         // User label survives
         assert_eq!(
@@ -404,6 +440,199 @@ mod tests {
         assert!(network.config.ipam.config.is_empty());
         // IPAM driver is still preserved
         assert_eq!(network.config.ipam.driver, NetworkIpamDriver::default());
+    }
+
+    #[test]
+    fn test_from_local_network_discards_engine_assigned_driver_opts() {
+        let local = LocalNetwork {
+            name: "app1_default".to_string(),
+            labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
+                .into_iter()
+                .collect(),
+            driver_opts: [(
+                "com.docker.network.enable_ipv4".to_string(),
+                "true".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // Without LABEL_DRIVER_OPTS marker, all driver_opts are discarded
+        assert!(network.config.driver_opts.is_empty());
+    }
+
+    #[test]
+    fn test_from_local_network_preserves_user_driver_opts_and_filters_engine_ones() {
+        let local = LocalNetwork {
+            name: "app1_my-net".to_string(),
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (LABEL_DRIVER_OPTS.to_string(), r#"["mtu"]"#.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            driver_opts: [
+                ("mtu".to_string(), "1450".to_string()),
+                (
+                    "com.docker.network.enable_ipv4".to_string(),
+                    "true".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // User-specified key is preserved
+        assert_eq!(
+            network.config.driver_opts.get("mtu"),
+            Some(&"1450".to_string())
+        );
+        // Engine-injected key is filtered out
+        assert!(
+            !network
+                .config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert_eq!(network.config.driver_opts.len(), 1);
+    }
+
+    #[test]
+    fn test_driver_opts_label_sorts_multiple_keys() {
+        let config = NetworkConfig(OciNetworkConfig {
+            driver_opts: [
+                ("zulu".to_string(), "1".to_string()),
+                ("alpha".to_string(), "2".to_string()),
+                ("mtu".to_string(), "1450".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+
+        let oci_config: OciNetworkConfig = config.into();
+
+        // Label should contain sorted keys as JSON array
+        assert_eq!(
+            oci_config.labels.get(LABEL_DRIVER_OPTS),
+            Some(&r#"["alpha","mtu","zulu"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_local_network_preserves_multiple_user_driver_opts() {
+        let local = LocalNetwork {
+            name: "app1_my-net".to_string(),
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (
+                    LABEL_DRIVER_OPTS.to_string(),
+                    r#"["baz","foo"]"#.to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            driver_opts: [
+                ("foo".to_string(), "bar".to_string()),
+                ("baz".to_string(), "qux".to_string()),
+                (
+                    "com.docker.network.enable_ipv4".to_string(),
+                    "true".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // Both user-specified keys are preserved
+        assert_eq!(
+            network.config.driver_opts.get("foo"),
+            Some(&"bar".to_string())
+        );
+        assert_eq!(
+            network.config.driver_opts.get("baz"),
+            Some(&"qux".to_string())
+        );
+        // Engine-injected key is filtered out
+        assert!(
+            !network
+                .config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert_eq!(network.config.driver_opts.len(), 2);
+    }
+
+    #[test]
+    fn test_driver_opts_label_handles_comma_in_key() {
+        let config = NetworkConfig(OciNetworkConfig {
+            driver_opts: [
+                ("foo,bar".to_string(), "1".to_string()),
+                ("baz".to_string(), "2".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+
+        let oci_config: OciNetworkConfig = config.into();
+
+        // Label should be a JSON array, preserving commas within keys
+        assert_eq!(
+            oci_config.labels.get(LABEL_DRIVER_OPTS),
+            Some(&r#"["baz","foo,bar"]"#.to_string())
+        );
+
+        // Round-trip: reading back should preserve both keys
+        let local = LocalNetwork {
+            name: "app1_my-net".to_string(),
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (
+                    LABEL_DRIVER_OPTS.to_string(),
+                    r#"["baz","foo,bar"]"#.to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            driver_opts: [
+                ("foo,bar".to_string(), "1".to_string()),
+                ("baz".to_string(), "2".to_string()),
+                (
+                    "com.docker.network.enable_ipv4".to_string(),
+                    "true".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+        assert_eq!(
+            network.config.driver_opts.get("foo,bar"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            network.config.driver_opts.get("baz"),
+            Some(&"2".to_string())
+        );
+        assert!(
+            !network
+                .config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert_eq!(network.config.driver_opts.len(), 2);
     }
 
     #[test]

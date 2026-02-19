@@ -435,7 +435,24 @@ mod tests {
                                     },
                                     "config": {},
                                 },
-                            }
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
                         }
                     }
                 }
@@ -471,6 +488,7 @@ mod tests {
         ) + seq!(
             "delete image 'ubuntu:latest'",
             "delete image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+            "remove network 'my-network' for app 'my-app-uuid'",
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "remove app with uuid 'my-app-uuid'"
         ) + seq!("clean-up");
