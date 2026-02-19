@@ -23,6 +23,9 @@ pub use network::{
     NetworkIpamDriver, NetworkIpamPoolConfig,
 };
 
+mod volume;
+pub use volume::{LocalVolume, VolumeClient, VolumeConfig, VolumeDriver};
+
 use helios_util as util;
 
 #[derive(Debug, Clone)]
@@ -69,6 +72,12 @@ impl Client {
     #[inline]
     pub fn network(&self) -> NetworkClient<'_> {
         NetworkClient::new(self)
+    }
+
+    /// Exposes methods to work with volumes
+    #[inline]
+    pub fn volume(&self) -> VolumeClient<'_> {
+        VolumeClient::new(self)
     }
 }
 
