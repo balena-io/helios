@@ -7,7 +7,7 @@ use mahler::worker::{Uninitialized, Worker};
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Device, ImageRef, Network, Release, Service, ServiceContainerStatus,
-    ServiceContainerSummary, ServiceTarget,
+    ServiceContainerSummary, ServiceTarget, Volume,
 };
 use crate::oci::{Client as Docker, Error as OciError, WithContext};
 use crate::util::store::{Store, StoreError};
@@ -191,6 +191,15 @@ fn finish_release(
             .unwrap_or_default()
     }));
 
+    // all target volumes have been created
+    enforce!(target.volumes.iter().all(|(vol_name, tgt_vol)| {
+        release
+            .volumes
+            .get(vol_name)
+            .map(|vol| tgt_vol == vol)
+            .unwrap_or_default()
+    }));
+
     release.installed = true;
     with_io(release, async move |release| {
         // mark the release as installed on the local store
@@ -209,10 +218,10 @@ fn finish_release(
 
 /// Remove an empty release
 fn remove_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
-    // remove the release if it has no services and no networks
+    // remove the release if it has no services, no networks, and no volumes
     if release
         .as_ref()
-        .map(|r| r.services.is_empty() && r.networks.is_empty())
+        .map(|r| r.services.is_empty() && r.networks.is_empty() && r.volumes.is_empty())
         .unwrap_or_default()
     {
         release.take();
@@ -264,6 +273,53 @@ fn remove_network(
             .expect("docker resource should be available");
         docker.network().remove(&docker_name).await?;
         Ok(net)
+    })
+}
+
+/// Create a volume in Docker and the state tree
+fn create_volume(
+    vol: View<Option<Volume>>,
+    Target(tgt): Target<Volume>,
+    Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Volume, Error> {
+    let vol = vol.create(tgt);
+
+    with_io(vol, async move |mut vol| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker
+            .volume()
+            .create(&vol.volume_name, vol.config.clone().into())
+            .await?;
+
+        // Re-read the volume from Docker to capture engine-assigned values
+        let local_volume = docker
+            .volume()
+            .inspect(&vol.volume_name)
+            .await
+            .with_context(|| format!("failed to inspect volume '{}'", vol.volume_name))?;
+        *vol = Volume::from(local_volume);
+        Ok(vol)
+    })
+}
+
+/// Remove a volume from Docker and the state tree
+fn remove_volume(
+    vol: View<Volume>,
+    Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Option<Volume>, Error> {
+    let docker_name = vol.volume_name.clone();
+    let vol = vol.delete();
+
+    with_io(vol, async move |vol| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        docker.volume().remove(&docker_name).await?;
+        Ok(vol)
     })
 }
 
@@ -783,6 +839,26 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::delete(remove_network).with_description(
                     |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
                         format!("remove network '{network_name}' for app '{app_uuid}'")
+                    },
+                ),
+            ],
+        )
+        .jobs(
+            "/apps/{app_uuid}/releases/{commit}/volumes/{volume_name}",
+            [
+                job::create(create_volume).with_description(
+                    |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("create volume '{volume_name}' for app '{app_uuid}'")
+                    },
+                ),
+                job::update(remove_volume).with_description(
+                    |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove volume '{volume_name}' for app '{app_uuid}'")
+                    },
+                ),
+                job::delete(remove_volume).with_description(
+                    |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove volume '{volume_name}' for app '{app_uuid}'")
                     },
                 ),
             ],

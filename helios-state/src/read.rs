@@ -11,7 +11,7 @@ use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
 use super::models::{
-    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
+    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID, Volume,
 };
 
 #[derive(Debug, Error)]
@@ -217,11 +217,8 @@ pub async fn read(
 
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
-            // If app_uuid is unknown, insert orphaned network under
-            // unknown release to prepare for cleanup
-            let release = if let Some(release) = app.releases.values_mut().next() {
-                release
-            } else {
+            // If there are no releases, create an unknown release for cleanup
+            if app.releases.is_empty() {
                 app.releases
                     .entry(UNKNOWN_RELEASE_UUID.into())
                     .or_insert(Release {
@@ -229,9 +226,56 @@ pub async fn read(
                         services: Map::new(),
                         networks: Map::new(),
                         volumes: Map::new(),
-                    })
-            };
-            release.networks.insert(net_name, network);
+                    });
+            }
+            // Add network to all existing releases
+            for release in app.releases.values_mut() {
+                release.networks.insert(net_name.clone(), network.clone());
+            }
+        }
+
+        // read the state of volumes
+        let volumes = docker
+            .volume()
+            .list_with_labels(vec![LABEL_SUPERVISED])
+            .await?;
+
+        for volume_name in volumes {
+            let local_volume = docker.volume().inspect(&volume_name).await?;
+
+            let app_uuid: Uuid = local_volume
+                .labels
+                .get(LABEL_APP_UUID)
+                .map(|uuid| uuid.as_str())
+                .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
+
+            // Extract the volume name by stripping the "{app_uuid}_" prefix
+            let vol_name = local_volume
+                .name
+                .strip_prefix(&format!("{app_uuid}_"))
+                .unwrap_or(&local_volume.name)
+                .to_owned();
+
+            let volume: Volume = local_volume.into();
+
+            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+
+            // If there are no releases, create an unknown release for cleanup
+            if app.releases.is_empty() {
+                app.releases
+                    .entry(UNKNOWN_RELEASE_UUID.into())
+                    .or_insert(Release {
+                        installed: false,
+                        services: Map::new(),
+                        networks: Map::new(),
+                        volumes: Map::new(),
+                    });
+            }
+            // Add volume to all existing releases
+            for release in app.releases.values_mut() {
+                release.volumes.insert(vol_name.clone(), volume.clone());
+            }
         }
     }
 
