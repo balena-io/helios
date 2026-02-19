@@ -658,13 +658,7 @@ fn uninstall_service_when_requirements_are_met(
         t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
             t_rel_uuid != &rel_uuid
                 && t_rel.services.values().any(|t_svc| {
-                    if let ImageRef::Uri(t_img_uri) = &t_svc.image
-                        && device.images.contains_key(t_img_uri)
-                    {
-                        false
-                    } else {
-                        true
-                    }
+                    !matches!(&t_svc.image, ImageRef::Uri(t_img_uri) if device.images.contains_key(t_img_uri))
                 })
         })
     }) {

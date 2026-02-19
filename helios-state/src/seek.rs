@@ -1,6 +1,6 @@
 use std::future::{self, Future};
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mahler::worker::{WorkerEvent, WorkflowStatus};
 use serde::{Deserialize, Serialize};
@@ -240,6 +240,7 @@ async fn seek_target(
             }
             if workflow.is_empty() {
                 debug!("nothing to do");
+                info!("target state applied");
                 return Ok(UpdateStatus::Done);
             } else {
                 info!(time = ?now.elapsed(), "workflow found");
@@ -276,8 +277,20 @@ async fn seek_target(
                         }
                         // if a recoverable error happened, we try-again
                         WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
-                            info!(time = ?now.elapsed(), "workflow terminated with errors, re-trying");
-                            // break-the inner loop
+                            info!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in 30s");
+
+                            // back-off. we use a constant back-off time for now. We may make this
+                            // configurable or use a back-off function in the future if it seems
+                            // necessary
+                            tokio::select! {
+                                _ = interrupt.wait() => {
+                                    info!(time = ?now.elapsed(), "target state apply interrupted");
+                                    return Ok(UpdateStatus::Interrupted)
+                                },
+                                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                            }
+
+                            // break-the inner loop after the back-off
                             break;
                         }
                     }
