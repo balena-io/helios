@@ -99,6 +99,13 @@ impl DeviceTarget {
                         .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
                     net.network_name = format!("{app_uuid}_{net_key}");
                 }
+
+                for (vol_key, vol) in rel.volumes.iter_mut() {
+                    vol.config
+                        .labels
+                        .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+                    vol.volume_name = format!("{app_uuid}_{vol_key}");
+                }
             }
         }
 

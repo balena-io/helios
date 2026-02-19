@@ -162,6 +162,7 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
         installed: false,
         services: Map::new(),
         networks: Map::new(),
+        volumes: Map::new(),
     })
 }
 

@@ -170,6 +170,7 @@ pub async fn read(
                     installed,
                     services: Map::new(),
                     networks: Map::new(),
+                    volumes: Map::new(),
                 })
             };
 
@@ -227,6 +228,7 @@ pub async fn read(
                         installed: false,
                         services: Map::new(),
                         networks: Map::new(),
+                        volumes: Map::new(),
                     })
             };
             release.networks.insert(net_name, network);

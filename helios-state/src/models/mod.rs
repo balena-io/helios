@@ -6,6 +6,7 @@ mod image;
 mod network;
 mod release;
 mod service;
+mod volume;
 
 pub use app::*;
 pub use defaults::*;
@@ -15,3 +16,4 @@ pub use image::*;
 pub use network::*;
 pub use release::*;
 pub use service::*;
+pub use volume::*;
