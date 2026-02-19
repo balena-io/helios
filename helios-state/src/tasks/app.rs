@@ -308,6 +308,7 @@ fn remove_release(
     store: Res<Store>,
 ) -> IO<Option<Release>, StoreError> {
     enforce!(release.services.is_empty());
+    enforce!(release.networks.is_empty());
 
     let release = release.delete();
     with_io(release, async move |release| {
