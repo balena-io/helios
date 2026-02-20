@@ -4,15 +4,14 @@ use tokio::fs;
 use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
-use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
+use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
 use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
 use super::models::{
-    App, Device, Network, Release, Service, ServiceContainerName, UNKNOWN_APP_UUID,
-    UNKNOWN_RELEASE_UUID,
+    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
 };
 
 #[derive(Debug, Error)]
@@ -130,20 +129,26 @@ pub async fn read(
 
         for container_id in containers {
             let local_container = docker.container().inspect(&container_id).await?;
-            let ServiceContainerName {
-                service_name,
-                release_uuid,
-            } = local_container
-                .name
-                .parse()
-                // this should not happen
-                .expect("invalid container name");
-
             let labels = local_container.config.labels.as_ref();
             let app_uuid: Uuid = labels
                 .and_then(|l| l.get(LABEL_APP_UUID))
                 .map(|uuid| uuid.as_str())
                 .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
+            let service_name: String = labels
+                .and_then(|l| l.get(LABEL_SERVICE_NAME))
+                .map(|name| name.as_str())
+                .unwrap_or(local_container.name.as_str())
+                .into();
+            let release_uuid: Uuid = local_container
+                .name
+                .strip_prefix(&format!("{service_name}_"))
+                // if the remainder has underscores, assume the last
+                // component to be the release uuid
+                .and_then(|suffix| suffix.rsplit('_').next())
+                // ignore the value if empty
+                .filter(|r_uuid| !r_uuid.is_empty())
+                .unwrap_or(UNKNOWN_RELEASE_UUID)
                 .into();
 
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;

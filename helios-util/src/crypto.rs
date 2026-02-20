@@ -10,7 +10,7 @@ pub fn sha256_hex_digest<D: AsRef<[u8]>>(data: D) -> String {
 }
 
 pub const ALPHA_NUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-// pub const LC_ALPHA_NUM: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+pub const LC_ALPHA_NUM: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 // pub const UC_ALPHA_NUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 pub fn pseudorandom_string<C: AsRef<[u8]>>(charset: C, len: usize) -> String {

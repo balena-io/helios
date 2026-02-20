@@ -101,8 +101,7 @@ pub(super) fn pull_image(
     with_io(image, |mut image| async move {
         let docker = docker
             .as_ref()
-            .expect("docker resource should be available")
-            .clone();
+            .expect("docker resource should be available");
 
         // FIXME: make registry auth easier to work with
         let credentials = if let Some(auth_client_rwlock) = auth_client.as_ref() {
@@ -224,13 +223,6 @@ pub fn remove_image(
     })
 }
 
-pub fn remove_images(RawTarget(images): RawTarget<Vec<ImageUri>>) -> Vec<Task> {
-    images
-        .iter()
-        .map(|img| remove_image.with_arg("image_name", img.as_str()))
-        .collect()
-}
-
 /// Update worker with image tasks
 pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
@@ -239,7 +231,6 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
             job::none(request_registry_credentials)
                 .with_description(|| "request registry credentials"),
         )
-        .job("/images", job::none(remove_images))
         .jobs(
             "/images/{image_name}",
             [
