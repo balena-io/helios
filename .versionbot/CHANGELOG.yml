@@ -1,4 +1,67 @@
 - commits:
+    - subject: Add a back-off to seek-target retries
+      hash: f9627831c7467202a5c8a5d2c3ea16dede7c1e1a
+      body: >
+        Adds a constant back-off  (30s) to any re-tries to apply the target state
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add support for release updates
+      hash: b7fb7933908b6525afcddfe4d793031cd33b6c26
+      body: |
+        This updates app tasks to allow pulling images for services in new
+        releases and adds checks to ensure the right order of operation for
+        application updates.
+
+        This also bumps mahler to v0.25.4 in order to use the new `SystemTarget`
+        feature and the fix for workflow generation.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Depends-on: mahler-io-modules/mahler-rs#77
+        depends-on: mahler-io-modules/mahler-rs#77
+      author: felipe
+      nested: []
+    - subject: Add migration task and handle a service migration
+      hash: c5244dd93b6eb6e9424be15012d4cc9340202f16
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Add tasks to rename and re-configure service
+      hash: 656a017a1bd2e2861c248b2a57598cb60a47ea64
+      body: |
+        The first one is necessary for service migration where all that changes
+        for the service is the name. The second one is needed for environmnent
+        variables.
+
+        This changes `Service::container_name` to not be optional
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Remove unused images as part of the clean-up step
+      hash: 73948c4671f642e16bd7d7d7041eb9b05b6c3a24
+      body: |
+        This step now removes service metadata still on the local store and
+        checks for any unused images that have yet to be removed.
+
+        This ensures any left-over images are eventually cleaned up even if the
+        workflow is interrupted.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.17.0
+  title: ""
+  date: 2026-02-20T19:12:52.348Z
+- commits:
     - subject: Make `container_name` a property of Service
       hash: 8fb12b6d8d72113047210ef2588db8a571abac0c
       body: |
