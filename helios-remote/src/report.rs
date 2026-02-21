@@ -405,7 +405,6 @@ mod tests {
     fn it_creates_a_device_report_from_a_device() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
-            "auths": [],
             "images": {
                 "ubuntu": {
                     "engine_id": "sha256:abc",

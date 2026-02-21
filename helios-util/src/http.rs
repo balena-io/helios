@@ -1,12 +1,15 @@
-pub use uri::{InvalidUriError, Uri};
+pub use uri::{Domain, InvalidUriError, Uri};
 
 mod uri {
     use std::fmt::Display;
     use std::str::FromStr;
 
+    use addr::parse_domain_name;
     use axum::http;
     use serde::{Deserialize, Serialize};
     use thiserror::Error;
+
+    pub use addr::domain::Name as Domain;
 
     #[derive(Debug, Error)]
     pub struct InvalidUriError(String);
@@ -41,6 +44,10 @@ mod uri {
     impl Uri {
         pub fn new(uri: http::Uri) -> Self {
             Self(uri)
+        }
+
+        pub fn domain<'a>(&'a self) -> Option<Domain<'a>> {
+            self.0.host().and_then(|host| parse_domain_name(host).ok())
         }
 
         pub fn from_static(src: &'static str) -> Self {

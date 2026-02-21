@@ -9,7 +9,7 @@ mod image;
 pub use image::{Image, ImageConfig, LocalImage};
 
 mod registry;
-pub use registry::{RegistryAuth, RegistryAuthClient, RegistryAuthError};
+pub use registry::RegistryAuth;
 
 mod container;
 pub use container::{Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer};

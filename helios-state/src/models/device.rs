@@ -1,18 +1,13 @@
-use std::collections::HashSet;
-
 use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME};
-use crate::oci::RegistryAuth;
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::host::Host;
 use super::image::Image;
 use super::network::Network;
-
-pub type RegistryAuthSet = HashSet<RegistryAuth>;
 
 /// The current state of a device that will be stored
 /// by the worker
@@ -24,9 +19,6 @@ pub struct Device {
     pub uuid: Uuid,
 
     pub name: Option<String>,
-
-    #[mahler(internal)]
-    pub auths: RegistryAuthSet,
 
     /// List of docker images on the device
     #[mahler(internal)]
@@ -54,7 +46,6 @@ impl Device {
         Self {
             uuid,
             name: None,
-            auths: RegistryAuthSet::new(),
             images: Map::new(),
             apps: Map::new(),
             host: os.map(Host::new),
@@ -69,7 +60,6 @@ impl From<Device> for DeviceTarget {
             apps,
             host,
             uuid: _,
-            auths: _,
             images: _,
         } = device;
         Self {
@@ -281,7 +271,6 @@ mod tests {
                     "version": "6.5.4",
                 }
             },
-            "auths": [],
             "apps": {
                 "aaa": {
                     "name": "my-app",

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
 use mahler::job;
 use mahler::state::Map;
@@ -8,13 +6,13 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, Network, RegistryAuthSet, Release, Service,
-    ServiceContainerStatus, ServiceContainerSummary, ServiceTarget,
+    App, AppMap, AppTarget, Device, ImageRef, Network, Release, Service, ServiceContainerStatus,
+    ServiceContainerSummary, ServiceTarget,
 };
-use crate::oci::{Client as Docker, Error as OciError, RegistryAuth, WithContext};
+use crate::oci::{Client as Docker, Error as OciError, WithContext};
 use crate::util::store::{Store, StoreError};
 
-use super::image::{create_image, request_registry_credentials};
+use super::image::create_image;
 use super::utils::{find_future_service, find_installed_service};
 
 #[derive(Debug, thiserror::Error)]
@@ -23,71 +21,6 @@ enum Error {
     Store(#[from] StoreError),
     #[error(transparent)]
     Oci(#[from] OciError),
-}
-
-/// Request authorization for new image installs
-fn request_registry_token_for_new_images(
-    System(device): System<Device>,
-    Target(tgt_apps): Target<AppMap>,
-) -> Option<Task> {
-    // Find all images for new services in the target state
-    let images_to_install: Vec<&ImageUri> = tgt_apps
-        .iter()
-        .flat_map(|(t_app_uuid, t_app)| {
-            t_app.releases.iter().flat_map(|(t_rel_uuid, t_rel)| {
-                t_rel
-                    .services
-                    .iter()
-                    .filter_map(|(t_svc_name, t_svc)| {
-                        if device
-                            .apps
-                            .get(t_app_uuid)
-                            .and_then(|app| app.releases.get(t_rel_uuid))
-                            .and_then(|rel| rel.services.get(t_svc_name))
-                            .is_some()
-                        {
-                            // the service already exists in the current state
-                            // ignore it. This ensures the request task happens before
-                            // creating services
-                            return None;
-                        }
-
-                        if let ImageRef::Uri(img_uri) = &t_svc.image {
-                            Some(img_uri)
-                        } else {
-                            None
-                        }
-                    })
-                    // ignore the image if it already exists
-                    .filter(|t_svc_img| !device.images.contains_key(t_svc_img))
-            })
-        })
-        .collect();
-
-    // Group images to install by registry
-    let tgt_auths: RegistryAuthSet = images_to_install
-        .iter()
-        .fold(HashMap::<String, Vec<ImageUri>>::new(), |mut acc, img| {
-            let img = (*img).clone();
-            if let Some(service) = img.registry() {
-                if let Some(scope) = acc.get_mut(service) {
-                    scope.push(img);
-                } else {
-                    acc.insert(service.clone(), vec![img]);
-                }
-            }
-            acc
-        })
-        .into_values()
-        .map(|scope| RegistryAuth::try_from(scope).expect("auth creation should not fail"))
-        .filter(|scope| device.auths.iter().all(|s| !s.is_super_scope(scope)))
-        .collect();
-
-    if tgt_auths.is_empty() {
-        return None;
-    }
-
-    Some(request_registry_credentials.with_target(tgt_auths))
 }
 
 /// Initialize the app and store its local data
@@ -193,16 +126,15 @@ fn fetch_apps_images(
                             return None;
                         }
 
-                        // only use the target image ref if it is an URI
-                        // (this should always be the case)
-                        if let ImageRef::Uri(img_uri) = &t_svc.image {
-                            Some(img_uri)
+                        // only use the target image ref if it has not been downloaded yet
+                        if let ImageRef::Uri(t_img_uri) = &t_svc.image
+                            && !device.images.contains_key(t_img_uri)
+                        {
+                            Some(t_img_uri)
                         } else {
                             None
                         }
                     })
-                    // ignore the image if it already exists
-                    .filter(|t_svc_img| !device.images.contains_key(t_svc_img))
             })
         })
         // remove duplicate digests
@@ -372,10 +304,16 @@ fn migrate_service(
 ///
 /// These requirements may vary a little depending on the update strategy
 fn install_service_when_requirements_are_met(
+    svc: View<Service>,
     System(device): System<Device>,
     Target(tgt): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
+    // do not install a container that already exists
+    if svc.container.is_some() {
+        return None;
+    }
+
     // Skip the task if the image for the service doesn't exist yet
     // or there is an identically named service with the same image and
     // config. In the last scenario, the service will be created by the `uninstall_service`
@@ -784,13 +722,7 @@ fn store_service_image_uri(
 /// Update worker with user app tasks
 pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker
-        .jobs(
-            "/apps",
-            [
-                job::update(request_registry_token_for_new_images),
-                job::update(fetch_apps_images),
-            ],
-        )
+        .jobs("/apps", [job::update(fetch_apps_images)])
         .jobs(
             "/apps/{app_uuid}",
             [

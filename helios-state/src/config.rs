@@ -5,7 +5,7 @@ use helios_util::types::{OperatingSystem, Uuid};
 use thiserror::Error;
 
 use crate::models::Device;
-use crate::oci::{Client as Docker, RegistryAuthClient};
+use crate::oci::{Client as Docker, RegistryAuth};
 use crate::read::{ReadStateError, read};
 use crate::util::dirs;
 use crate::util::store::Store;
@@ -28,7 +28,7 @@ impl Deref for HostRuntimeDir {
 
 pub struct Resources {
     pub(crate) docker: Docker,
-    pub(crate) registry_auth_client: Option<RegistryAuthClient>,
+    pub(crate) registry_auth_client: Option<RegistryAuth>,
     pub(crate) local_store: Store,
     pub(crate) host_runtime_dir: HostRuntimeDir,
 }
@@ -45,7 +45,7 @@ pub enum StatePrepareError {
 pub async fn prepare(
     uuid: Uuid,
     host_config: StateConfig,
-    registry_auth_client: Option<RegistryAuthClient>,
+    registry_auth_client: Option<RegistryAuth>,
 ) -> Result<(Resources, Device), StatePrepareError> {
     let docker = Docker::connect().await?;
 

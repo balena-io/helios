@@ -1,212 +1,136 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    fmt::Display,
-    time::{Duration, Instant},
-};
+use crate::Credentials;
+use crate::util::http::Uri;
+use crate::util::types::{ApiKey, ImageUri};
 
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use tracing::debug;
-
-use crate::util::http::{InvalidUriError, Uri};
-use crate::util::request::{Get, GetConfig, GetError, RequestConfig};
-use crate::util::types::ImageUri;
-
-// See: https://github.com/balena-io/open-balena-api/blob/master/src/lib/config.ts#L476-L479
-const REGISTRY_TOKEN_EXPIRE_SECONDS: Duration = Duration::from_secs(4 * 3600);
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct RegistryAuth {
-    service: String,
-    // use a BTree to serialize the scope in order
-    scope: BTreeSet<ImageUri>,
+    api_endpoint: Uri,
+    api_key: ApiKey,
 }
 
 impl RegistryAuth {
-    pub fn needs_auth(image: &ImageUri) -> bool {
-        image.registry().is_some()
-    }
-
-    /// Return true if the image uri is in scope
-    pub fn in_scope(&self, image_uri: &ImageUri) -> bool {
-        if image_uri
-            .registry()
-            .is_none_or(|service| &self.service != service)
-        {
-            return false;
-        }
-        self.scope.iter().any(|scope| scope == image_uri)
-    }
-
-    pub fn is_super_scope(&self, other: &RegistryAuth) -> bool {
-        self.service == other.service && other.scope.is_subset(&self.scope)
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum RegistryAuthConversionError {
-    #[error("cannot create registry auth from empty image list")]
-    EmptyImageList,
-    #[error("images have different registries, cannot group into single auth")]
-    MixedRegistries,
-    #[error("image has no registry specified")]
-    NoRegistry,
-}
-
-impl<T: Into<ImageUri>> TryFrom<Vec<T>> for RegistryAuth {
-    type Error = RegistryAuthConversionError;
-
-    fn try_from(images: Vec<T>) -> Result<Self, Self::Error> {
-        if images.is_empty() {
-            return Err(RegistryAuthConversionError::EmptyImageList);
-        }
-
-        let images: Vec<ImageUri> = images.into_iter().map(|i| i.into()).collect();
-
-        let service = images[0]
-            .registry()
-            .ok_or(RegistryAuthConversionError::NoRegistry)?;
-
-        for image in &images {
-            match image.registry() {
-                None => return Err(RegistryAuthConversionError::NoRegistry),
-                Some(registry) if registry != service => {
-                    return Err(RegistryAuthConversionError::MixedRegistries);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(RegistryAuth {
-            service: service.clone(),
-            scope: images.into_iter().collect(),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct ResponseToken {
-    pub token: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct RegistryToken {
-    expires: Instant,
-    value: String,
-}
-
-impl RegistryToken {
-    pub fn is_expired(&self) -> bool {
-        Instant::now() >= self.expires
-    }
-}
-
-impl Display for RegistryToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.value.fmt(f)
-    }
-}
-
-impl AsRef<str> for RegistryToken {
-    fn as_ref(&self) -> &str {
-        &self.value
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RegistryAuthClient {
-    api_endpoint: Uri,
-    config: RequestConfig,
-    cached: HashMap<RegistryAuth, RegistryToken>,
-}
-
-#[derive(Error, Debug)]
-pub enum RegistryAuthError {
-    #[error(transparent)]
-    InvalidUri(#[from] InvalidUriError),
-
-    #[error(transparent)]
-    RequestFailed(#[from] GetError),
-
-    #[error("empty response from remote endpoint")]
-    ResponseEmpty,
-
-    #[error("cannot deserialize response into token: {0}")]
-    ResponseInvalid(#[from] serde_json::Error),
-}
-
-impl RegistryAuthClient {
-    pub fn new(api_endpoint: Uri, config: RequestConfig) -> Self {
+    pub fn new(api_endpoint: Uri, api_key: ApiKey) -> Self {
         Self {
             api_endpoint,
-            config,
-            cached: HashMap::new(),
+            api_key,
         }
     }
 
-    pub fn token(&self, image_uri: &ImageUri) -> Option<&RegistryToken> {
-        self.cached
-            .iter()
-            .find(|(auth, _)| auth.in_scope(image_uri))
-            .map(|(_, token)| token)
+    /// Get credentials for the image URI
+    ///
+    /// The client will only return credentials if the remote API endpoint
+    /// has a domain root that matches the URI registry root
+    pub fn credentials(&self, image_uri: &ImageUri) -> Option<Credentials> {
+        if let Some(registry_uri) = image_uri.registry().and_then(|r| r.parse::<Uri>().ok())
+        && let Some(api_domain) = self.api_endpoint.domain()
+        && let Some(img_domain) = registry_uri.domain()
+        // only provide credentials for the URI if the hosts have matching roots
+        && api_domain.root().is_some() && api_domain.root() == img_domain.root()
+        {
+            return Some(Credentials {
+                // FIXME: this `d` username is very balena specific, we really should be using
+                // `identitytoken`, but that does not work with the balena API
+                username: Some("d".to_string()),
+                password: Some(self.api_key.to_string()),
+                ..Default::default()
+            });
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_auth(api_endpoint: &'static str) -> RegistryAuth {
+        RegistryAuth::new(
+            Uri::from_static(api_endpoint),
+            ApiKey::from("secret-api-key".to_string()),
+        )
     }
 
-    /// Request a new authorization
-    pub async fn request(&mut self, auth: &RegistryAuth) -> Result<(), RegistryAuthError> {
-        let scope_set: BTreeSet<&ImageUri> = auth.scope.iter().collect();
-
-        // Check if we already have a matching cached entry
-        for (id, token) in &self.cached {
-            if id.service == auth.service
-                && !token.is_expired()
-                && scope_set.is_subset(&id.scope.iter().collect())
-            {
-                return Ok(());
-            }
-        }
-
-        // Create the request uri
-        let scope_query = scope_set
-            .iter()
-            .map(|uri| format!("scope=repository:{}:pull", uri.image()))
-            .collect::<Vec<String>>()
-            .join("&");
-
-        let endpoint = Uri::from_parts(
-            self.api_endpoint.clone(),
-            "/auth/v1/token",
-            Some(format!("service={}&{scope_query}", auth.service).as_str()),
-        )?;
-
-        debug!("requesting token for {}", auth.service);
-        let mut client = Get::new(
-            endpoint.to_string(),
-            GetConfig {
-                request: self.config.clone(),
-                // Do NOT persist cache or the service will slowly start using disk
-                persist_cache: false,
-            },
-        );
-        let response = client.get(None).await?;
-        if let Some(value) = response.value {
-            let ResponseToken { token } = serde_json::from_value(value)?;
-            self.cached.insert(
-                auth.clone(),
-                RegistryToken {
-                    value: token,
-                    expires: Instant::now() + REGISTRY_TOKEN_EXPIRE_SECONDS,
-                },
-            );
-
-            Ok(())
-        } else {
-            Err(RegistryAuthError::ResponseEmpty)
-        }
+    fn image(uri: &str) -> ImageUri {
+        ImageUri::from_static(uri)
     }
 
-    /// Clear the client cache
-    pub fn clear(&mut self) {
-        debug!("clean up registry credentials");
-        self.cached.clear();
+    // --- Positive cases ---
+
+    #[test]
+    fn credentials_returned_for_subdomain_of_same_root() {
+        // api endpoint subdomain and image registry subdomain differ,
+        // but they share the same registrable root domain
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("registry.balena-cloud.com/org/image:1.0");
+        let creds = auth
+            .credentials(&img)
+            .expect("expected credentials for same-root domain");
+        assert_eq!(creds.username, Some("d".to_string()));
+        assert_eq!(creds.password, Some("secret-api-key".to_string()));
+    }
+
+    #[test]
+    fn credentials_returned_for_registry_with_port() {
+        // port number in the registry should not prevent credential matching
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("registry.balena-cloud.com:443/org/image:1.0");
+        assert!(auth.credentials(&img).is_some());
+    }
+
+    #[test]
+    fn credentials_returned_for_different_subdomains_same_root() {
+        // both api and registry are under the same root despite different subdomains
+        let auth = make_auth("https://api.staging.balena-cloud.com");
+        let img = image("registry.staging.balena-cloud.com/org/image:1.0");
+        assert!(auth.credentials(&img).is_some());
+    }
+
+    // --- Security: credentials must never leak to a different domain ---
+
+    #[test]
+    fn no_credentials_for_different_root_domain() {
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("docker.io/library/ubuntu:20.04");
+        assert!(auth.credentials(&img).is_none());
+    }
+
+    #[test]
+    fn no_credentials_for_image_without_registry() {
+        // images without an explicit registry have no host to match against
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("ubuntu:20.04");
+        assert!(auth.credentials(&img).is_none());
+    }
+
+    #[test]
+    fn no_credentials_for_domain_suffix_lookalike() {
+        // attacker registers balena-cloud.com.evil.com — the root is evil.com, not balena-cloud.com
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("registry.balena-cloud.com.evil.com/image:1.0");
+        assert!(auth.credentials(&img).is_none());
+    }
+
+    #[test]
+    fn no_credentials_for_different_tld() {
+        // same second-level label but different TLD must not match
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("registry.balena-cloud.org/image:1.0");
+        assert!(auth.credentials(&img).is_none());
+    }
+
+    #[test]
+    fn no_credentials_for_domain_with_shared_suffix() {
+        // mybalena-cloud.com shares ".com" but not the registrable root with balena-cloud.com
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("registry.mybalena-cloud.com/image:1.0");
+        assert!(auth.credentials(&img).is_none());
+    }
+
+    #[test]
+    fn no_credentials_for_localhost_registry() {
+        // localhost has no registrable root, so it can never match a real domain
+        let auth = make_auth("https://api.balena-cloud.com");
+        let img = image("localhost:5000/myimage:latest");
+        assert!(auth.credentials(&img).is_none());
     }
 }
