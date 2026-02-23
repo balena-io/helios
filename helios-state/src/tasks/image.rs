@@ -1,4 +1,3 @@
-use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tracing::trace;
 
@@ -8,34 +7,9 @@ use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::ImageUri;
-use crate::models::{Device, Image, ImageRef, RegistryAuthSet};
+use crate::models::{Device, Image, ImageRef};
+use crate::oci::RegistryAuth;
 use crate::oci::{Client as Docker, Error as DockerError};
-use crate::oci::{Credentials, RegistryAuth, RegistryAuthClient, RegistryAuthError};
-
-/// Request registry tokens
-pub(super) fn request_registry_credentials(
-    mut auths: View<RegistryAuthSet>,
-    RawTarget(tgt_auths): RawTarget<RegistryAuthSet>,
-    auth_client_res: Res<RwLock<RegistryAuthClient>>,
-) -> IO<RegistryAuthSet, RegistryAuthError> {
-    // Update the device authorization list
-    for auth in tgt_auths.into_iter() {
-        auths.insert(auth);
-    }
-
-    with_io(auths, |auths| async move {
-        if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
-            // Wait for write authorization
-            let mut auth_client = auth_client_rwlock.write().await;
-
-            for auth in auths.iter() {
-                auth_client.request(auth).await?;
-            }
-        }
-
-        Ok(auths)
-    })
-}
 
 /// Tag an existing image with a new name
 fn tag_image(
@@ -86,7 +60,7 @@ pub(super) fn pull_image(
     image: View<Option<Image>>,
     Args(image_name): Args<ImageUri>,
     docker: Res<Docker>,
-    auth_client: Res<RwLock<RegistryAuthClient>>,
+    registry_auth: Res<RegistryAuth>,
 ) -> IO<Image, DockerError> {
     // probably unnecessary, just some defensive programming
     enforce!(image.is_none(), "image already exists");
@@ -103,16 +77,8 @@ pub(super) fn pull_image(
             .as_ref()
             .expect("docker resource should be available");
 
-        // FIXME: make registry auth easier to work with
-        let credentials = if let Some(auth_client_rwlock) = auth_client.as_ref() {
-            auth_client_rwlock
-                .read()
-                .await
-                .token(&image_name)
-                .map(|token| Credentials {
-                    registrytoken: Some(token.to_string()),
-                    ..Default::default()
-                })
+        let credentials = if let Some(registry_auth) = registry_auth.as_ref() {
+            registry_auth.credentials(&image_name)
         } else {
             None
         };
@@ -171,14 +137,6 @@ pub(super) fn create_image(
         }
     }
 
-    // If the image requires auth, make sure there is an auth with this image
-    // in scope before pulling the image
-    if RegistryAuth::needs_auth(&image_name)
-        && device.auths.iter().all(|auth| !auth.in_scope(&image_name))
-    {
-        return None;
-    }
-
     // If the target image doesn't have a digest, just pull it
     Some(pull_image.into_task())
 }
@@ -225,28 +183,22 @@ pub fn remove_image(
 
 /// Update worker with image tasks
 pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
-    worker
-        .job(
-            "/auths",
-            job::none(request_registry_credentials)
-                .with_description(|| "request registry credentials"),
-        )
-        .jobs(
-            "/images/{image_name}",
-            [
-                job::none(pull_image).with_description(|Args(image_name): Args<String>| {
-                    format!("pull image '{image_name}'")
-                }),
-                job::none(remove_image).with_description(|Args(image_name): Args<String>| {
-                    format!("delete image '{image_name}'")
-                }),
-                job::none(tag_image).with_description(
-                    |Args(image_name): Args<String>,
-                     RawTarget((src_img_name, _)): RawTarget<(String, Image)>| {
-                        format!("tag image '{src_img_name}' as '{image_name}'")
-                    },
-                ),
-                job::none(create_image),
-            ],
-        )
+    worker.jobs(
+        "/images/{image_name}",
+        [
+            job::none(pull_image).with_description(|Args(image_name): Args<String>| {
+                format!("pull image '{image_name}'")
+            }),
+            job::none(remove_image).with_description(|Args(image_name): Args<String>| {
+                format!("delete image '{image_name}'")
+            }),
+            job::none(tag_image).with_description(
+                |Args(image_name): Args<String>,
+                 RawTarget((src_img_name, _)): RawTarget<(String, Image)>| {
+                    format!("tag image '{src_img_name}' as '{image_name}'")
+                },
+            ),
+            job::none(create_image),
+        ],
+    )
 }

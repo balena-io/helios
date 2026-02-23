@@ -1,8 +1,7 @@
 use mahler::exception;
 use mahler::worker::{Uninitialized, Worker};
-use tokio::sync::RwLock;
 
-use crate::oci::{Client as Docker, RegistryAuthClient};
+use crate::oci::{Client as Docker, RegistryAuth};
 use crate::util::store::Store;
 
 use super::config::HostRuntimeDir;
@@ -42,15 +41,13 @@ pub fn create(
     docker: Docker,
     local_store: Store,
     host_runtime_dir: HostRuntimeDir,
-    registry_auth_client: Option<RegistryAuthClient>,
+    registry_auth_client: Option<RegistryAuth>,
 ) -> LocalWorker {
     // Create the worker and set-up resources
     let mut worker = worker().resource(docker);
 
     if let Some(auth_client) = registry_auth_client {
-        // Add a registry auth client behind a RwLock to allow
-        // tasks to modify it
-        worker.use_resource(RwLock::new(auth_client));
+        worker.use_resource(auth_client);
     }
 
     worker.use_resource(host_runtime_dir);
@@ -90,7 +87,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
         }))
         .unwrap();
         let target = serde_json::from_value::<DeviceTarget>(json!({
@@ -120,7 +116,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "my-device-name",
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -159,7 +154,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
             "name": "device-name",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 0,
@@ -197,7 +191,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -265,41 +258,37 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = seq!("request registry credentials")
-            + seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-            + par!(
-                "initialize service 'service1' for release 'my-release-uuid'",
-                "initialize service 'service2' for release 'my-release-uuid'",
-                "initialize service 'service3' for release 'my-release-uuid'",
-                "initialize service 'service4' for release 'my-release-uuid'",
-                "initialize service 'service5' for release 'my-release-uuid'",
-            )
-            + par!(
-                "pull image 'ubuntu:latest'",
-                "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
-                "pull image 'alpine:latest'",
-            )
-            + par!(
-                "tag image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080' \
+        let expected: Dag<&str> = seq!(
+            "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'"
+        ) + par!(
+            "initialize service 'service1' for release 'my-release-uuid'",
+            "initialize service 'service2' for release 'my-release-uuid'",
+            "initialize service 'service3' for release 'my-release-uuid'",
+            "initialize service 'service4' for release 'my-release-uuid'",
+            "initialize service 'service5' for release 'my-release-uuid'",
+        ) + par!(
+            "pull image 'ubuntu:latest'",
+            "pull image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
+            "pull image 'alpine:latest'",
+        ) + par!(
+            "tag image 'registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080' \
                         as 'registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080'",
-                "pull image 'alpine:3.20'",
-            )
-            + par!(
-                "install service 'service1' for release 'my-release-uuid'",
-                "install service 'service2' for release 'my-release-uuid'",
-                "install service 'service3' for release 'my-release-uuid'",
-                "install service 'service4' for release 'my-release-uuid'",
-                "install service 'service5' for release 'my-release-uuid'",
-            )
-            + par!(
-                "start service 'service1' for release 'my-release-uuid'",
-                "start service 'service2' for release 'my-release-uuid'",
-                "start service 'service3' for release 'my-release-uuid'",
-                "start service 'service4' for release 'my-release-uuid'",
-                "start service 'service5' for release 'my-release-uuid'",
-            )
-            + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-            + seq!("clean-up");
+            "pull image 'alpine:3.20'",
+        ) + par!(
+            "install service 'service1' for release 'my-release-uuid'",
+            "install service 'service2' for release 'my-release-uuid'",
+            "install service 'service3' for release 'my-release-uuid'",
+            "install service 'service4' for release 'my-release-uuid'",
+            "install service 'service5' for release 'my-release-uuid'",
+        ) + par!(
+            "start service 'service1' for release 'my-release-uuid'",
+            "start service 'service2' for release 'my-release-uuid'",
+            "start service 'service3' for release 'my-release-uuid'",
+            "start service 'service4' for release 'my-release-uuid'",
+            "start service 'service5' for release 'my-release-uuid'",
+        ) + seq!(
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"
+        ) + seq!("clean-up");
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -315,7 +304,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -403,7 +391,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -486,7 +473,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -580,7 +566,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -668,7 +653,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -682,11 +666,21 @@ mod tests {
                                     "image": "sha256:deadbeef",
                                     "container_name": "my-release-uuid_one",
                                     "started": true,
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
+                                    "container": {
+                                        "id": "deadc41f",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
                                     "container_name": "my-release-uuid_two",
                                     "started": true,
                                     "config": {},
@@ -755,7 +749,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -896,7 +889,6 @@ mod tests {
             .unwrap();
 
         let expected: Dag<&str> = seq!(
-            "request registry credentials",
             "initialize release 'new-release' for app with uuid 'my-app-uuid'",
         ) + par!(
             "initialize service 'service1' for release 'new-release'",
@@ -953,7 +945,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -1036,7 +1027,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -1108,7 +1098,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -1199,7 +1188,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -1290,7 +1278,6 @@ mod tests {
 
         let initial_state = serde_json::from_value::<Device>(json!({
             "uuid": "my-device-uuid",
-            "auths": [],
             "apps": {
                 "my-app-uuid": {
                     "id": 1,
@@ -1378,7 +1365,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "auths": [],
             "host": {
                 "meta": {
                     "name": "balenaOS",
@@ -1425,7 +1411,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "auths": [],
             "host": {
                 "meta": {
                     "name": "balenaOS",
@@ -1485,7 +1470,6 @@ mod tests {
         let initial_state = serde_json::from_value::<Device>(json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "auths": [],
             "host": {
                 "meta": {
                     "name": "balenaOS",

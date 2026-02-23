@@ -1,5 +1,3 @@
-use tokio::sync::RwLock;
-
 use mahler::extract::{Res, Target, View};
 use mahler::job;
 use mahler::task::prelude::*;
@@ -8,7 +6,7 @@ use tracing::debug;
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{Device, ImageRef};
-use crate::oci::{Client as Docker, Error as OciError, RegistryAuthClient};
+use crate::oci::{Client as Docker, Error as OciError};
 use crate::util::store::{Store, StoreError};
 
 #[derive(Debug, thiserror::Error)]
@@ -24,7 +22,6 @@ enum Error {
 /// This should be the final task for every workflow
 fn perform_cleanup(
     device: View<Device>,
-    auth_client_res: Res<RwLock<RegistryAuthClient>>,
     docker: Res<Docker>,
     store: Res<Store>,
 ) -> IO<Device, Error> {
@@ -33,24 +30,18 @@ fn perform_cleanup(
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
-        // Clean up authorizations
-        if let Some(auth_client_rwlock) = auth_client_res.as_ref() {
-            // Wait for write authorization
-            let mut auth_client = auth_client_rwlock.write().await;
-            auth_client.clear();
-        }
 
         // clean up old app/release metadata and images
         let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
         for app_uuid in app_uuids {
             let release_uuids: Vec<Uuid> = local_store
                 .list(format!("/apps/{app_uuid}/releases"))
-            .await?;
+                .await?;
 
             for release_uuid in release_uuids {
                 let service_names: Vec<String> = local_store
                     .list(format!("/apps/{app_uuid}/releases/{release_uuid}/services"))
-                .await?;
+                    .await?;
                 for service_name in service_names {
                     // the service does not exist in the end/target state
                     if !device
@@ -58,8 +49,8 @@ fn perform_cleanup(
                         .get(&app_uuid)
                         .and_then(|app| app.releases.get(&release_uuid))
                         .map(|rel| rel.services.contains_key(&service_name))
-                        .unwrap_or_default() {
-
+                        .unwrap_or_default()
+                    {
                         // if there is an image reference for the service
                         if let Some(img_uri) = local_store
                             .read::<_, ImageUri>(
@@ -89,9 +80,12 @@ fn perform_cleanup(
                             device.images.remove(&img_uri);
                         }
 
-
                         // remove the service metadata
-                        local_store.delete_all(format!("/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}")).await?;
+                        local_store
+                            .delete_all(format!(
+                                "/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"
+                            ))
+                            .await?;
                     }
                 }
 
@@ -105,7 +99,7 @@ fn perform_cleanup(
                     // remove the release metadata
                     local_store
                         .delete_all(format!("/apps/{app_uuid}/releases/{release_uuid}"))
-                    .await?;
+                        .await?;
                 }
             }
 
@@ -116,10 +110,6 @@ fn perform_cleanup(
         }
 
         Ok(device)
-    })
-    .map(|mut device| {
-        device.auths.clear();
-        device
     })
 }
 

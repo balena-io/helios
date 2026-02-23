@@ -24,7 +24,7 @@ use helios_util::types::Uuid;
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::Cli;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
-use crate::oci::RegistryAuthClient;
+use crate::oci::RegistryAuth;
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
@@ -117,9 +117,13 @@ async fn start_supervisor(
     );
 
     // Create a registry auth client using the remote credentials
-    let registry_auth = remote_config
-        .clone()
-        .map(|c| RegistryAuthClient::new(c.api_endpoint.clone(), c.into()));
+    let registry_auth = remote_config.clone().map(
+        |RemoteConfig {
+             api_endpoint,
+             api_key,
+             ..
+         }| RegistryAuth::new(api_endpoint, api_key),
+    );
 
     let (state_runtime, initial_state) =
         state::prepare(uuid.clone(), state_config, registry_auth).await?;
