@@ -1,4 +1,20 @@
 - commits:
+    - subject: Simplify registry authentication
+      hash: 48448a69d3cd99b7650e04a649997af02337f667
+      body: |
+        The previous method used `registrytoken` which is a Docker only method
+        that is not part of the OCI spec. This simplifies the authentication to
+        use the device API key for the registry, but only if the registry domain
+        root matches the API endpoint domain root.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.17.1
+  title: ""
+  date: 2026-02-23T22:37:08.715Z
+- commits:
     - subject: Add a back-off to seek-target retries
       hash: f9627831c7467202a5c8a5d2c3ea16dede7c1e1a
       body: >
