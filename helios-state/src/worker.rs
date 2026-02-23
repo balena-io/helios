@@ -1637,14 +1637,13 @@ mod tests {
         let expected: Dag<&str> = seq!(
             "initialize hostOS release 'target-release'",
             "install hostOS release 'target-release'",
-            "complete hostOS release install for 'target-release'",
             "clean-up"
         );
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 
     #[test]
-    fn it_finds_a_workflow_to_update_the_hostapp() {
+    fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
         before();
 
         let initial_state = serde_json::from_value::<Device>(json!({
@@ -1695,10 +1694,133 @@ mod tests {
                 "install hostOS release 'new-release'",
                 "clean up metadata for previous hostOS release 'old-release'",
             )
-            + seq!(
-                "complete hostOS release install for 'new-release'",
-                "clean-up"
-            );
+            + seq!("clean-up");
+        assert_eq!(workflow.unwrap().to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn it_skips_a_hostapp_install_if_already_installed() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "abcd1234",
+                        "status": "running",
+                        "install_attempts": 1,
+                    },
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "installed",
+                        "install_attempts": 1,
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "running"
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "clean up metadata for previous hostOS release 'old-release'",
+            "clean-up"
+        );
+        assert_eq!(workflow.unwrap().to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn it_skips_a_hostapp_install_after_too_many_install_failures() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "auths": [],
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "abcd1234",
+                        "status": "running",
+                        "install_attempts": 1,
+                    },
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "created",
+                        "install_attempts": 4,
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "running"
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "clean up metadata for previous hostOS release 'old-release'",
+            "clean-up"
+        );
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
     }
 

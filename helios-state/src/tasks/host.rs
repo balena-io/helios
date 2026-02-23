@@ -1,11 +1,9 @@
-use std::time::Duration;
-
 use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
 use tokio::fs;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
@@ -28,12 +26,6 @@ enum HostUpdateError {
 
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
-
-    #[error("operation needs reboot before it can complete")]
-    NeedsReboot,
-
-    #[error("too many update attempts")]
-    TooManyAttempts,
 }
 
 /// Initialize the release
@@ -113,14 +105,6 @@ fn install_hostapp_release(
     release.status = HostReleaseStatus::Installed;
 
     with_io(release, async move |release| {
-        // abort the update after too many tries
-        if release.install_attempts > 3 {
-            warn!("skipping update after too many attempts");
-            // wait 60 seconds to let other tasks to finish and error
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            return Err(HostUpdateError::TooManyAttempts);
-        }
-
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
@@ -149,11 +133,11 @@ fn install_hostapp_release(
             .join("balenahup");
 
         // remove the target dir if it exists
-        if let Err(e) = fs::remove_dir_all(&target_dir).await {
+        if let Err(e) = fs::remove_dir_all(&target_dir).await
             // ignore the error if the directory does not exist
-            if !matches!(e.kind(), std::io::ErrorKind::NotFound) {
-                return Err(e.into());
-            }
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(e.into());
         }
         fs::create_dir_all(&target_dir).await?;
 
@@ -178,8 +162,6 @@ fn install_hostapp_release(
                 release.image.as_str(),
                 "--no-reboot",
             ])
-            // FIXME: this is the host equivalent of $RUNTIME_DIR/balenahup, we
-            // need to declare this mapping somewhere
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
 
@@ -197,6 +179,9 @@ fn install_hostapp_release(
                 .await?;
         }
 
+        // set the reboot breadcrumb to tell the legacy supervisor to reboot
+        fs::File::create(runtime_dir().join("reboot-after-apply")).await?;
+
         // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
         // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
         // HUP after a rollback
@@ -204,45 +189,6 @@ fn install_hostapp_release(
             .await?;
 
         Ok(release)
-    })
-}
-
-/// Mark the release as running in memory
-///
-/// Applies to `update(/host/releases/<commit>)`
-fn complete_hostapp_install(
-    rel: View<HostRelease>,
-    System(device): System<Device>,
-) -> IO<HostRelease, HostUpdateError> {
-    // This task is only  applicable if the release is already installed
-    // which will only happen if install_hostapp_release finishes without an
-    // error
-    enforce!(
-        rel.status == HostReleaseStatus::Installed,
-        "OS release not installed yet"
-    );
-
-    with_io(rel, async move |rel| {
-        // Get the running status by comparing
-        // to the current os build
-        let is_running = device
-            .host
-            .and_then(|host| host.meta.build)
-            .is_some_and(|os_build| os_build == rel.build);
-
-        if !is_running {
-            // set the reboot breadcrumb to tell the legacy supervisor to reboot
-            fs::File::create(runtime_dir().join("reboot-after-apply")).await?;
-
-            // return an error to terminate the worker operation
-            return Err(HostUpdateError::NeedsReboot);
-        }
-
-        Ok(rel)
-    })
-    .map(|mut rel| {
-        rel.status = HostReleaseStatus::Running;
-        rel
     })
 }
 
@@ -316,11 +262,6 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("install hostOS release '{release_uuid}'")
                     },
                 ),
-                job::update(complete_hostapp_install).with_description(
-                    |Args(release_uuid): Args<String>| {
-                        format!("complete hostOS release install for '{release_uuid}'")
-                    },
-                ),
                 job::update(update_script_uri).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("update metadata for release '{release_uuid}'")
@@ -335,4 +276,12 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         )
         // ignore requests to delete the host field if the target OS is set to null
         .exception("/host", exception::delete(|| true))
+        // ignore requests to update the host if it has already been installed (we are waiting for
+        // a reboot) or we reached the number of install attempts
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>| {
+                rel.status == HostReleaseStatus::Installed || rel.install_attempts > 3
+            }),
+        )
 }
