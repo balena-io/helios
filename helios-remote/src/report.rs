@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
-use crate::state::{LocalState, models::ServiceContainerStatus as LocalServiceStatus};
+use crate::state::{
+    LocalState, UpdateStatus as LocalUpdateStatus,
+    models::ServiceContainerStatus as LocalServiceStatus,
+};
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
 use crate::util::request::{Patch, PatchError, RequestConfig};
@@ -28,10 +31,10 @@ enum ServiceStatus {
 #[serde(rename_all = "lowercase")]
 pub enum UpdateStatus {
     Done,
-    // Aborted,
+    Aborted,
     #[serde(rename = "applying changes")]
     ApplyingChanges,
-    // Rejected
+    // Rejected,
 }
 
 #[derive(Serialize, Debug)]
@@ -84,11 +87,23 @@ impl From<Report> for Value {
     }
 }
 
+/// return `ApplyingChanges` as status unless the seek status has returned
+/// `aborted`
+fn applying_unless_aborted(status: &LocalUpdateStatus) -> UpdateStatus {
+    // report as applying changes unless the target state apply
+    // has reported the status as aborted
+    match status {
+        LocalUpdateStatus::Aborted => UpdateStatus::Aborted,
+        _ => UpdateStatus::ApplyingChanges,
+    }
+}
+
 impl From<LocalState> for DeviceReport {
     fn from(state: LocalState) -> Self {
         let mut apps = HashMap::new();
 
         let LocalState {
+            status: seek_status,
             device:
                 Device {
                     host,
@@ -120,7 +135,9 @@ impl From<LocalState> for DeviceReport {
                         )
                     } else {
                         (
-                            UpdateStatus::ApplyingChanges,
+                            // report as applying changes unless the target state apply
+                            // has reported the status as aborted
+                            applying_unless_aborted(&seek_status),
                             ServiceStatus::Installing,
                             None,
                         )
@@ -167,7 +184,7 @@ impl From<LocalState> for DeviceReport {
                     };
                     // Get the status of the app as services based on
                     // whether the running release is the current release
-                    let (update_status, service_status, download_progress) =
+                    let (service_status, download_progress) =
                         match svc.container.as_ref().map(|c| &c.status) {
                             // there is no container yet, the service is either
                             // downloading or installing depending on the download
@@ -177,43 +194,23 @@ impl From<LocalState> for DeviceReport {
                                 if let Some(img) = maybe_img
                                     && img.download_progress < 100
                                 {
-                                    (
-                                        UpdateStatus::ApplyingChanges,
-                                        ServiceStatus::Downloading,
-                                        Some(img.download_progress),
-                                    )
+                                    (ServiceStatus::Downloading, Some(img.download_progress))
                                 } else {
-                                    (
-                                        UpdateStatus::ApplyingChanges,
-                                        ServiceStatus::Installing,
-                                        None,
-                                    )
+                                    (ServiceStatus::Installing, None)
                                 }
                             }
-                            Some(LocalServiceStatus::Installed) => (
-                                UpdateStatus::ApplyingChanges,
-                                ServiceStatus::Installed,
-                                None,
-                            ),
-                            Some(LocalServiceStatus::Running) => {
-                                (UpdateStatus::Done, ServiceStatus::Running, None)
-                            }
-                            Some(LocalServiceStatus::Stopping) => {
-                                (UpdateStatus::ApplyingChanges, ServiceStatus::Stopping, None)
-                            }
-                            Some(LocalServiceStatus::Stopped) => {
-                                (UpdateStatus::Done, ServiceStatus::Stopped, None)
-                            }
-                            Some(LocalServiceStatus::Dead) => {
-                                (UpdateStatus::Done, ServiceStatus::Dead, None)
-                            }
+                            Some(LocalServiceStatus::Installed) => (ServiceStatus::Installed, None),
+                            Some(LocalServiceStatus::Running) => (ServiceStatus::Running, None),
+                            Some(LocalServiceStatus::Stopping) => (ServiceStatus::Stopping, None),
+                            Some(LocalServiceStatus::Stopped) => (ServiceStatus::Stopped, None),
+                            Some(LocalServiceStatus::Dead) => (ServiceStatus::Dead, None),
                         };
 
                     // if the release has been finalized, then report it as the current release
-                    let cur_release_uuid = if release_is_unique && rel.installed {
-                        Some(rel_uuid.clone())
+                    let (update_status, cur_release_uuid) = if release_is_unique && rel.installed {
+                        (UpdateStatus::Done, Some(rel_uuid.clone()))
                     } else {
-                        None
+                        (applying_unless_aborted(&seek_status), None)
                     };
 
                     // Get or create the app
