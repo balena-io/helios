@@ -214,6 +214,17 @@ async fn seek_target(
     info!("applying target state");
 
     while !interrupt.is_set() {
+        // Reset installed flag on all releases.
+        // This causes finish_release to re-run, ensuring app state is
+        // re-validated even when the release UUID hasn't changed.
+        // This doesn't occur in production but can occur when POSTing
+        // helios state API directly.
+        for app in current_state.apps.values_mut() {
+            for release in app.releases.values_mut() {
+                release.installed = false;
+            }
+        }
+
         let worker = worker.clone().initial_state(current_state.clone())?;
         debug!("searching workflow");
 
