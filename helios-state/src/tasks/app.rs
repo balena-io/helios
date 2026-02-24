@@ -208,10 +208,10 @@ fn finish_release(
 
 /// Remove an empty release
 fn remove_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
-    // remove the release if it has no services
+    // remove the release if it has no services and no networks
     if release
         .as_ref()
-        .map(|r| r.services.is_empty())
+        .map(|r| r.services.is_empty() && r.networks.is_empty())
         .unwrap_or_default()
     {
         release.take();

@@ -598,7 +598,25 @@ mod tests {
                                     },
                                     "config": {},
                                 },
-                            }
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "driver_opts": {},
+                                        "enable_ipv4": false,
+                                        "enable_ipv6": false,
+                                        "internal": false,
+                                        "labels": {},
+                                        "ipam": {
+                                            "driver": "default",
+                                            "config": [],
+                                            "options": {},
+                                        },
+                                    },
+                                },
+                            },
                         }
                     }
                 }
@@ -626,6 +644,7 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = dag!(
+            seq!("remove network 'my-network' for app 'my-app-uuid'"),
             seq!(
                 "stop service 'service1' for release 'my-release-uuid'",
                 "uninstall service 'service1' for release 'my-release-uuid'",
@@ -977,6 +996,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1041,6 +1061,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1112,6 +1133,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1145,6 +1167,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1202,6 +1225,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1235,6 +1259,7 @@ mod tests {
                                     "config": {
                                         "driver": "overlay",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": true,
                                         "internal": false,
                                         "labels": {},
@@ -1302,6 +1327,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1317,6 +1343,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": true,
                                         "labels": {},

@@ -139,14 +139,30 @@ impl From<String> for NetworkIpamDriver {
 }
 
 /// Network configuration used to create a Docker network
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkConfig {
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
+    pub enable_ipv4: bool,
     pub enable_ipv6: bool,
     pub internal: bool,
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            driver: NetworkDriver::default(),
+            driver_opts: HashMap::new(),
+            // Engine defaults to true
+            enable_ipv4: true,
+            enable_ipv6: false,
+            internal: false,
+            labels: HashMap::new(),
+            ipam: NetworkIpamConfig::default(),
+        }
+    }
 }
 
 /// IPAM configuration for a Docker network
@@ -172,6 +188,7 @@ pub struct LocalNetwork {
     pub name: String,
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
+    pub enable_ipv4: bool,
     pub enable_ipv6: bool,
     pub internal: bool,
     pub labels: HashMap<String, String>,
@@ -185,6 +202,7 @@ impl TryFrom<NetworkInspect> for LocalNetwork {
         let name = value.name.ok_or("network name should not be nil")?;
         let driver = NetworkDriver::from(value.driver.unwrap_or_else(|| "bridge".to_string()));
         let driver_opts = value.options.unwrap_or_default();
+        let enable_ipv4 = value.enable_ipv4.unwrap_or(true);
         let enable_ipv6 = value.enable_ipv6.unwrap_or(false);
         let internal = value.internal.unwrap_or(false);
         let labels = value.labels.unwrap_or_default();
@@ -214,6 +232,7 @@ impl TryFrom<NetworkInspect> for LocalNetwork {
             name,
             driver,
             driver_opts,
+            enable_ipv4,
             enable_ipv6,
             internal,
             labels,
@@ -244,6 +263,7 @@ impl From<NetworkConfig> for NetworkCreateRequest {
         NetworkCreateRequest {
             name: String::new(), // set by caller
             driver: Some(config.driver.to_string()),
+            enable_ipv4: Some(config.enable_ipv4),
             enable_ipv6: Some(config.enable_ipv6),
             internal: Some(config.internal),
             labels: Some(config.labels),
