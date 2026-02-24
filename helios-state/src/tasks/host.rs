@@ -1,14 +1,16 @@
+use std::fs;
+
 use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
-use tokio::fs;
 use tracing::debug;
 
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
 use crate::oci::{Client as Docker, Error as DockerError};
 use crate::util::dirs::runtime_dir;
+use crate::util::fs::run_async;
 use crate::util::store::{Store, StoreError};
 use crate::util::systemd;
 use crate::util::tar;
@@ -132,20 +134,25 @@ fn install_hostapp_release(
             .expect("should not be nil")
             .join("balenahup");
 
-        // remove the target dir if it exists
-        if let Err(e) = fs::remove_dir_all(&target_dir).await
-            // ignore the error if the directory does not exist
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(e.into());
-        }
-        fs::create_dir_all(&target_dir).await?;
-
         // read scripts from the container
         let bytes = container_helper.read_from(&id, "/app").await?;
 
-        // extract the scripts into the target directory
-        tar::unpack_from(&bytes, "/app", target_dir)?;
+        run_async(move || {
+            // remove the target dir if it exists
+            if let Err(e) = fs::remove_dir_all(&target_dir)
+            // ignore the error if the directory does not exist
+            && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e);
+            }
+            fs::create_dir_all(&target_dir)?;
+
+            // extract the scripts into the target directory
+            tar::unpack_from(&bytes, "/app", target_dir)?;
+
+            Ok(())
+        })
+        .await?;
 
         // call systemd run using `/tmp/balena-supervisor/balenahup` as the workdir, wait for
         // the script to finish
@@ -179,14 +186,18 @@ fn install_hostapp_release(
                 .await?;
         }
 
-        // set the reboot breadcrumb to tell the legacy supervisor to reboot
-        fs::File::create(runtime_dir().join("reboot-after-apply")).await?;
+        run_async(move || {
+            // set the reboot breadcrumb to tell the legacy supervisor to reboot
+            fs::File::create(runtime_dir().join("reboot-after-apply"))?;
 
-        // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
-        // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
-        // HUP after a rollback
-        fs::File::create(runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")))
-            .await?;
+            // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
+            // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
+            // HUP after a rollback
+            fs::File::create(runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")))?;
+
+            Ok(())
+        })
+        .await?;
 
         Ok(release)
     })
