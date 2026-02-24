@@ -11,7 +11,9 @@ pub struct Network {
     #[serde(default)]
     pub driver_opts: HashMap<String, String>,
     #[serde(default)]
-    pub enable_ipv6: bool,
+    pub enable_ipv4: Option<bool>,
+    #[serde(default)]
+    pub enable_ipv6: Option<bool>,
     #[serde(default)]
     pub internal: bool,
     #[serde(default)]
@@ -48,7 +50,8 @@ mod tests {
         let net: Network = serde_json::from_value(json!({})).unwrap();
         assert_eq!(net.driver, None);
         assert!(net.driver_opts.is_empty());
-        assert!(!net.enable_ipv6);
+        assert_eq!(net.enable_ipv4, None);
+        assert_eq!(net.enable_ipv6, None);
         assert!(!net.internal);
         assert!(net.labels.is_empty());
         assert_eq!(net.ipam.driver, None);
@@ -61,6 +64,7 @@ mod tests {
         let net: Network = serde_json::from_value(json!({
             "driver": "overlay",
             "driver_opts": {"foo": "bar"},
+            "enable_ipv4": true,
             "enable_ipv6": true,
             "internal": true,
             "labels": {"com.foo.bar": "app-label"},
@@ -81,7 +85,8 @@ mod tests {
 
         assert_eq!(net.driver, Some("overlay".to_string()));
         assert_eq!(net.driver_opts.get("foo").unwrap(), "bar");
-        assert!(net.enable_ipv6);
+        assert_eq!(net.enable_ipv4, Some(true));
+        assert_eq!(net.enable_ipv6, Some(true));
         assert!(net.internal);
         assert_eq!(net.labels.get("com.foo.bar").unwrap(), "app-label");
         assert_eq!(net.ipam.driver, Some("custom".to_string()));

@@ -42,10 +42,30 @@ impl DerefMut for NetworkConfig {
 
 impl From<RemoteNetwork> for NetworkConfig {
     fn from(net: RemoteNetwork) -> Self {
+        let mut driver_opts: std::collections::HashMap<String, String> =
+            net.driver_opts.into_iter().collect();
+
+        // Absorb `com.docker.network.enable_ipvX` driver opts into top-level
+        // fields. The top-level field takes precedence when explicitly set;
+        // otherwise the driver opt value is used as a fallback. Discard the
+        // driver opts as we can use the top-level fields instead.
+        let enable_ipv4_opt = driver_opts.remove("com.docker.network.enable_ipv4");
+        let enable_ipv6_opt = driver_opts.remove("com.docker.network.enable_ipv6");
+
+        let enable_ipv4 = net
+            .enable_ipv4
+            .or_else(|| enable_ipv4_opt.map(|v| v == "true"))
+            .unwrap_or(true);
+        let enable_ipv6 = net
+            .enable_ipv6
+            .or_else(|| enable_ipv6_opt.map(|v| v == "true"))
+            .unwrap_or(false);
+
         NetworkConfig(OciNetworkConfig {
             driver: net.driver.map(NetworkDriver::from).unwrap_or_default(),
-            driver_opts: net.driver_opts.into_iter().collect(),
-            enable_ipv6: net.enable_ipv6,
+            driver_opts,
+            enable_ipv4,
+            enable_ipv6,
             internal: net.internal,
             labels: net.labels.into_iter().collect(),
             ipam: NetworkIpamConfig {
@@ -109,6 +129,7 @@ impl From<LocalNetwork> for Network {
             config: NetworkConfig(OciNetworkConfig {
                 driver: net.driver,
                 driver_opts: net.driver_opts,
+                enable_ipv4: net.enable_ipv4,
                 enable_ipv6: net.enable_ipv6,
                 internal: net.internal,
                 labels,
@@ -148,6 +169,7 @@ mod tests {
         let remote: remote_model::Network = serde_json::from_value(serde_json::json!({
             "driver": "overlay",
             "driver_opts": {"foo": "bar"},
+            "enable_ipv4": true,
             "enable_ipv6": true,
             "internal": true,
             "labels": {"com.foo.bar": "app-label"},
@@ -166,6 +188,7 @@ mod tests {
         let config: NetworkConfig = remote.into();
         assert_eq!(config.driver.to_string(), "overlay");
         assert_eq!(config.driver_opts.get("foo"), Some(&"bar".to_string()));
+        assert!(config.enable_ipv4);
         assert!(config.enable_ipv6);
         assert!(config.internal);
         assert_eq!(
@@ -195,6 +218,7 @@ mod tests {
         let config = NetworkConfig::default();
         assert_eq!(config.driver, NetworkDriver::default());
         assert!(config.driver_opts.is_empty());
+        assert!(config.enable_ipv4);
         assert!(!config.enable_ipv6);
         assert!(!config.internal);
         assert!(config.labels.is_empty());
@@ -213,6 +237,83 @@ mod tests {
     }
 
     #[test]
+    fn test_enable_ipvx_only_driver_opt_absorbed_into_top_level() {
+        let remote: remote_model::Network = serde_json::from_value(serde_json::json!({
+            "driver_opts": {
+                "com.docker.network.enable_ipv4": "false",
+                "com.docker.network.enable_ipv6": "true"
+            }
+        }))
+        .unwrap();
+
+        let config: NetworkConfig = remote.into();
+        // Driver opts from remote are absorbed into top-level enable_ipvX fields
+        assert!(!config.enable_ipv4);
+        assert!(config.enable_ipv6);
+        assert!(
+            !config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert!(
+            !config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv6")
+        );
+    }
+
+    #[test]
+    fn test_enable_ipvx_only_top_level_used_directly() {
+        let remote: remote_model::Network = serde_json::from_value(serde_json::json!({
+            "enable_ipv4": false,
+            "enable_ipv6": true,
+        }))
+        .unwrap();
+
+        let config: NetworkConfig = remote.into();
+        assert!(!config.enable_ipv4);
+        assert!(config.enable_ipv6);
+    }
+
+    #[test]
+    fn test_enable_ipvx_top_level_supersedes_driver_opt() {
+        let remote: remote_model::Network = serde_json::from_value(serde_json::json!({
+            "enable_ipv4": true,
+            "enable_ipv6": false,
+            "driver_opts": {
+                "com.docker.network.enable_ipv4": "false",
+                "com.docker.network.enable_ipv6": "true"
+            }
+        }))
+        .unwrap();
+
+        let config: NetworkConfig = remote.into();
+        // Top-level enable_ipvX fields take precedence over driver opts
+        assert!(config.enable_ipv4);
+        assert!(!config.enable_ipv6);
+        assert!(
+            !config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert!(
+            !config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv6")
+        );
+    }
+
+    #[test]
+    fn test_enable_ipvx_neither_specified_uses_defaults() {
+        let remote: remote_model::Network = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        let config: NetworkConfig = remote.into();
+        // Engine defaults to true for enable_ipv4, false for enable_ipv6
+        assert!(config.enable_ipv4);
+        assert!(!config.enable_ipv6);
+    }
+
+    #[test]
     fn test_to_oci_config_maps_all_fields() {
         let config = NetworkConfig(OciNetworkConfig {
             driver: NetworkDriver::from("overlay".to_string()),
@@ -222,6 +323,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            enable_ipv4: true,
             enable_ipv6: true,
             internal: true,
             labels: [
@@ -279,7 +381,6 @@ mod tests {
             oci_config.labels.get("io.balena.private.ipam.config"),
             Some(&"true".to_string())
         );
-
         // IPAM
         assert_eq!(oci_config.ipam.driver.to_string(), "custom");
         assert_eq!(
@@ -318,6 +419,7 @@ mod tests {
             driver_opts: [("mtu".to_string(), "1450".to_string())]
                 .into_iter()
                 .collect(),
+            enable_ipv4: true,
             enable_ipv6: true,
             internal: true,
             labels: [
@@ -364,6 +466,7 @@ mod tests {
             network.config.driver_opts.get("mtu"),
             Some(&"1450".to_string())
         );
+        assert!(network.config.enable_ipv4);
         assert!(network.config.enable_ipv6);
         assert!(network.config.internal);
         assert_eq!(network.config.ipam.driver.to_string(), "custom");

@@ -605,6 +605,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -995,6 +996,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1059,6 +1061,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1130,6 +1133,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1163,6 +1167,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1220,6 +1225,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1253,6 +1259,7 @@ mod tests {
                                     "config": {
                                         "driver": "overlay",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": true,
                                         "internal": false,
                                         "labels": {},
@@ -1320,6 +1327,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},
@@ -1335,6 +1343,7 @@ mod tests {
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
+                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": true,
                                         "labels": {},
