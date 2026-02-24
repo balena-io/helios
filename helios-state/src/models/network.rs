@@ -105,11 +105,17 @@ impl From<LocalNetwork> for Network {
     fn from(net: LocalNetwork) -> Self {
         let network_name = net.name;
         let mut labels = net.labels;
+        let mut driver_opts = net.driver_opts;
 
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
         let has_ipam_config = labels.remove(LABEL_IPAM_CONFIG).is_some();
+
+        // Always strip engine-injected driver_opts. These keys never appear
+        // in the target state, so they should never appear in read-back.
+        driver_opts.remove("com.docker.network.enable_ipv4");
+        driver_opts.remove("com.docker.network.enable_ipv6");
 
         // Only preserve IPAM config if it was explicitly set by the user.
         // Engine-assigned IPAM (subnet, gateway) would cause a mismatch
@@ -128,7 +134,7 @@ impl From<LocalNetwork> for Network {
             network_name,
             config: NetworkConfig(OciNetworkConfig {
                 driver: net.driver,
-                driver_opts: net.driver_opts,
+                driver_opts,
                 enable_ipv4: net.enable_ipv4,
                 enable_ipv6: net.enable_ipv6,
                 internal: net.internal,
@@ -378,7 +384,7 @@ mod tests {
         );
         // Labels: IPAM config label is injected when config is non-empty
         assert_eq!(
-            oci_config.labels.get("io.balena.private.ipam.config"),
+            oci_config.labels.get(LABEL_IPAM_CONFIG),
             Some(&"true".to_string())
         );
         // IPAM
@@ -404,11 +410,7 @@ mod tests {
     fn test_to_oci_config_omits_ipam_label_when_config_empty() {
         let config = NetworkConfig::default();
         let oci_config: OciNetworkConfig = config.into();
-        assert!(
-            !oci_config
-                .labels
-                .contains_key("io.balena.private.ipam.config")
-        );
+        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG));
     }
 
     #[test]
@@ -507,6 +509,65 @@ mod tests {
         assert!(network.config.ipam.config.is_empty());
         // IPAM driver is still preserved
         assert_eq!(network.config.ipam.driver, NetworkIpamDriver::default());
+    }
+
+    #[test]
+    fn test_from_local_network_discards_engine_injected_enable_ipv4() {
+        let local = LocalNetwork {
+            name: "app1_default".to_string(),
+            labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
+                .into_iter()
+                .collect(),
+            driver_opts: [(
+                "com.docker.network.enable_ipv4".to_string(),
+                "true".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // Engine-injected enable_ipv4 is always stripped as top-level field reflects
+        // state accurately
+        assert!(network.config.driver_opts.is_empty());
+    }
+
+    #[test]
+    fn test_from_local_network_preserves_driver_opts_and_filters_engine_enable_ipv4() {
+        let local = LocalNetwork {
+            name: "app1_my-net".to_string(),
+            labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
+                .into_iter()
+                .collect(),
+            driver_opts: [
+                ("mtu".to_string(), "1450".to_string()),
+                (
+                    "com.docker.network.enable_ipv4".to_string(),
+                    "true".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+
+        // Non-engine driver_opt is preserved
+        assert_eq!(
+            network.config.driver_opts.get("mtu"),
+            Some(&"1450".to_string())
+        );
+        // Engine-injected enable_ipv4 is always stripped
+        assert!(
+            !network
+                .config
+                .driver_opts
+                .contains_key("com.docker.network.enable_ipv4")
+        );
+        assert_eq!(network.config.driver_opts.len(), 1);
     }
 
     #[test]
