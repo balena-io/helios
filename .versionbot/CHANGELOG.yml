@@ -1,4 +1,21 @@
 - commits:
+    - subject: Support per-family IPAM labels when custom IPAM config
+      hash: 69d3684a4f59814dfb6d6d50ea67284793a7de6b
+      body: |
+        Replace the single LABEL_IPAM_CONFIG label with per-family labels
+        for IPv4 and IPv6 so that engine-assigned pools for address families
+        with non-custom IPAM configs are correctly discarded on read-back.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+  version: 0.17.3
+  title: ""
+  date: 2026-02-24T21:48:36.736Z
+- commits:
     - subject: Strip engine-injected network driver_opts on read-back
       hash: 5526e0d35ec5c226c706aea9dab9300ecf680281
       body: >
