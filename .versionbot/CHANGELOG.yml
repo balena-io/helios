@@ -1,4 +1,70 @@
 - commits:
+    - subject: Strip engine-injected network driver_opts on read-back
+      hash: 5526e0d35ec5c226c706aea9dab9300ecf680281
+      body: >
+        The Docker engine injects com.docker.network.enable_ipv4 and
+
+        com.docker.network.enable_ipv6 into driver_opts. These keys are never
+
+        stored in target state, instead being absorbed into top-level
+        enable_ipvX
+
+        fields during target conversion, so always strip them when reading
+
+        back network state from the engine.
+
+
+        Note that other / future Engine-injected driver_opts are not handled,
+
+        and will result in an apply loop.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add enable_ipv4 support to network model
+      hash: 691ad2f7bd3a19ab2357d132a38b069e4ba5281a
+      body: >
+        Add `enable_ipv4` as a first-class field across the remote model, OCI
+
+        layer, and state model. Both `enable_ipv4` and `enable_ipv6` are
+
+        `Option<bool>` in the remote model so we can distinguish "not specified"
+
+        from "explicitly set". During target conversion, absorb
+
+        `com.docker.network.enable_ipvX` driver opts into the top-level fields.
+
+        The top-level opts take precedence with driver opt as fallback. If
+        neither
+
+        are specified, the engine defaults of ipv4=true and ipv6=false are used.
+
+        The absorbed driver opts are never stored in helios state.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Enforce networks empty before removing release
+      hash: 73da577749dfe83a844b9034dec8725388d48eea
+      body: |
+        This ensures networks are deleted when a release is removed.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+  version: 0.17.2
+  title: ""
+  date: 2026-02-24T20:23:49.737Z
+- commits:
     - subject: Simplify registry authentication
       hash: 48448a69d3cd99b7650e04a649997af02337f667
       body: |
