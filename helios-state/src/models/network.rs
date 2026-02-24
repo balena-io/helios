@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SUPERVISED;
 
-const LABEL_IPAM_CONFIG: &str = "io.balena.private.ipam.config";
+const LABEL_IPAM_CONFIG_IPV4: &str = "io.balena.private.ipam.config.ipv4";
+const LABEL_IPAM_CONFIG_IPV6: &str = "io.balena.private.ipam.config.ipv6";
 use crate::oci::{
     LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig,
     NetworkIpamDriver, NetworkIpamPoolConfig,
@@ -110,24 +111,31 @@ impl From<LocalNetwork> for Network {
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
-        let has_ipam_config = labels.remove(LABEL_IPAM_CONFIG).is_some();
 
         // Always strip engine-injected driver_opts. These keys never appear
         // in the target state, so they should never appear in read-back.
         driver_opts.remove("com.docker.network.enable_ipv4");
         driver_opts.remove("com.docker.network.enable_ipv6");
 
-        // Only preserve IPAM config if it was explicitly set by the user.
-        // Engine-assigned IPAM (subnet, gateway) would cause a mismatch
-        // against the target, which has no IPAM config.
-        let ipam = if has_ipam_config {
-            net.ipam
-        } else {
-            NetworkIpamConfig {
-                driver: net.ipam.driver,
-                config: Vec::new(),
-                options: net.ipam.options,
-            }
+        // Only preserve IPAM pools for address families that were explicitly
+        // configured by the user.  Engine-assigned pools (e.g. an auto-assigned
+        // IPv6 subnet when the user only defined IPv4 IPAM) are discarded so
+        // they don't cause a persistent mismatch against the target.
+        let has_ipv4_config = labels.remove(LABEL_IPAM_CONFIG_IPV4).is_some();
+        let has_ipv6_config = labels.remove(LABEL_IPAM_CONFIG_IPV6).is_some();
+        let ipam = NetworkIpamConfig {
+            driver: net.ipam.driver,
+            config: net
+                .ipam
+                .config
+                .into_iter()
+                .filter(|pool| match pool.subnet.as_ref().map(|s| s.contains(':')) {
+                    Some(true) => has_ipv6_config,
+                    Some(false) => has_ipv4_config,
+                    None => has_ipv4_config || has_ipv6_config,
+                })
+                .collect(),
+            options: net.ipam.options,
         };
 
         Network {
@@ -154,11 +162,29 @@ impl From<NetworkConfig> for OciNetworkConfig {
             .labels
             .insert(LABEL_SUPERVISED.to_string(), "".to_string());
 
-        // Mark networks with IPAM config so changes trigger network recreation
-        if !inner.ipam.config.is_empty() {
+        // Mark networks with IPAM config so changes trigger network recreation.
+        // Use per-family labels so we can distinguish user-defined pools from
+        // engine-assigned pools on read-back.
+        let has_ipv4_config = inner
+            .ipam
+            .config
+            .iter()
+            .any(|p| p.subnet.as_ref().is_some_and(|s| !s.contains(':')));
+        let has_ipv6_config = inner
+            .ipam
+            .config
+            .iter()
+            .any(|p| p.subnet.as_ref().is_some_and(|s| s.contains(':')));
+
+        if has_ipv4_config {
             inner
                 .labels
-                .insert(LABEL_IPAM_CONFIG.to_string(), "true".to_string());
+                .insert(LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string());
+        }
+        if has_ipv6_config {
+            inner
+                .labels
+                .insert(LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string());
         }
 
         inner
@@ -382,11 +408,14 @@ mod tests {
             oci_config.labels.get("io.balena.supervised"),
             Some(&"".to_string())
         );
-        // Labels: IPAM config label is injected when config is non-empty
+        // Labels: IPv4 IPAM config label is injected for IPv4 pool
         assert_eq!(
-            oci_config.labels.get(LABEL_IPAM_CONFIG),
-            Some(&"true".to_string())
+            oci_config.labels.get(LABEL_IPAM_CONFIG_IPV4),
+            Some(&"".to_string())
         );
+        // Labels: IPv6 IPAM config label is absent (no IPv6 pool)
+        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
+
         // IPAM
         assert_eq!(oci_config.ipam.driver.to_string(), "custom");
         assert_eq!(
@@ -407,10 +436,11 @@ mod tests {
     }
 
     #[test]
-    fn test_to_oci_config_omits_ipam_label_when_config_empty() {
+    fn test_to_oci_config_omits_ipam_labels_when_config_empty() {
         let config = NetworkConfig::default();
         let oci_config: OciNetworkConfig = config.into();
-        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG));
+        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
+        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
     }
 
     #[test]
@@ -427,7 +457,7 @@ mod tests {
             labels: [
                 // injected labels that should be stripped
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG.to_string(), "true".to_string()),
+                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
                 // user label that should survive
                 ("com.example.label".to_string(), "value".to_string()),
             ]
@@ -454,7 +484,8 @@ mod tests {
 
         // Injected labels are stripped
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
-        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG));
+        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
+        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
 
         // User label survives
         assert_eq!(
@@ -594,5 +625,168 @@ mod tests {
         );
         assert_eq!(config.ipam.config[1].subnet, Some("10.0.0.0/8".to_string()));
         assert_eq!(config.ipam.config[1].gateway, Some("10.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn test_from_local_network_ipv4_only_strips_engine_ipv6() {
+        // User defines IPv4 IPAM, engine appends an IPv6 pool.
+        // Only the IPv4 label is present → IPv6 pool is stripped.
+        let local = LocalNetwork {
+            name: "app1_net".to_string(),
+            enable_ipv6: true,
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::default(),
+                config: vec![
+                    NetworkIpamPoolConfig {
+                        subnet: Some("172.28.0.0/16".to_string()),
+                        gateway: Some("172.28.0.1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                    NetworkIpamPoolConfig {
+                        subnet: Some("fd00::/80".to_string()),
+                        gateway: Some("fd00::1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                ],
+                options: Default::default(),
+            },
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+        assert_eq!(network.config.ipam.config.len(), 1);
+        assert_eq!(
+            network.config.ipam.config[0].subnet,
+            Some("172.28.0.0/16".to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_local_network_both_families_keeps_all() {
+        // User defines both IPv4 and IPv6 IPAM -> both labels present -> both kept
+        let local = LocalNetwork {
+            name: "app1_net".to_string(),
+            enable_ipv6: true,
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
+                (LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::default(),
+                config: vec![
+                    NetworkIpamPoolConfig {
+                        subnet: Some("172.28.0.0/16".to_string()),
+                        gateway: Some("172.28.0.1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                    NetworkIpamPoolConfig {
+                        subnet: Some("fd00::/80".to_string()),
+                        gateway: Some("fd00::1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                ],
+                options: Default::default(),
+            },
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+        assert_eq!(network.config.ipam.config.len(), 2);
+        assert_eq!(
+            network.config.ipam.config[0].subnet,
+            Some("172.28.0.0/16".to_string())
+        );
+        assert_eq!(
+            network.config.ipam.config[1].subnet,
+            Some("fd00::/80".to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_local_network_ipv6_only_strips_engine_ipv4() {
+        // User defines IPv6 IPAM only, engine prepends an IPv4 pool.
+        // Only the IPv6 label is present so IPv4 pool is stripped.
+        let local = LocalNetwork {
+            name: "app1_net".to_string(),
+            enable_ipv6: true,
+            labels: [
+                (LABEL_SUPERVISED.to_string(), "".to_string()),
+                (LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::default(),
+                config: vec![
+                    NetworkIpamPoolConfig {
+                        subnet: Some("172.18.0.0/16".to_string()),
+                        gateway: Some("172.18.0.1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                    NetworkIpamPoolConfig {
+                        subnet: Some("2001:db8::/64".to_string()),
+                        gateway: Some("2001:db8::1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                ],
+                options: Default::default(),
+            },
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+        assert_eq!(network.config.ipam.config.len(), 1);
+        assert_eq!(
+            network.config.ipam.config[0].subnet,
+            Some("2001:db8::/64".to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_local_network_no_ipam_labels_discards_all_pools() {
+        // No user IPAM -> no labels -> all pool families discarded
+        let local = LocalNetwork {
+            name: "app1_net".to_string(),
+            labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
+                .into_iter()
+                .collect(),
+            ipam: NetworkIpamConfig {
+                driver: NetworkIpamDriver::default(),
+                config: vec![
+                    NetworkIpamPoolConfig {
+                        subnet: Some("172.18.0.0/16".to_string()),
+                        gateway: Some("172.18.0.1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                    NetworkIpamPoolConfig {
+                        subnet: Some("fd00::/80".to_string()),
+                        gateway: Some("fd00::1".to_string()),
+                        ip_range: None,
+                        aux_addresses: None,
+                    },
+                ],
+                options: Default::default(),
+            },
+            ..Default::default()
+        };
+
+        let network: Network = local.into();
+        assert!(network.config.ipam.config.is_empty());
     }
 }
