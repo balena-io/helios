@@ -17,6 +17,7 @@ addr.workspace = true
 axum.workspace = true
 dirs.workspace = true
 fastrand.workspace = true
+getrandom.workspace = true
 mahler.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -32,3 +33,10 @@ tar.workspace = true
 
 [dev-dependencies]
 mockito.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false, features = [
+  # https://github.com/rust-lang/libc
+  "std",
+  "extra_traits",
+] }
