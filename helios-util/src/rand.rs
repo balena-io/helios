@@ -7,8 +7,8 @@ pub trait RngExt {
     /// Returns a string of the given length that is the result of pseudo-randomly
     /// choosing characters from the given character set.
     ///
-    /// ```ignore
-    /// use helios_store::util::rand::{self, PseudoRng, RngExt};
+    /// ```
+    /// use helios_util::rand::{self, PseudoRng, RngExt};
     ///
     /// let mut rng = PseudoRng::new();
     /// let s = rng.string(rand::ALPHA_NUM, 32);
@@ -49,3 +49,9 @@ impl RngExt for PseudoRng {
 
 /// All lowercase letters and digits.
 pub const ALPHA_NUM_LC: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
+/// Uppercase and lowercase letters and digits
+pub const ALPHA_NUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/// All uppercase letters and digits
+pub const ALPHA_NUM_UC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

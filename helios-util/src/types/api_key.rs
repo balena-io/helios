@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::ops::Deref;
 
-use crate::crypto::{ALPHA_NUM, pseudorandom_string};
+use crate::rand::{ALPHA_NUM, PseudoRng, RngExt as _};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ApiKey(String);
@@ -17,7 +17,8 @@ impl Deref for ApiKey {
 
 impl Default for ApiKey {
     fn default() -> Self {
-        Self(pseudorandom_string(ALPHA_NUM, 32))
+        let mut rng = PseudoRng::new();
+        Self(rng.string(ALPHA_NUM, 32))
     }
 }
 

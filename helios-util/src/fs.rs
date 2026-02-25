@@ -16,8 +16,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::runtime;
 
-use super::crypto::{ALPHA_NUM, pseudorandom_string};
-use super::rand::{self, RngExt as _};
+use super::rand::{self, ALPHA_NUM, PseudoRng, RngExt as _};
 
 mod openflags {
     #[cfg(unix)]
@@ -39,7 +38,7 @@ pub trait OpenOptionsExt {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,no_run
     /// use std::fs;
     /// use helios_util::fs::OpenOptionsExt;
     ///
@@ -86,7 +85,8 @@ pub async fn safe_write_all<P: AsRef<Path>, B: AsRef<[u8]>>(
     // perform all synchronous operation in the same task/thread
     run_async(move || {
         // create temp file
-        let tmp_ext = "sync-".to_owned() + &pseudorandom_string(ALPHA_NUM, 6);
+        let mut rng = PseudoRng::new();
+        let tmp_ext = "sync-".to_owned() + &rng.string(ALPHA_NUM, 6);
         let tmp_path = path.with_extension(tmp_ext);
         let mut tmp_file = fs::File::create(&tmp_path)?;
 
@@ -172,7 +172,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use helios_util::fs;
 ///
 /// # fn example() -> std::io::Result<()> {
@@ -190,7 +190,7 @@ pub fn ensure_exists<P: AsRef<Path>>(dir: P) -> std::io::Result<()> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use helios_util::fs;
 ///
 /// # fn example() -> std::io::Result<()> {
@@ -215,7 +215,7 @@ pub fn set_permissions(path: impl AsRef<Path>, perms: u32) -> io::Result<()> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use helios_util::fs;
 ///
 /// # fn example() -> std::io::Result<()> {
@@ -245,7 +245,7 @@ pub fn sync_dir(path: impl AsRef<Path>) -> io::Result<()> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use std::path::PathBuf;
 /// use helios_util::fs;
 ///

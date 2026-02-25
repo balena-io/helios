@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::oci::{ContainerState, ContainerStatus, DateTime, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
-use crate::util::crypto::{LC_ALPHA_NUM, pseudorandom_string};
+use crate::util::rand::{ALPHA_NUM_LC, PseudoRng, RngExt as _};
 
 use super::image::ImageRef;
 
@@ -136,11 +136,13 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         // convert the composition command to a List
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
 
+        let mut rng = PseudoRng::new();
+
         ServiceTarget {
             id,
             // set the name to a random string by default, but a name will be set when transforming
             // from the target state
-            container_name: pseudorandom_string(LC_ALPHA_NUM, 24),
+            container_name: rng.string(ALPHA_NUM_LC, 24),
             image: image.into(),
             started: true,
             config: ServiceConfig { command, labels },
