@@ -1,7 +1,7 @@
 use mahler::state::Map;
 use thiserror::Error;
 use tokio::fs;
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
@@ -243,12 +243,12 @@ pub async fn read(
         for volume_name in volumes {
             let local_volume = docker.volume().inspect(&volume_name).await?;
 
-            let app_uuid: Uuid = local_volume
-                .labels
-                .get(LABEL_APP_UUID)
-                .map(|uuid| uuid.as_str())
-                .unwrap_or(UNKNOWN_APP_UUID)
-                .into();
+            let Some(app_uuid_str) = local_volume.labels.get(LABEL_APP_UUID) else {
+                // Skip orphaned volumes with no app-uuid label
+                trace!(volume = %local_volume.name, "skipping orphaned volume");
+                continue;
+            };
+            let app_uuid: Uuid = app_uuid_str.as_str().into();
 
             // Extract the volume name by stripping the "{app_uuid}_" prefix
             let vol_name = local_volume
