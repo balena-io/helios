@@ -68,6 +68,9 @@ impl OpenOptionsExt for fs::OpenOptions {
 /// Atomically creates a file with the given contents, overwriting
 /// it if one exists.
 ///
+/// This is a synchronous function. For an asynchronous version, wrap this
+/// function in [`run_async`].
+///
 /// This function will first write the buffer into a new file that
 /// resides in the same directory as the desired file and then do
 /// the complete sync/rename dance to ensure the buffer is safely
@@ -75,40 +78,33 @@ impl OpenOptionsExt for fs::OpenOptions {
 /// be reasonably sure the write completed durably.
 ///
 /// Read: [Ensuring data reaches to disk](https://lwn.net/Articles/457667/).
-pub async fn safe_write_all<P: AsRef<Path>, B: AsRef<[u8]>>(
-    path: P,
-    buf: B,
-) -> std::io::Result<()> {
-    let path = path.as_ref().to_path_buf();
-    let buf: Vec<u8> = buf.as_ref().into();
+pub fn safe_write_all<P: AsRef<Path>, B: AsRef<[u8]>>(path: P, buf: B) -> std::io::Result<()> {
+    let path = path.as_ref();
+    let buf = buf.as_ref();
 
-    // perform all synchronous operation in the same task/thread
-    run_async(move || {
-        // create temp file
-        let mut rng = PseudoRng::new();
-        let tmp_ext = "sync-".to_owned() + &rng.string(ALPHA_NUM, 6);
-        let tmp_path = path.with_extension(tmp_ext);
-        let mut tmp_file = fs::File::create(&tmp_path)?;
+    // create temp file
+    let mut rng = PseudoRng::new();
+    let tmp_ext = "sync-".to_owned() + &rng.string(ALPHA_NUM, 6);
+    let tmp_path = path.with_extension(tmp_ext);
+    let mut tmp_file = fs::File::create(&tmp_path)?;
 
-        // write given contents and sync to disk
-        let res = {
-            tmp_file.write_all(&buf)?;
-            tmp_file.flush()?;
-            tmp_file.sync_all()?;
-            drop(tmp_file);
+    // write given contents and sync to disk
+    let res = {
+        tmp_file.write_all(buf)?;
+        tmp_file.flush()?;
+        tmp_file.sync_all()?;
+        drop(tmp_file);
 
-            // rename tmp file to destination
-            fs::rename(&tmp_path, path)
-        };
+        // rename tmp file to destination
+        fs::rename(&tmp_path, path)
+    };
 
-        if res.is_err() {
-            // try to delete the tmp-file ignoring any errors
-            let _ = fs::remove_file(&tmp_path);
-        }
+    if res.is_err() {
+        // try to delete the tmp-file ignoring any errors
+        let _ = fs::remove_file(&tmp_path);
+    }
 
-        res
-    })
-    .await
+    res
 }
 
 /// Executes a blocking function on a separate thread if inside a Tokio runtime,
