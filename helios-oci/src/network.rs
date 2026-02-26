@@ -139,30 +139,14 @@ impl From<String> for NetworkIpamDriver {
 }
 
 /// Network configuration used to create a Docker network
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkConfig {
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
-    pub enable_ipv4: bool,
     pub enable_ipv6: bool,
     pub internal: bool,
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            driver: NetworkDriver::default(),
-            driver_opts: HashMap::new(),
-            // Engine defaults to true
-            enable_ipv4: true,
-            enable_ipv6: false,
-            internal: false,
-            labels: HashMap::new(),
-            ipam: NetworkIpamConfig::default(),
-        }
-    }
 }
 
 /// IPAM configuration for a Docker network
@@ -263,7 +247,6 @@ impl From<NetworkConfig> for NetworkCreateRequest {
         NetworkCreateRequest {
             name: String::new(), // set by caller
             driver: Some(config.driver.to_string()),
-            enable_ipv4: Some(config.enable_ipv4),
             enable_ipv6: Some(config.enable_ipv6),
             internal: Some(config.internal),
             labels: Some(config.labels),
