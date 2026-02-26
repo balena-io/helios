@@ -9,8 +9,7 @@ use crate::oci::{
 };
 use crate::remote_model::Network as RemoteNetwork;
 
-const LABEL_IPAM_CONFIG_IPV4: &str = "io.balena.private.ipam.config.ipv4";
-const LABEL_IPAM_CONFIG_IPV6: &str = "io.balena.private.ipam.config.ipv6";
+const LABEL_IPAM_CONFIG: &str = "io.balena.private.ipam.config";
 const LABEL_IPAM_OPTS: &str = "io.balena.private.ipam.options";
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -113,12 +112,13 @@ impl From<LocalNetwork> for Network {
         driver_opts.remove("com.docker.network.enable_ipv4");
         driver_opts.remove("com.docker.network.enable_ipv6");
 
-        // Only preserve IPAM pools for address families that were explicitly
-        // configured by the user.  Engine-assigned pools (e.g. an auto-assigned
-        // IPv6 subnet when the user only defined IPv4 IPAM) are discarded so
-        // they don't cause a persistent mismatch against the target.
-        let has_ipv4_config = labels.remove(LABEL_IPAM_CONFIG_IPV4).is_some();
-        let has_ipv6_config = labels.remove(LABEL_IPAM_CONFIG_IPV6).is_some();
+        // Only preserve IPAM pools whose subnet was explicitly configured by the
+        // user. Engine-assigned pools are discarded so they don't cause a
+        // persistent mismatch against the target.
+        let configured_subnets: Vec<String> = labels
+            .remove(LABEL_IPAM_CONFIG)
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
 
         // Some engine inject their own IPAM options. We write user defined options
         // into a label and check that all those options are present when reading
@@ -135,10 +135,10 @@ impl From<LocalNetwork> for Network {
                 .ipam
                 .config
                 .into_iter()
-                .filter(|pool| match pool.subnet.as_ref().map(|s| s.contains(':')) {
-                    Some(true) => has_ipv6_config,
-                    Some(false) => has_ipv4_config,
-                    None => has_ipv4_config || has_ipv6_config,
+                .filter(|pool| {
+                    pool.subnet
+                        .as_ref()
+                        .is_some_and(|s| configured_subnets.contains(s))
                 })
                 .collect(),
             options: ipam_opts,
@@ -167,30 +167,18 @@ impl From<NetworkConfig> for oci::NetworkConfig {
             .labels
             .insert(LABEL_SUPERVISED.to_string(), "".to_string());
 
-        // Mark networks with IPAM config so changes trigger network recreation.
-        // Use per-family labels so we can distinguish user-defined pools from
-        // engine-assigned pools on read-back.
-        let has_ipv4_config = inner
+        // Serialize user-defined subnets into a label so engine-assigned pools
+        // can be filtered out on read-back.
+        let subnets_label = inner
             .ipam
             .config
             .iter()
-            .any(|p| p.subnet.as_ref().is_some_and(|s| !s.contains(':')));
-        let has_ipv6_config = inner
-            .ipam
-            .config
-            .iter()
-            .any(|p| p.subnet.as_ref().is_some_and(|s| s.contains(':')));
-
-        if has_ipv4_config {
-            inner
-                .labels
-                .insert(LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string());
-        }
-        if has_ipv6_config {
-            inner
-                .labels
-                .insert(LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string());
-        }
+            .filter_map(|p| p.subnet.as_deref())
+            .map(|s| serde_json::Value::String(s.to_string()))
+            .collect::<serde_json::Value>();
+        inner
+            .labels
+            .insert(LABEL_IPAM_CONFIG.to_string(), subnets_label.to_string());
 
         // Serialize user defined ipam options into a label. When reading from the network
         // we can make sure to remove options not in the target before comparing
@@ -198,7 +186,6 @@ impl From<NetworkConfig> for oci::NetworkConfig {
             .ipam
             .options
             .keys()
-            .cloned()
             .map(|s| serde_json::Value::String(s.to_string()))
             .collect::<serde_json::Value>();
         inner
@@ -416,13 +403,11 @@ mod tests {
             oci_config.labels.get("io.balena.supervised"),
             Some(&"".to_string())
         );
-        // Labels: IPv4 IPAM config label is injected for IPv4 pool
+        // Labels: IPAM config label is injected with the user-defined subnets
         assert_eq!(
-            oci_config.labels.get(LABEL_IPAM_CONFIG_IPV4),
-            Some(&"".to_string())
+            oci_config.labels.get(LABEL_IPAM_CONFIG),
+            Some(&r#"["10.0.0.0/8"]"#.to_string())
         );
-        // Labels: IPv6 IPAM config label is absent (no IPv6 pool)
-        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
         // Labels: IPAM opts label is injected with the option keys
         assert_eq!(
             oci_config.labels.get(LABEL_IPAM_OPTS),
@@ -449,14 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_oci_config_omits_ipam_labels_when_config_empty() {
-        let config = NetworkConfig::default();
-        let oci_config: oci::NetworkConfig = config.into();
-        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
-        assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
-    }
-
-    #[test]
     fn test_from_local_network_strips_injected_labels() {
         let local = LocalNetwork {
             name: "app1_my-net".to_string(),
@@ -470,7 +447,10 @@ mod tests {
             labels: [
                 // injected labels that should be stripped
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
+                (
+                    LABEL_IPAM_CONFIG.to_string(),
+                    r#"["10.0.0.0/8"]"#.to_string(),
+                ),
                 // user label that should survive
                 ("com.example.label".to_string(), "value".to_string()),
                 (LABEL_IPAM_OPTS.to_string(), r#"["opt1"]"#.to_string()),
@@ -498,8 +478,7 @@ mod tests {
 
         // Injected labels are stripped
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
-        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
-        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
+        assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG));
         assert!(!network.config.labels.contains_key(LABEL_IPAM_OPTS));
 
         // User label survives
@@ -644,13 +623,16 @@ mod tests {
     #[test]
     fn test_from_local_network_ipv4_only_strips_engine_ipv6() {
         // User defines IPv4 IPAM, engine appends an IPv6 pool.
-        // Only the IPv4 label is present → IPv6 pool is stripped.
+        // Only the IPv4 subnet is in the label → IPv6 pool is stripped.
         let local = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
+                (
+                    LABEL_IPAM_CONFIG.to_string(),
+                    r#"["172.28.0.0/16"]"#.to_string(),
+                ),
             ]
             .into_iter()
             .collect(),
@@ -685,14 +667,16 @@ mod tests {
 
     #[test]
     fn test_from_local_network_both_families_keeps_all() {
-        // User defines both IPv4 and IPv6 IPAM -> both labels present -> both kept
+        // User defines both IPv4 and IPv6 IPAM -> both subnets in label -> both kept
         let local = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string()),
+                (
+                    LABEL_IPAM_CONFIG.to_string(),
+                    r#"["172.28.0.0/16","fd00::/80"]"#.to_string(),
+                ),
             ]
             .into_iter()
             .collect(),
@@ -732,13 +716,16 @@ mod tests {
     #[test]
     fn test_from_local_network_ipv6_only_strips_engine_ipv4() {
         // User defines IPv6 IPAM only, engine prepends an IPv4 pool.
-        // Only the IPv6 label is present so IPv4 pool is stripped.
+        // Only the IPv6 subnet is in the label → IPv4 pool is stripped.
         let local = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
                 (LABEL_SUPERVISED.to_string(), "".to_string()),
-                (LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string()),
+                (
+                    LABEL_IPAM_CONFIG.to_string(),
+                    r#"["2001:db8::/64"]"#.to_string(),
+                ),
             ]
             .into_iter()
             .collect(),
