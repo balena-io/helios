@@ -11,6 +11,7 @@ use crate::remote_model::Network as RemoteNetwork;
 
 const LABEL_IPAM_CONFIG_IPV4: &str = "io.balena.private.ipam.config.ipv4";
 const LABEL_IPAM_CONFIG_IPV6: &str = "io.balena.private.ipam.config.ipv6";
+const LABEL_IPAM_OPTS: &str = "io.balena.private.ipam.options";
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Network {
@@ -101,6 +102,7 @@ impl From<LocalNetwork> for Network {
         let network_name = net.name;
         let mut labels = net.labels;
         let mut driver_opts = net.driver_opts;
+        let mut ipam_opts = net.ipam.options;
 
         // Remove labels injected during create that are not part of the
         // compose definition
@@ -117,6 +119,16 @@ impl From<LocalNetwork> for Network {
         // they don't cause a persistent mismatch against the target.
         let has_ipv4_config = labels.remove(LABEL_IPAM_CONFIG_IPV4).is_some();
         let has_ipv6_config = labels.remove(LABEL_IPAM_CONFIG_IPV6).is_some();
+
+        // Some engine inject their own IPAM options. We write user defined options
+        // into a label and check that all those options are present when reading
+        // the state
+        let ipam_opts_from_label: Vec<String> = labels
+            .remove(LABEL_IPAM_OPTS)
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
+        ipam_opts.retain(|k, _| ipam_opts_from_label.contains(k));
+
         let ipam = NetworkIpamConfig {
             driver: net.ipam.driver,
             config: net
@@ -129,7 +141,7 @@ impl From<LocalNetwork> for Network {
                     None => has_ipv4_config || has_ipv6_config,
                 })
                 .collect(),
-            options: net.ipam.options,
+            options: ipam_opts,
         };
 
         Network {
@@ -179,6 +191,19 @@ impl From<NetworkConfig> for oci::NetworkConfig {
                 .labels
                 .insert(LABEL_IPAM_CONFIG_IPV6.to_string(), "".to_string());
         }
+
+        // Serialize user defined ipam options into a label. When reading from the network
+        // we can make sure to remove options not in the target before comparing
+        let opts_label = inner
+            .ipam
+            .options
+            .keys()
+            .cloned()
+            .map(|s| serde_json::Value::String(s.to_string()))
+            .collect::<serde_json::Value>();
+        inner
+            .labels
+            .insert(LABEL_IPAM_OPTS.to_string(), opts_label.to_string());
 
         inner
     }
@@ -398,6 +423,11 @@ mod tests {
         );
         // Labels: IPv6 IPAM config label is absent (no IPv6 pool)
         assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
+        // Labels: IPAM opts label is injected with the option keys
+        assert_eq!(
+            oci_config.labels.get(LABEL_IPAM_OPTS),
+            Some(&r#"["opt1"]"#.to_string())
+        );
 
         // IPAM
         assert_eq!(oci_config.ipam.driver.to_string(), "custom");
@@ -443,6 +473,7 @@ mod tests {
                 (LABEL_IPAM_CONFIG_IPV4.to_string(), "".to_string()),
                 // user label that should survive
                 ("com.example.label".to_string(), "value".to_string()),
+                (LABEL_IPAM_OPTS.to_string(), r#"["opt1"]"#.to_string()),
             ]
             .into_iter()
             .collect(),
@@ -469,6 +500,7 @@ mod tests {
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
         assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
         assert!(!network.config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
+        assert!(!network.config.labels.contains_key(LABEL_IPAM_OPTS));
 
         // User label survives
         assert_eq!(
