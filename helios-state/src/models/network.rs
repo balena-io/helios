@@ -4,19 +4,19 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SUPERVISED;
+use crate::oci::{
+    self, LocalNetwork, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver, NetworkIpamPoolConfig,
+};
+use crate::remote_model::Network as RemoteNetwork;
 
 const LABEL_IPAM_CONFIG_IPV4: &str = "io.balena.private.ipam.config.ipv4";
 const LABEL_IPAM_CONFIG_IPV6: &str = "io.balena.private.ipam.config.ipv6";
-use crate::oci::{
-    LocalNetwork, NetworkConfig as OciNetworkConfig, NetworkDriver, NetworkIpamConfig,
-    NetworkIpamDriver, NetworkIpamPoolConfig,
-};
-use crate::remote_model::Network as RemoteNetwork;
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     #[serde(default)]
     pub network_name: String,
+    #[serde(default)]
     pub config: NetworkConfig,
 }
 
@@ -25,10 +25,10 @@ impl State for Network {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-pub struct NetworkConfig(OciNetworkConfig);
+pub struct NetworkConfig(oci::NetworkConfig);
 
 impl Deref for NetworkConfig {
-    type Target = OciNetworkConfig;
+    type Target = oci::NetworkConfig;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -57,7 +57,7 @@ impl From<RemoteNetwork> for NetworkConfig {
             .or_else(|| enable_ipv6_opt.map(|v| v == "true"))
             .unwrap_or(false);
 
-        NetworkConfig(OciNetworkConfig {
+        NetworkConfig(oci::NetworkConfig {
             driver: net.driver.map(NetworkDriver::from).unwrap_or_default(),
             driver_opts,
             enable_ipv6,
@@ -134,7 +134,7 @@ impl From<LocalNetwork> for Network {
 
         Network {
             network_name,
-            config: NetworkConfig(OciNetworkConfig {
+            config: NetworkConfig(oci::NetworkConfig {
                 driver: net.driver,
                 driver_opts,
                 enable_ipv6: net.enable_ipv6,
@@ -146,7 +146,7 @@ impl From<LocalNetwork> for Network {
     }
 }
 
-impl From<NetworkConfig> for OciNetworkConfig {
+impl From<NetworkConfig> for oci::NetworkConfig {
     fn from(net: NetworkConfig) -> Self {
         let mut inner = net.0;
 
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_to_oci_config_maps_all_fields() {
-        let config = NetworkConfig(OciNetworkConfig {
+        let config = NetworkConfig(oci::NetworkConfig {
             driver: NetworkDriver::from("overlay".to_string()),
             driver_opts: [(
                 "com.docker.network.driver.mtu".to_string(),
@@ -365,7 +365,7 @@ mod tests {
             },
         });
 
-        let oci_config: OciNetworkConfig = config.into();
+        let oci_config: oci::NetworkConfig = config.into();
 
         // Basic fields
         assert_eq!(oci_config.driver.to_string(), "overlay");
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn test_to_oci_config_omits_ipam_labels_when_config_empty() {
         let config = NetworkConfig::default();
-        let oci_config: OciNetworkConfig = config.into();
+        let oci_config: oci::NetworkConfig = config.into();
         assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV4));
         assert!(!oci_config.labels.contains_key(LABEL_IPAM_CONFIG_IPV6));
     }

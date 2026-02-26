@@ -990,21 +990,7 @@ mod tests {
                                 },
                             },
                             "networks": {
-                                "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
+                                "my-network": {},
                             },
                         }
                     }
@@ -1054,21 +1040,7 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "old-network": {
-                                    "network_name": "my-app-uuid_old-network",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
+                                "old-network": {},
                             },
                         }
                     }
@@ -1125,21 +1097,7 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "network-a": {
-                                    "network_name": "my-app-uuid_network-a",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
+                                "network-a": {},
                             },
                         }
                     }
@@ -1158,21 +1116,7 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "network-b": {
-                                    "network_name": "my-app-uuid_network-b",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
+                                "network-b": {},
                             },
                         }
                     }
@@ -1219,15 +1163,7 @@ mod tests {
                                     "network_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "bridge",
-                                        "driver_opts": {},
                                         "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
                                     },
                                 },
                             },
@@ -1252,15 +1188,7 @@ mod tests {
                                     "network_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "overlay",
-                                        "driver_opts": {},
                                         "enable_ipv6": true,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
                                     },
                                 },
                             },
@@ -1315,36 +1243,8 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "net-a": {
-                                    "network_name": "my-app-uuid_net-a",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": false,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
-                                "net-b": {
-                                    "network_name": "my-app-uuid_net-b",
-                                    "config": {
-                                        "driver": "bridge",
-                                        "driver_opts": {},
-                                        "enable_ipv6": false,
-                                        "internal": true,
-                                        "labels": {},
-                                        "ipam": {
-                                            "driver": "default",
-                                            "config": [],
-                                            "options": {},
-                                        },
-                                    },
-                                },
+                                "net-a": {},
+                                "net-b": {},
                             },
                         }
                     }
