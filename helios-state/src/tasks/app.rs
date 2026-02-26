@@ -9,8 +9,9 @@ use crate::models::{
     App, AppMap, AppTarget, Device, ImageRef, Network, Release, Service, ServiceContainerStatus,
     ServiceContainerSummary, ServiceTarget, Volume,
 };
+use crate::store::{self, DocumentStore};
+
 use crate::oci::{Client as Docker, Error as OciError, WithContext};
-use crate::util::store::{Store, StoreError};
 
 use super::image::create_image;
 use super::utils::{find_future_service, find_installed_service};
@@ -18,7 +19,7 @@ use super::utils::{find_future_service, find_installed_service};
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error(transparent)]
-    Store(#[from] StoreError),
+    Store(#[from] store::Error),
     #[error(transparent)]
     Oci(#[from] OciError),
 }
@@ -28,8 +29,8 @@ fn create_app(
     maybe_app: View<Option<App>>,
     Target(tgt_app): Target<App>,
     Args(app_uuid): Args<Uuid>,
-    store: Res<Store>,
-) -> IO<App, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<App, store::Error> {
     enforce!(maybe_app.is_none(), "app already exists");
 
     let AppTarget { id, name, .. } = tgt_app;
@@ -43,10 +44,10 @@ fn create_app(
         let local_store = store.as_ref().expect("store should be available");
         // store id and name as local state
         local_store
-            .write(format!("/apps/{app_uuid}"), "id", &app.id)
+            .put(format!("apps/{app_uuid}/id"), &app.id)
             .await?;
         local_store
-            .write(format!("/apps/{app_uuid}"), "name", &app.name)
+            .put(format!("apps/{app_uuid}/name"), &app.name)
             .await?;
 
         Ok(app)
@@ -70,14 +71,12 @@ fn store_app_id(
     mut id: View<u32>,
     Target(tgt): Target<u32>,
     Args(app_uuid): Args<String>,
-    store: Res<Store>,
-) -> IO<u32, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<u32, store::Error> {
     *id = tgt;
     with_io(id, async move |id| {
         let local_store = store.as_ref().expect("store should be available");
-        local_store
-            .write(format!("/apps/{app_uuid}"), "id", &*id)
-            .await?;
+        local_store.put(format!("apps/{app_uuid}/id"), &*id).await?;
         Ok(id)
     })
 }
@@ -87,13 +86,13 @@ fn store_app_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
     Args(app_uuid): Args<String>,
-    store: Res<Store>,
-) -> IO<Option<String>, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<Option<String>, store::Error> {
     *name = tgt;
     with_io(name, async move |name| {
         let local_store = store.as_ref().expect("store should be available");
         local_store
-            .write(format!("/apps/{app_uuid}"), "name", &*name)
+            .put(format!("apps/{app_uuid}/name"), &*name)
             .await?;
         Ok(name)
     })
@@ -171,8 +170,8 @@ fn finish_release(
     mut release: View<Release>,
     Target(target): Target<Release>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
-    store: Res<Store>,
-) -> IO<Release, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<Release, store::Error> {
     // all target services have been installed
     enforce!(target.services.iter().all(|(svc_name, tgt_svc)| {
         release
@@ -205,9 +204,8 @@ fn finish_release(
         // mark the release as installed on the local store
         let local_store = store.as_ref().expect("store should be available");
         local_store
-            .write(
-                format!("/apps/{app_uuid}/releases/{commit}"),
-                "installed",
+            .put(
+                format!("apps/{app_uuid}/releases/{commit}/installed"),
                 &true,
             )
             .await?;
@@ -392,7 +390,7 @@ fn install_service(
     Target(tgt): Target<Service>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
-    store: Res<Store>,
+    store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
     enforce!(svc.container.is_none(), "service container already exists");
 
@@ -427,9 +425,8 @@ fn install_service(
 
             // store the image uri that corresponds to the current release service
             local_store
-                .write(
-                    format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
-                    "image",
+                .put(
+                    format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
                     &svc.image,
                 )
                 .await?;
@@ -753,17 +750,16 @@ fn store_service_image_uri(
     mut img: View<ImageRef>,
     Target(tgt): Target<ImageUri>,
     Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
-    store: Res<Store>,
-) -> IO<ImageRef, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<ImageRef, store::Error> {
     *img = ImageRef::Uri(tgt);
 
     with_io(img, async move |img| {
         let local_store = store.as_ref().expect("store should be available");
         // store the image uri that corresponds to the current release service
         local_store
-            .write(
-                format!("/apps/{app_uuid}/releases/{commit}/services/{svc_name}"),
-                "image",
+            .put(
+                format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
                 &*img,
             )
             .await?;

@@ -967,6 +967,7 @@ dependencies = [
  "helios-oci",
  "helios-remote",
  "helios-state",
+ "helios-store",
  "helios-util",
  "tokio",
  "tracing",
@@ -1026,6 +1027,7 @@ version = "0.19.1"
 dependencies = [
  "helios-remote-model",
  "helios-state",
+ "helios-store",
  "helios-util",
  "rand 0.10.0",
  "reqwest",
@@ -1054,6 +1056,7 @@ dependencies = [
  "helios-legacy",
  "helios-oci",
  "helios-remote-model",
+ "helios-store",
  "helios-util",
  "mahler",
  "pretty_assertions",

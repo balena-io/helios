@@ -9,9 +9,9 @@ use tracing::{debug, warn};
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
 use crate::oci::{Client as Docker, Error as DockerError};
+use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
-use crate::util::store::{Store, StoreError};
 use crate::util::systemd;
 use crate::util::tar;
 
@@ -21,7 +21,7 @@ enum HostUpdateError {
     Docker(#[from] DockerError),
 
     #[error(transparent)]
-    LocalStore(#[from] StoreError),
+    LocalStore(#[from] store::Error),
 
     #[error(transparent)]
     IO(#[from] std::io::Error),
@@ -38,8 +38,8 @@ fn init_hostapp_release(
     Args(release_uuid): Args<String>,
     Target(tgt): Target<HostRelease>,
     System(device): System<Device>,
-    store: Res<Store>,
-) -> IO<Option<HostRelease>, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<Option<HostRelease>, store::Error> {
     let HostReleaseTarget {
         app,
         image,
@@ -78,7 +78,7 @@ fn init_hostapp_release(
         // write the release data into the store
         if let (Some(rel), Some(local_store)) = (maybe_rel.as_ref(), store.as_ref()) {
             local_store
-                .write(format!("/host/releases/{release_uuid}"), "hostapp", rel)
+                .put(format!("host/releases/{release_uuid}/hostapp"), rel)
                 .await?;
         }
         Ok(maybe_rel)
@@ -96,7 +96,7 @@ fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
     docker: Res<Docker>,
-    store: Res<Store>,
+    store: Res<DocumentStore>,
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
@@ -190,11 +190,7 @@ fn install_hostapp_release(
         // write the release data into the store
         if let Some(local_store) = store.as_ref() {
             local_store
-                .write(
-                    format!("/host/releases/{release_uuid}"),
-                    "hostapp",
-                    &*release,
-                )
+                .put(format!("host/releases/{release_uuid}/hostapp"), &*release)
                 .await?;
         }
 
@@ -226,8 +222,8 @@ fn update_script_uri(
     mut rel: View<HostRelease>,
     Target(tgt): Target<HostRelease>,
     Args(release_uuid): Args<String>,
-    store: Res<Store>,
-) -> IO<HostRelease, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<HostRelease, store::Error> {
     // do nothing if the release is not currently running
     enforce!(
         rel.status == HostReleaseStatus::Running,
@@ -241,7 +237,7 @@ fn update_script_uri(
         // write the release data into the store
         if let Some(local_store) = store.as_ref() {
             local_store
-                .write(format!("/host/releases/{release_uuid}"), "hostapp", &*rel)
+                .put(format!("host/releases/{release_uuid}/hostapp"), &*rel)
                 .await?;
         }
 
@@ -253,8 +249,8 @@ fn update_script_uri(
 fn remove_old_metadata(
     rel: View<HostRelease>,
     Args(release_uuid): Args<String>,
-    store: Res<Store>,
-) -> IO<Option<HostRelease>, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<Option<HostRelease>, store::Error> {
     // remove the old release
     let rel = rel.delete();
 
@@ -262,7 +258,7 @@ fn remove_old_metadata(
         // remove the old release metadata
         if let Some(local_store) = store.as_ref() {
             local_store
-                .delete_all(format!("/host/releases/{release_uuid}"))
+                .delete(format!("host/releases/{release_uuid}/hostapp"))
                 .await?;
         }
 

@@ -21,4 +21,5 @@ pub use report::start_report;
 pub use helios_remote_model as model;
 
 use helios_state as state;
+use helios_store as store;
 use helios_util as util;

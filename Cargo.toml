@@ -51,6 +51,10 @@ path = "./helios-api"
 version = "0"
 default-features = false
 
+[workspace.dependencies.helios-store]
+path = "./helios-store"
+version = "0"
+
 [workspace.dependencies.helios-util]
 path = "./helios-util"
 version = "0"

@@ -1,8 +1,9 @@
 use mahler::exception;
 use mahler::worker::{Uninitialized, Worker};
 
+use helios_store::DocumentStore;
+
 use crate::oci::{Client as Docker, RegistryAuth};
-use crate::util::store::Store;
 
 use super::config::HostRuntimeDir;
 use super::models::Device;
@@ -39,7 +40,7 @@ pub type LocalWorker = Worker<Device, Uninitialized>;
 /// Create worker with necessary resources
 pub fn create(
     docker: Docker,
-    local_store: Store,
+    local_store: DocumentStore,
     host_runtime_dir: HostRuntimeDir,
     registry_auth_client: Option<RegistryAuth>,
 ) -> LocalWorker {

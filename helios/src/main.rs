@@ -18,6 +18,7 @@ use helios_legacy as legacy;
 use helios_oci as oci;
 use helios_remote as remote;
 use helios_state as state;
+use helios_store::DocumentStore;
 use helios_util as util;
 use helios_util::types::Uuid;
 
@@ -31,7 +32,6 @@ use crate::remote::{
 use crate::state::StateConfig;
 use crate::util::config::StoredConfig;
 use crate::util::dirs::config_dir;
-use crate::util::store::Store;
 
 fn initialize_tracing() {
     // Initialize tracing subscriber for human-readable logs
@@ -42,6 +42,7 @@ fn initialize_tracing() {
             EnvFilter::try_from_default_env().unwrap_or(
                 EnvFilter::default()
                     .add_directive("trace".parse().unwrap())
+                    .add_directive("helios_store=warn".parse().unwrap())
                     .add_directive("mahler=debug".parse().unwrap())
                     .add_directive("hyper=error".parse().unwrap())
                     .add_directive("reqwest=debug".parse().unwrap())
@@ -68,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = cli::parse();
 
     // Create a new configuration store instance
-    let config_store = Store::new(config_dir());
+    let config_store = DocumentStore::with_root(config_dir()).await?;
 
     let api_config = cli
         .local_api_address
@@ -245,12 +246,11 @@ where
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
 async fn maybe_provision(
     cli: &Cli,
-    config_store: &Store,
+    config_store: &DocumentStore,
 ) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
     // Load our provisioning config, if one exists
-    let provisioning_config: Option<ProvisioningConfig> = config_store
-        .read("/", ProvisioningConfig::default_name())
-        .await?;
+    let provisioning_config: Option<ProvisioningConfig> =
+        config_store.get(ProvisioningConfig::default_name()).await?;
 
     // See if the triplet (uuid, remote_api_endpoint, remote_api_key) is provided.
     // If so, we have everything we need to assume an identity.

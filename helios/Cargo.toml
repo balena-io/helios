@@ -18,6 +18,7 @@ helios-legacy.workspace = true
 helios-oci.workspace = true
 helios-remote.workspace = true
 helios-state.workspace = true
+helios-store.workspace = true
 helios-util.workspace = true
 
 clap.workspace = true

@@ -7,12 +7,12 @@ use tracing::debug;
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{Device, ImageRef};
 use crate::oci::{Client as Docker, Error as OciError};
-use crate::util::store::{Store, StoreError};
+use crate::store::{self, DocumentStore};
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error(transparent)]
-    Store(#[from] StoreError),
+    Store(#[from] store::Error),
     #[error(transparent)]
     Oci(#[from] OciError),
 }
@@ -23,7 +23,7 @@ enum Error {
 fn perform_cleanup(
     device: View<Device>,
     docker: Res<Docker>,
-    store: Res<Store>,
+    store: Res<DocumentStore>,
 ) -> IO<Device, Error> {
     with_io(device, |mut device| async move {
         let docker = docker
@@ -32,16 +32,25 @@ fn perform_cleanup(
         let local_store = store.as_ref().expect("store should be available");
 
         // clean up old app/release metadata and images
-        let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
+        let apps_view = local_store.as_view().at("apps")?;
+        let app_uuids: Vec<Uuid> = apps_view
+            .keys()
+            .await?
+            .into_iter()
+            .map(Uuid::from)
+            .collect();
         for app_uuid in app_uuids {
-            let release_uuids: Vec<Uuid> = local_store
-                .list(format!("/apps/{app_uuid}/releases"))
-                .await?;
+            let releases_view = apps_view.at(format!("{app_uuid}/releases"))?;
+            let release_uuids: Vec<Uuid> = releases_view
+                .keys()
+                .await?
+                .into_iter()
+                .map(Uuid::from)
+                .collect();
 
             for release_uuid in release_uuids {
-                let service_names: Vec<String> = local_store
-                    .list(format!("/apps/{app_uuid}/releases/{release_uuid}/services"))
-                    .await?;
+                let services_view = releases_view.at(format!("{release_uuid}/services"))?;
+                let service_names: Vec<String> = services_view.keys().await?;
                 for service_name in service_names {
                     // the service does not exist in the end/target state
                     if !device
@@ -52,12 +61,7 @@ fn perform_cleanup(
                         .unwrap_or_default()
                     {
                         // if there is an image reference for the service
-                        if let Some(img_uri) = local_store
-                            .read::<_, ImageUri>(
-                                format!("/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"),
-                                "image",
-                            )
-                        .await?
+                        if let Some(img_uri) = services_view.get::<ImageUri>(format!("{service_name}/image")).await? 
                         // and the image is not being used by any other service
                         && !device.apps.iter().any(|(a_uuid, app)| {
                             app.releases.iter().any(|(r_uuid, rel)| {
@@ -72,8 +76,7 @@ fn perform_cleanup(
                                     }
                                 })
                             })
-                        })
-                        {
+                        }) {
                             // then remove the image by tag
                             debug!("removing unused image {img_uri}");
                             docker.image().remove(&img_uri).await?;
@@ -81,10 +84,8 @@ fn perform_cleanup(
                         }
 
                         // remove the service metadata
-                        local_store
-                            .delete_all(format!(
-                                "/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"
-                            ))
+                        services_view
+                            .delete_all(&format!("{service_name}/*"))
                             .await?;
                     }
                 }
@@ -97,17 +98,20 @@ fn perform_cleanup(
                     .unwrap_or_default()
                 {
                     // remove the release metadata
-                    local_store
-                        .delete_all(format!("/apps/{app_uuid}/releases/{release_uuid}"))
+                    releases_view
+                        .delete_all(&format!("{release_uuid}/*"))
                         .await?;
                 }
             }
 
             // remove app metadata not in the end/target state
             if !device.apps.contains_key(&app_uuid) {
-                local_store.delete_all(format!("/apps/{app_uuid}")).await?;
+                apps_view.delete_all(&format!("{app_uuid}/*")).await?;
             }
         }
+
+        // clean up store
+        local_store.gc().await?;
 
         Ok(device)
     })
@@ -117,12 +121,12 @@ fn perform_cleanup(
 fn set_device_name(
     mut name: View<Option<String>>,
     Target(tgt): Target<Option<String>>,
-    store: Res<Store>,
-) -> IO<Option<String>, StoreError> {
+    store: Res<DocumentStore>,
+) -> IO<Option<String>, store::Error> {
     *name = tgt;
     with_io(name, |name| async move {
         if let (Some(local_store), Some(name)) = (store.as_ref(), name.as_ref()) {
-            local_store.write("/", "device_name", name).await?;
+            local_store.put("device_name", name).await?;
         }
 
         Ok(name)
