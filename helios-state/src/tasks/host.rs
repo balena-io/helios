@@ -4,7 +4,7 @@ use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
@@ -85,6 +85,10 @@ fn init_hostapp_release(
     })
 }
 
+// prefix for container/dir and files for balenahup
+// XXX: use a more generic container name?
+const BALENAHUP: &str = "balenahup";
+
 /// Install the hostapp release
 ///
 /// Applies to `create(/host/releases/<commit>)`
@@ -119,20 +123,19 @@ fn install_hostapp_release(
         let container_helper = docker.container();
 
         // remove any existing `balenahup` container
-        // XXX: use a more generic container name?
-        container_helper.remove("balenahup").await?;
+        container_helper.remove(BALENAHUP).await?;
 
         // create a `balenahup` container from the update image
         let id = container_helper
-            .create_tmp("balenahup", &release.updater)
+            .create_tmp(BALENAHUP, &release.updater)
             .await?;
 
         // configure the target dir in $RUNTIME_DIR/balenahup
-        let target_dir = runtime_dir().join("balenahup");
+        let target_dir = runtime_dir().join(BALENAHUP);
         let host_target_dir = host_runtime_dir
             .as_ref()
             .expect("should not be nil")
-            .join("balenahup");
+            .join(BALENAHUP);
 
         // read scripts from the container
         let bytes = container_helper.read_from(&id, "/app").await?;
@@ -172,8 +175,17 @@ fn install_hostapp_release(
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
 
-        // remove the balenahup container
-        container_helper.remove("balenahup").await?;
+        // remove the balenahup container and image
+        debug!("cleaning up");
+        let cleanup_res = async {
+            container_helper.remove(BALENAHUP).await?;
+            docker.image().remove(&release.updater).await
+        }
+        .await;
+
+        if let Err(e) = cleanup_res {
+            warn!("clean-up failed: {e}");
+        }
 
         // write the release data into the store
         if let Some(local_store) = store.as_ref() {
@@ -193,7 +205,7 @@ fn install_hostapp_release(
             // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
             // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
             // HUP after a rollback
-            fs::File::create(runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")))?;
+            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))?;
 
             Ok(())
         })
