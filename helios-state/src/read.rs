@@ -173,9 +173,8 @@ pub async fn read(
                 })
             };
 
-            // Create the service configuration from the container and image config
-            let image = docker.image().inspect(&local_container.image_id).await?;
-            let mut svc = Service::from_local_container(local_container, &image.config);
+            // Create the service configuration from the container
+            let mut svc = Service::from(local_container);
 
             // Link the service to the local image if there is state metadata about it
             svc.image = local_store

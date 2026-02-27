@@ -1,7 +1,7 @@
 use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
-use crate::oci::{ContainerState, ContainerStatus, DateTime, ImageConfig, LocalContainer};
+use crate::oci::{ContainerState, ContainerStatus, DateTime, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
 use crate::util::crypto::{LC_ALPHA_NUM, pseudorandom_string};
 
@@ -148,8 +148,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
     }
 }
 
-impl Service {
-    pub fn from_local_container(container: LocalContainer, image_config: &ImageConfig) -> Self {
+impl From<LocalContainer> for Service {
+    fn from(container: LocalContainer) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
@@ -168,7 +168,7 @@ impl Service {
         // FIXME: we probably want to handle the host/network manager race condition
         // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
         let started = container_summary.status != ServiceContainerStatus::Installed;
-        let config = ServiceConfig::from_container_config(container.config, image_config);
+        let config = ServiceConfig::from(container.config);
 
         Self {
             id,
