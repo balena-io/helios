@@ -1,4 +1,70 @@
 - commits:
+    - subject: Store user defined service fields and labels in container
+      hash: 87bb9e6ee8d4f3ad94196b2a326275e4caf9e817
+      body: |
+        This replaces the previous mechanism for comparison with the image
+        metadata. This now uses the same conventions used for networks.
+
+        For fields that can be defined in both the composition and image, when
+        creating the container, this writes the user defined composition fields
+        in a label and it uses that information on read-back to reconstruct the
+        composition. There is no longer need for complex comparison with the
+        image
+
+        This also fixes a bug with the service reconfiguration that would
+        prevent a stopped service from being re-configured.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Store user provided IPAM config subnets on label
+      hash: 097b2e1e6e05b9f77b75f4bceeae6f1e1ae01b09
+      body: |
+        These subnets are compared to the engine reported configurations.
+        IPAM configurations not in the list are discarded to avoid a target
+        mis-match.
+
+        This replaces specific ipv6/ipv4 checking as there could be multiple
+        IPvX IPAM configs, some provided by the engine and some by the user.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Store user provided ipam options on label
+      hash: 88a8f99b2015f1c1ad0d4e99187bb376d92bbc97
+      body: |
+        Options not provided by the user are assumed to be added by the engine
+        and stripped when reading back.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use default serialization for networking types
+      hash: f92d1cee37191313b40888924229e732d95f084f
+      body: |
+        This avoids the need for putting every value in the tests
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Remove support for enable_ipv4
+      hash: f58b348472eb44775ba6ba5c90d9ff406f45eb63
+      body: |
+        This is not supported on every engine yet. With podman 5.8.0 it results
+        in a loop, we are removing this configuration for now.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+  version: 0.18.0
+  title: ""
+  date: 2026-03-02T22:19:47.360Z
+- commits:
     - subject: Support per-family IPAM labels when custom IPAM config
       hash: 69d3684a4f59814dfb6d6d50ea67284793a7de6b
       body: |
