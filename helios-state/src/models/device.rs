@@ -182,7 +182,6 @@ mod tests {
             rel.networks.get("default").unwrap().network_name,
             "app1_default"
         );
-        assert!(rel.networks.get("default").unwrap().config.enable_ipv4);
     }
 
     #[test]
@@ -201,7 +200,6 @@ mod tests {
                                     "config": {
                                         "driver": "overlay",
                                         "driver_opts": {},
-                                        "enable_ipv4": false,
                                         "enable_ipv6": false,
                                         "internal": false,
                                         "labels": {},

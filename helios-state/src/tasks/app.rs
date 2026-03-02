@@ -352,16 +352,7 @@ fn install_service(
         let local_store = store.as_ref().expect("store should be available");
 
         if let ImageRef::Uri(svc_img) = svc.image.clone() {
-            let image = docker
-                .image()
-                .inspect(svc_img.as_str())
-                .await
-                .with_context(|| format!("failed to inspect image {svc_img}"))?;
-
-            // convert the service configuration to a container configuration
-            // and mark duplicates from the image
-            let container_config = svc.config.clone().into_container_config(&image.config);
-
+            let container_config = std::mem::take(&mut svc.config).into();
             let container_id = docker
                 .container()
                 .create(&svc.container_name, &svc_img, container_config)
@@ -374,7 +365,7 @@ fn install_service(
                 .inspect(&container_id)
                 .await
                 .context("failed to inspect container for service")?;
-            *svc = Service::from_local_container(local_container, &image.config);
+            *svc = Service::from(local_container);
             svc.image = ImageRef::Uri(svc_img);
 
             // store the image uri that corresponds to the current release service
@@ -508,7 +499,11 @@ fn rename_service_container(
 fn reconfigure_service(svc: View<Service>, Target(tgt): Target<Service>) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc.config != tgt.config {
-        tasks.push(stop_service_when_requirements_are_met.with_target(&tgt));
+        if let Some(container) = svc.container.as_ref()
+            && container.status == ServiceContainerStatus::Running
+        {
+            tasks.push(stop_service_when_requirements_are_met.with_target(&tgt));
+        }
         tasks.push(remove_service_container.into_task());
         tasks.push(install_service_when_requirements_are_met.with_target(&tgt));
     }

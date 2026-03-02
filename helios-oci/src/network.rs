@@ -139,34 +139,20 @@ impl From<String> for NetworkIpamDriver {
 }
 
 /// Network configuration used to create a Docker network
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkConfig {
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
-    pub enable_ipv4: bool,
     pub enable_ipv6: bool,
     pub internal: bool,
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
 }
 
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            driver: NetworkDriver::default(),
-            driver_opts: HashMap::new(),
-            // Engine defaults to true
-            enable_ipv4: true,
-            enable_ipv6: false,
-            internal: false,
-            labels: HashMap::new(),
-            ipam: NetworkIpamConfig::default(),
-        }
-    }
-}
-
 /// IPAM configuration for a Docker network
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkIpamConfig {
     pub driver: NetworkIpamDriver,
     pub config: Vec<NetworkIpamPoolConfig>,
@@ -174,7 +160,9 @@ pub struct NetworkIpamConfig {
 }
 
 /// IPAM pool configuration for a Docker network
+#[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkIpamPoolConfig {
     pub subnet: Option<String>,
     pub gateway: Option<String>,
@@ -200,7 +188,7 @@ impl TryFrom<NetworkInspect> for LocalNetwork {
 
     fn try_from(value: NetworkInspect) -> Result<Self> {
         let name = value.name.ok_or("network name should not be nil")?;
-        let driver = NetworkDriver::from(value.driver.unwrap_or_else(|| "bridge".to_string()));
+        let driver = value.driver.map(NetworkDriver::from).unwrap_or_default();
         let driver_opts = value.options.unwrap_or_default();
         let enable_ipv4 = value.enable_ipv4.unwrap_or(true);
         let enable_ipv6 = value.enable_ipv6.unwrap_or(false);
@@ -209,9 +197,7 @@ impl TryFrom<NetworkInspect> for LocalNetwork {
 
         let ipam = match value.ipam {
             Some(ipam) => NetworkIpamConfig {
-                driver: NetworkIpamDriver::from(
-                    ipam.driver.unwrap_or_else(|| "default".to_string()),
-                ),
+                driver: ipam.driver.map(NetworkIpamDriver::from).unwrap_or_default(),
                 config: ipam
                     .config
                     .unwrap_or_default()
@@ -263,7 +249,6 @@ impl From<NetworkConfig> for NetworkCreateRequest {
         NetworkCreateRequest {
             name: String::new(), // set by caller
             driver: Some(config.driver.to_string()),
-            enable_ipv4: Some(config.enable_ipv4),
             enable_ipv6: Some(config.enable_ipv6),
             internal: Some(config.internal),
             labels: Some(config.labels),

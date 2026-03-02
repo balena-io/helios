@@ -1,8 +1,11 @@
 use mahler::state::{List, Map, State};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use serde_json as json;
 
-use crate::oci::{ContainerConfig, ImageConfig};
+use crate::oci::ContainerConfig;
+
+const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
+const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -19,91 +22,94 @@ impl State for ServiceConfig {
     type Target = Self;
 }
 
-impl ServiceConfig {
+impl From<ContainerConfig> for ServiceConfig {
     /// Convert from an OCI container to a service configuration
-    pub fn from_container_config(config: ContainerConfig, image: &ImageConfig) -> Self {
+    fn from(config: ContainerConfig) -> Self {
         let mut labels = config.labels.unwrap_or_default();
-
-        // Remove labels that are present on the image from the labels
-        // object defined for the service. Make an exception if there is a
-        // io.balena.private.label.<label> label, which means the label is in both
-        // image and service composition
-        let private_labels: HashSet<_> = labels
-            .extract_if(|k, _| k.starts_with("io.balena.private.label."))
-            .filter_map(|(k, _)| k.strip_prefix("io.balena.private.label.").map(String::from))
-            .collect();
-
-        labels.retain(|k, v| {
-            image.labels.as_ref().and_then(|l| l.get(k)) != Some(v) || private_labels.contains(k)
-        });
 
         // Remove the supervised label to skip it in the state comparison
         labels.remove("io.balena.supervised");
 
-        // if the command on the container equals the command on the image, do
-        // not add it to the service configuration
-        let command = match (&image.cmd, config.cmd) {
-            (None, Some(cmd)) => Some(cmd),
-            (Some(_), None) => None,
-            (Some(img_cmd), Some(svc_cmd)) => {
-                // if the cmd is defined in both the image and the composition, a label
-                // will be present indicating the re-definition
-                let duplicate_cmd = labels.remove("io.balena.private.cmd");
-                if img_cmd == &svc_cmd && duplicate_cmd.is_none() {
-                    None
-                } else {
-                    Some(svc_cmd)
-                }
-            }
-            (None, None) => None,
+        // Read the list of fields defined in the composition used to create
+        // this container
+        let label_config_fields: Vec<String> = labels
+            .remove(LABEL_CONFIG_FIELDS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+
+        // Remove labels from the container that were not defined in
+        // the composition. These are coming from the image and should not be
+        // read into the service config
+        let label_config_labels_value: Vec<String> = labels
+            .remove(LABEL_CONFIG_LABELS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+        labels.retain(|k, _| label_config_labels_value.contains(k));
+
+        // Read the command if part of the composition fields
+        let command = if label_config_fields.contains(&"command".to_string()) {
+            // convert the command to List<String>
+            config.cmd.map(|cmd| cmd.into_iter().collect())
+        } else {
+            None
         };
-        // convert to List<String>
-        let command = command.map(|cmd| cmd.into_iter().collect());
 
         Self {
             command,
             labels: labels.into_iter().collect(),
         }
     }
+}
 
+impl From<ServiceConfig> for ContainerConfig {
     /// Converts the service config into container configuration
     ///
-    /// This adds `io.balena.private.<property>[.<name>]` labels if the property
-    /// is defined in both the service config and image config.
-    ///
-    /// For instance if the label `some-label` is defined in both container config and image with the
-    /// same name, it adds a `io.balena.private.some-label` label to the container config to mark the
-    /// duplicate.
-    pub fn into_container_config(self, image: &ImageConfig) -> ContainerConfig {
+    /// Because some configurations may be defined on the image and the the composition,
+    /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
+    /// list of composition defined keys and labels. When reading the container state, these fields
+    /// are used to determine if the specific field/label should be read back into the state.
+    fn from(svc: ServiceConfig) -> Self {
         let ServiceConfig {
             command,
             mut labels,
             ..
-        } = self;
+        } = svc;
+
+        // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
+        // we will use these when reading the state to remove labels coming from
+        // the image
+        let label_config_labels_value = labels
+            .keys()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+        labels.insert(
+            LABEL_CONFIG_LABELS.to_string(),
+            label_config_labels_value.to_string(),
+        );
+
+        // List of config fields coming from the composition. This is only necessary for fields that
+        // may be shared between the image and service, since docker will use the image version as
+        // the default unless overriden
+        let mut fields = Vec::new();
+
+        let cmd = command.map(|c| c.into_iter().collect());
+        if cmd.is_some() {
+            fields.push("command");
+        }
+
+        // Create a label LABEL_CONFIG_FIELDS label with all the custom fields
+        let label_config_fields_value = fields
+            .into_iter()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+
+        labels.insert(
+            LABEL_CONFIG_FIELDS.to_string(),
+            label_config_fields_value.to_string(),
+        );
 
         // Set the supervised label when converting to a container
         labels.insert("io.balena.supervised".to_string(), "".to_string());
-
-        // Mark duplicate cmd
-        let cmd = command.map(|c| c.into_iter().collect());
-        if let (Some(img_cmd), Some(ctr_cmd)) = (&image.cmd, &cmd)
-            && img_cmd == ctr_cmd
-        {
-            labels.insert("io.balena.private.cmd".to_string(), String::new());
-        }
-
-        // Mark duplicate labels
-        if let Some(img_labels) = &image.labels {
-            let duplicate_keys: Vec<_> = labels
-                .iter()
-                .filter(|(k, v)| img_labels.get(*k) == Some(*v))
-                .map(|(k, _)| k.clone())
-                .collect();
-
-            for key in duplicate_keys {
-                labels.insert(format!("io.balena.private.label.{key}"), String::new());
-            }
-        }
 
         ContainerConfig {
             cmd,
