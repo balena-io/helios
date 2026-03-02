@@ -11,6 +11,7 @@ use crate::remote_model::Volume as RemoteVolume;
 pub struct Volume {
     #[serde(default)]
     pub volume_name: String,
+    #[serde(default)]
     pub config: VolumeConfig,
 }
 

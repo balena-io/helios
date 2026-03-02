@@ -1277,6 +1277,327 @@ mod tests {
     }
 
     #[test]
+    fn it_finds_a_workflow_to_create_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "started": true,
+                                    "container_name": "my-release-uuid_service1",
+                                    "image": "ubuntu:latest",
+                                    "config": {},
+                                },
+                            },
+                            "volumes": {
+                                "my-volume": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> =
+            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "initialize service 'service1' for release 'my-release-uuid'",
+                    "create volume 'my-volume' for app 'my-app-uuid'",
+                )
+                + seq!("pull image 'ubuntu:latest'")
+                + seq!("install service 'service1' for release 'my-release-uuid'")
+                + seq!("start service 'service1' for release 'my-release-uuid'")
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up"
+                );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_remove_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "old-volume": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "remove volume 'old-volume' for app 'my-app-uuid'",
+            "clean-up"
+        );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_create_and_remove_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "volume-a": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "volume-b": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = par!(
+            "remove volume 'volume-a' for app 'my-app-uuid'",
+            "create volume 'volume-b' for app 'my-app-uuid'",
+        ) + seq!("clean-up");
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    // Volume config updates are handled by removing the old volume
+    // and creating it with the new config
+    #[test]
+    fn it_finds_a_workflow_for_updating_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "my-volume": {
+                                    "volume_name": "my-app-uuid_my-volume",
+                                    "config": {
+                                        "driver": "local",
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "my-volume": {
+                                    "volume_name": "my-app-uuid_my-volume",
+                                    "config": {
+                                        "driver": "local",
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> = seq!(
+            "remove volume 'my-volume' for app 'my-app-uuid'",
+            "create volume 'my-volume' for app 'my-app-uuid'",
+            "clean-up"
+        );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_to_create_multiple_volumes_and_finalizes_release_after_volume_create() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "vol-a": {},
+                                "vol-b": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+        let expected: Dag<&str> =
+            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "create volume 'vol-a' for app 'my-app-uuid'",
+                    "create volume 'vol-b' for app 'my-app-uuid'",
+                )
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up",
+                );
+
+        let workflow = workflow.unwrap();
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
     fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
         before();
 
