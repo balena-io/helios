@@ -1,4 +1,92 @@
 - commits:
+    - subject: Add worker tests for volume task workflows
+      hash: 0b982f7ebce891a34ed8e24fb4a5a3ae37a76407
+      body: |
+        Add tests for create, remove, create-and-remove, update, and
+        multi-volume create with release finalization. These mirror the
+        existing network worker tests.
+
+        Also add #[serde(default)] to Volume config field to match the
+        Network model pattern.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Skip orphaned volume cleanup during state reading
+      hash: 908b6b02d1c65cce33c1033332203be5934d55fd
+      body: |
+        Volumes without an app-uuid label are now skipped instead of being
+        placed under UNKNOWN_APP_UUID for cleanup. They can be cleaned up
+        explicitly using legacy Supervisor's orphan volume cleanup API
+        endpoint, and in the future through a Helios API endpoint.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add volume tasks, state reading, and enforce-empty checks
+      hash: 916f9eb2c67cf29db0b183590f3d68df4f28679d
+      body: |
+        - Add create_volume and remove_volume task functions
+        - Register volume job tree at the volumes path
+        - Read supervised volumes from Docker on state initialization
+        - Enforce volumes are empty before removing a release
+        - Enforce all target volumes are created before finalizing a release
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add state model for volumes and integrate into Release
+      hash: 9d7ab443d1e6fd607b9e72dfbcdf11a8792875e7
+      body: |
+        - Introduce Volume and VolumeConfig state types.
+        - Add volumes field to Release
+        - Normalize volume names in DeviceTarget
+        - Convert from remote/local volume representations
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add OCI volume layer with VolumeClient
+      hash: c6fe79975e4d5a897e2320804e69d173db75091a
+      body: >
+        - Add VolumeClient with create, remove, inspect, list_with_labels
+        operations
+
+        - Add VolumeConfig, VolumeDriver, and LocalVolume types with bollard
+        conversions
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add Volume remote model
+      hash: be7c404b8c857727d9c246629ff333baf32efa8b
+      body: ""
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+  version: 0.19.0
+  title: ""
+  date: 2026-03-03T00:22:19.456Z
+- commits:
     - subject: Store user defined service fields and labels in container
       hash: 87bb9e6ee8d4f3ad94196b2a326275e4caf9e817
       body: |
