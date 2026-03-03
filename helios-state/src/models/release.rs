@@ -4,6 +4,7 @@ use crate::remote_model::Release as RemoteReleaseTarget;
 
 use super::network::Network;
 use super::service::Service;
+use super::volume::Volume;
 
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
@@ -12,6 +13,7 @@ pub struct Release {
     pub installed: bool,
     pub services: Map<String, Service>,
     pub networks: Map<String, Network>,
+    pub volumes: Map<String, Volume>,
 }
 
 impl From<Release> for ReleaseTarget {
@@ -20,6 +22,7 @@ impl From<Release> for ReleaseTarget {
             installed,
             services,
             networks,
+            volumes,
         } = rel;
         ReleaseTarget {
             installed,
@@ -28,6 +31,7 @@ impl From<Release> for ReleaseTarget {
                 .map(|(svc_name, svc)| (svc_name, svc.into()))
                 .collect(),
             networks: networks.into_iter().collect(),
+            volumes: volumes.into_iter().collect(),
         }
     }
 }
@@ -35,7 +39,10 @@ impl From<Release> for ReleaseTarget {
 impl From<RemoteReleaseTarget> for ReleaseTarget {
     fn from(tgt: RemoteReleaseTarget) -> Self {
         let RemoteReleaseTarget {
-            services, networks, ..
+            services,
+            networks,
+            volumes,
+            ..
         } = tgt;
         ReleaseTarget {
             installed: true,
@@ -47,6 +54,10 @@ impl From<RemoteReleaseTarget> for ReleaseTarget {
                 .into_iter()
                 .map(|(name, net)| (name, net.into()))
                 .collect(),
+            volumes: volumes
+                .into_iter()
+                .map(|(name, vol)| (name, vol.into()))
+                .collect(),
         }
     }
 }
@@ -55,6 +66,30 @@ impl From<RemoteReleaseTarget> for ReleaseTarget {
 mod tests {
     use super::*;
     use crate::remote_model;
+
+    #[test]
+    fn test_remote_release_conversion_includes_volumes() {
+        let remote: remote_model::Release = serde_json::from_value(serde_json::json!({
+            "volumes": {
+                "my-volume": {
+                    "driver": "local",
+                    "driver_opts": {
+                        "o": "bind",
+                        "type": "none",
+                        "device": "/tmp/helios"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target: ReleaseTarget = remote.into();
+        assert!(target.installed);
+        assert!(target.volumes.contains_key("my-volume"));
+        let vol = target.volumes.get("my-volume").unwrap();
+        assert_eq!(vol.config.driver.to_string(), "local");
+        assert_eq!(vol.config.driver_opts.get("o"), Some(&"bind".to_string()));
+    }
 
     #[test]
     fn test_remote_release_conversion_includes_networks() {

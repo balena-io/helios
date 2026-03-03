@@ -1,7 +1,7 @@
 use mahler::state::Map;
 use thiserror::Error;
 use tokio::fs;
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
@@ -11,7 +11,7 @@ use crate::util::dirs::runtime_dir;
 use crate::util::store::{Store, StoreError};
 
 use super::models::{
-    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
+    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID, Volume,
 };
 
 #[derive(Debug, Error)]
@@ -170,6 +170,7 @@ pub async fn read(
                     installed,
                     services: Map::new(),
                     networks: Map::new(),
+                    volumes: Map::new(),
                 })
             };
 
@@ -216,20 +217,65 @@ pub async fn read(
 
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
-            // If app_uuid is unknown, insert orphaned network under
-            // unknown release to prepare for cleanup
-            let release = if let Some(release) = app.releases.values_mut().next() {
-                release
-            } else {
+            // If there are no releases, create an unknown release for cleanup
+            if app.releases.is_empty() {
                 app.releases
                     .entry(UNKNOWN_RELEASE_UUID.into())
                     .or_insert(Release {
                         installed: false,
                         services: Map::new(),
                         networks: Map::new(),
-                    })
+                        volumes: Map::new(),
+                    });
+            }
+            // Add network to all existing releases
+            for release in app.releases.values_mut() {
+                release.networks.insert(net_name.clone(), network.clone());
+            }
+        }
+
+        // read the state of volumes
+        let volumes = docker
+            .volume()
+            .list_with_labels(vec![LABEL_SUPERVISED])
+            .await?;
+
+        for volume_name in volumes {
+            let local_volume = docker.volume().inspect(&volume_name).await?;
+
+            let Some(app_uuid_str) = local_volume.labels.get(LABEL_APP_UUID) else {
+                // Skip orphaned volumes with no app-uuid label
+                trace!(volume = %local_volume.name, "skipping orphaned volume");
+                continue;
             };
-            release.networks.insert(net_name, network);
+            let app_uuid: Uuid = app_uuid_str.as_str().into();
+
+            // Extract the volume name by stripping the "{app_uuid}_" prefix
+            let vol_name = local_volume
+                .name
+                .strip_prefix(&format!("{app_uuid}_"))
+                .unwrap_or(&local_volume.name)
+                .to_owned();
+
+            let volume: Volume = local_volume.into();
+
+            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+
+            // If there are no releases, create an unknown release for cleanup
+            if app.releases.is_empty() {
+                app.releases
+                    .entry(UNKNOWN_RELEASE_UUID.into())
+                    .or_insert(Release {
+                        installed: false,
+                        services: Map::new(),
+                        networks: Map::new(),
+                        volumes: Map::new(),
+                    });
+            }
+            // Add volume to all existing releases
+            for release in app.releases.values_mut() {
+                release.volumes.insert(vol_name.clone(), volume.clone());
+            }
         }
     }
 
