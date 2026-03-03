@@ -1,4 +1,75 @@
 - commits:
+    - subject: Remove the container and image after HUP
+      hash: cb5a2bfc9212fca49ef6b9ae4d68b43db534603f
+      body: |
+        Avoids images accumulating over time. These operations may fail
+        silently.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Re-set host app install_attempts after 24 hours
+      hash: 039aff533b6cef5bad4350390581ffd97ffe5932
+      body: |
+        This allows helios to automatically retry the hostOS update after 24
+        hours if an error or rollback happens.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Report aborted state to the API when operations could not complete
+      hash: 30fcbab60f408f5a594eb8136d534dbe6904f681
+      body: |
+        The state engine now sets the aborted status when the workflow
+        terminated with exceptions. This state is now reported to the backend
+        to let the user know about the issue.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Group balenahup FS operations with run_async
+      hash: 97afbbd35407b1442e145d1a483ce447ebaf9f2c
+      body: |
+        Avoid context switching while performing fs operations. This also fixes
+        a bug where the unpack operation (which is sync) was being allowed to
+        block the full runtime instead of running in a separate thread.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Use mahler exceptions to skip HUP when applicable
+      hash: 493868d9388212d6451ca6cdd228f3dc1ce53252
+      body: >
+        The previous implementation would return a runtime error when HUP had
+
+        been attempted too many times or when a reboot was necessary. With some
+
+        recent changes in the state apply behavior, that would result in an
+
+        infinite retry-loop, never yielding to the legacy supervisor to perform
+        the
+
+        reboot.
+
+
+        This now uses mahler exceptions, skipping the install step if already
+
+        installed for this session or if install attempts > 3
+      footer:
+        Change-type: patch
+        change-type: patch
+        Depends-on: balena-io-modules/mahler#78
+        depends-on: balena-io-modules/mahler#78
+      author: felipe
+      nested: []
+  version: 0.19.1
+  title: ""
+  date: 2026-03-03T21:42:18.174Z
+- commits:
     - subject: Add worker tests for volume task workflows
       hash: 0b982f7ebce891a34ed8e24fb4a5a3ae37a76407
       body: |
