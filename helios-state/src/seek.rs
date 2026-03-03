@@ -24,30 +24,21 @@ use super::worker::{LocalWorker, create};
 /// https://docs.balena.io/learn/manage/device-statuses/#update-statuses
 ///
 /// This is basically the status of the seek loop
-///
-/// TODO: discuss later if we want  to use the interrupted state, it might make
-/// sense in case the device gets stuck on that state
 #[derive(Clone, Serialize, Default, Debug)]
-#[serde(tag = "status", content = "errors", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum UpdateStatus {
+    /// target state apply terminated successfully
     #[default]
     Done,
+    /// target state apply is in progress
+    #[serde(rename = "applying changes")]
     ApplyingChanges,
+    /// invalid target state
     Rejected,
-    Aborted(Vec<String>),
+    /// target state apply has been aborted pending action from the user
+    Aborted,
+    /// target state apply has been interrupted by a new request
     Interrupted,
-}
-
-impl From<WorkflowStatus> for UpdateStatus {
-    fn from(status: WorkflowStatus) -> Self {
-        use WorkflowStatus::*;
-        match status {
-            Success => UpdateStatus::Done,
-            Aborted(errors) => {
-                UpdateStatus::Aborted(errors.iter().map(|e| e.to_string()).collect())
-            }
-        }
-    }
 }
 
 /// Helios' state and apply status to be reported used by the API
@@ -232,15 +223,21 @@ async fn seek_target(
 
         let now = Instant::now();
         if let Some(workflow) = worker.find_workflow(&target)? {
-            if tracing::enabled!(tracing::Level::WARN) && !workflow.exceptions().is_empty() {
+            let has_exceptions = !workflow.exceptions().is_empty();
+            if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
                 warn!("the following operations were ignored during planning");
                 for op in workflow.exceptions() {
                     warn!("- {op}");
                 }
             }
+
             if workflow.is_empty() {
                 debug!("nothing to do");
                 info!("target state applied");
+                if has_exceptions {
+                    // no changes to make but there are exceptions so we return aborted
+                    return Ok(UpdateStatus::Aborted);
+                }
                 return Ok(UpdateStatus::Done);
             } else {
                 info!(time = ?now.elapsed(), "workflow found");
@@ -259,7 +256,7 @@ async fn seek_target(
                 loop {
                     let event = tokio::select! {
                         _ = interrupt.wait() => {
-                            info!(time = ?now.elapsed(), "workflow interrupted");
+                            info!(time = ?now.elapsed(), "interrupted by new target");
                             return Ok(UpdateStatus::Interrupted)
                         },
                         Some(evt) = stream.next() => evt,
@@ -273,18 +270,24 @@ async fn seek_target(
                         }
                         WorkerEvent::WorkflowFinished(WorkflowStatus::Success) => {
                             info!(time = ?now.elapsed(), "workflow executed successfully");
+                            info!("target state applied");
+                            if has_exceptions {
+                                // workflow completed but there were skipped changes so we
+                                // return aborted
+                                return Ok(UpdateStatus::Aborted);
+                            }
                             return Ok(UpdateStatus::Done);
                         }
                         // if a recoverable error happened, we try-again
                         WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
-                            info!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in 30s");
+                            warn!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in 30s");
 
                             // back-off. we use a constant back-off time for now. We may make this
                             // configurable or use a back-off function in the future if it seems
                             // necessary
                             tokio::select! {
                                 _ = interrupt.wait() => {
-                                    info!(time = ?now.elapsed(), "target state apply interrupted");
+                                    info!(time = ?now.elapsed(), "interrupted by new target");
                                     return Ok(UpdateStatus::Interrupted)
                                 },
                                 _ = tokio::time::sleep(Duration::from_secs(30)) => {},
@@ -298,9 +301,7 @@ async fn seek_target(
             }
         } else {
             warn!(time = ?now.elapsed(), "workflow not found");
-            return Ok(UpdateStatus::Aborted(vec![
-                "workflow not found".to_string(),
-            ]));
+            return Ok(UpdateStatus::Aborted);
         }
     }
     Ok(UpdateStatus::Interrupted)

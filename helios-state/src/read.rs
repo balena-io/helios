@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime};
+
 use mahler::state::Map;
 use thiserror::Error;
 use tokio::fs;
@@ -70,10 +72,11 @@ pub async fn read(
     if let Some(host) = &mut device.host {
         let host_releases: Vec<Uuid> = local_store.list("/host/releases").await?;
         for release_uuid in host_releases {
-            if let Some(mut hostapp) = local_store
-                .read::<_, HostRelease>(format!("/host/releases/{release_uuid}"), "hostapp")
+            if let Some(mut doc) = local_store
+                .open::<_>(format!("/host/releases/{release_uuid}"), "hostapp")
                 .await?
             {
+                let mut hostapp: HostRelease = doc.read_as()?;
                 // ignore the status on the store and deduce it instead
                 hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
                     HostReleaseStatus::Running
@@ -86,6 +89,12 @@ pub async fn read(
                 } else {
                     HostReleaseStatus::Created
                 };
+
+                let last_modified = doc.modified().unwrap_or_else(|_| SystemTime::now());
+                if SystemTime::now() - Duration::from_secs(3600 * 24) > last_modified {
+                    // reset the install attempts after 24 hours
+                    hostapp.install_attempts = 0;
+                }
 
                 host.releases.insert(release_uuid, hostapp);
             }

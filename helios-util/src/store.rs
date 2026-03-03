@@ -1,13 +1,16 @@
+use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-use tokio::fs;
+use tokio::fs::{self, File};
+use tokio::io::AsyncReadExt;
 use tracing::trace;
 
-use super::fs::safe_write_all;
+use crate::fs::safe_write_all;
 
 /// A filesystem backed store
 ///
@@ -16,8 +19,37 @@ use super::fs::safe_write_all;
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
-    // NOTE: we might want to restrict concurrent writes at some point with
-    // something like locks: Arc<DashMap<PathBuf, Arc<RwLock<()>>>>
+}
+
+/// A document on the store
+pub struct Document {
+    contents: Vec<u8>,
+    metadata: Metadata,
+}
+
+impl Document {
+    /// Read the and the deserialize contents of the document into the
+    /// provided type
+    pub fn read_as<V>(&mut self) -> Result<V, StoreError>
+    where
+        V: DeserializeOwned,
+    {
+        let contents = str::from_utf8(&self.contents).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "document does not contain valid UTF-8",
+            )
+        })?;
+        let value = serde_json::from_str::<V>(contents)?;
+
+        Ok(value)
+    }
+
+    /// Return the last modified time of the document
+    pub fn modified(self) -> Result<SystemTime, StoreError> {
+        let modified = self.metadata.modified()?;
+        Ok(modified)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -101,6 +133,31 @@ impl Store {
                 // We have a config but failed to load it
                 _ => Err(err.into()),
             },
+        }
+    }
+
+    /// Create a Document from the specified location if it exists
+    pub async fn open<P: AsRef<Path>>(
+        &self,
+        path: P,
+        key: &str,
+    ) -> Result<Option<Document>, StoreError> {
+        let full_path = self
+            .with_root(path.as_ref())?
+            .join(key)
+            .with_extension("json");
+
+        match File::open(&full_path).await {
+            Ok(mut file) => {
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents).await?;
+
+                let metadata = file.metadata().await?;
+
+                Ok(Some(Document { contents, metadata }))
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
         }
     }
 

@@ -17,7 +17,7 @@ async fn wait_for_target_apply() -> serde_json::Value {
             .unwrap();
 
         let status = status_res.get("status").unwrap();
-        if *status != "applying_changes" {
+        if *status != "applying changes" {
             return status_res;
         }
 
