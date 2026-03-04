@@ -3,7 +3,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{Request, Response, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
@@ -98,7 +98,7 @@ pub async fn start(
     proxy_state: Option<ProxyState>,
 ) {
     let api_span = Span::current();
-    let target_app_tx = seek_request_tx.clone();
+    let target_state_tx = seek_request_tx.clone();
     let mut app = Router::new().route("/ping", get(|| async { "OK" }));
 
     // make the v3 API optional while we get to a production ready release
@@ -109,8 +109,18 @@ pub async fn start(
             .route("/v3/device/apps/{uuid}", get(get_app_cur_state))
             .route(
                 "/v3/device/apps/{uuid}",
-                post(move |state, path, query, apps| {
-                    set_app_tgt_state(target_app_tx, state, path, query, apps)
+                delete({
+                    let target_state_tx = target_state_tx.clone();
+                    move |state, path, query| remove_app(target_state_tx, state, path, query)
+                }),
+            )
+            .route(
+                "/v3/device/apps/{uuid}",
+                post({
+                    let target_state_tx = target_state_tx.clone();
+                    move |state, path, query, apps| {
+                        set_app_tgt_state(target_state_tx, state, path, query, apps)
+                    }
                 }),
             );
     }
@@ -209,6 +219,34 @@ async fn get_app_cur_state(
     }
 
     Err(StatusCode::NOT_FOUND)
+}
+
+async fn remove_app(
+    seek_request_tx: Sender<SeekRequest>,
+    State(state_rx): State<LocalStateRx>,
+    Path(app_uuid): Path<Uuid>,
+    Query(opts): Query<UpdateOpts>,
+) -> StatusCode {
+    let state = state_rx.borrow();
+    if !state.device.apps.contains_key(&app_uuid) {
+        return StatusCode::NOT_FOUND;
+    }
+
+    let device = state.device.clone();
+    let mut target: LocalDeviceTarget = device.into();
+    target.apps.remove(&app_uuid);
+
+    if seek_request_tx
+        .send(SeekRequest {
+            target: TargetState::Local { target },
+            opts,
+        })
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    StatusCode::ACCEPTED
 }
 
 /// Handle `POST /v3/device/apps/{uuid}` request
