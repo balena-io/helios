@@ -1,4 +1,28 @@
 - commits:
+    - subject: Add integration tests for API target poll
+      hash: 20dff551dfea91b4c32d873058a6bfb2f0919674
+      body: |
+        This adds a mock-api server to test the full poll/apply/report behavior
+        of helios. This also allows us to test hostOS updates, even if it is to
+        check that the updater script gets called with the right arguments.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add DELETE app API method to clean up after tests
+      hash: a702561d61c302f889f5259993a96da262789455
+      body: |
+        Also update API tests in helios-integration-tests
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.20.1
+  title: ""
+  date: 2026-03-04T20:52:45.074Z
+- commits:
     - subject: Update docker volume configuration
       hash: ce533c490a7877f138df1f57f02cd22faa54d53a
       body: |
