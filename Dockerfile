@@ -23,6 +23,7 @@ COPY helios-remote ./helios-remote
 COPY helios-remote-model ./helios-remote-model
 COPY helios-state ./helios-state
 COPY helios-util ./helios-util
+COPY helios-store ./helios-store
 
 # Build release
 # Unit tests are run separately by CI
@@ -53,7 +54,7 @@ RUN apk add --no-cache \
 COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/release/helios /usr/bin
 
-VOLUME /tmp/run
+VOLUME /config/helios
 VOLUME /cache/helios
 VOLUME /local/helios
 HEALTHCHECK --interval=5m --start-period=10s --timeout=30s --retries=3 \

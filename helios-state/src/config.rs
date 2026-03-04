@@ -1,14 +1,14 @@
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use helios_util::types::{OperatingSystem, Uuid};
 use thiserror::Error;
 
+use crate::common_types::{OperatingSystem, Uuid};
 use crate::models::Device;
-use crate::oci::{Client as Docker, RegistryAuth};
+use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{ReadStateError, read};
+use crate::store::DocumentStore;
 use crate::util::dirs;
-use crate::util::store::Store;
 
 pub struct StateConfig {
     pub host_os: Option<OperatingSystem>,
@@ -29,17 +29,20 @@ impl Deref for HostRuntimeDir {
 pub struct Resources {
     pub(crate) docker: Docker,
     pub(crate) registry_auth_client: Option<RegistryAuth>,
-    pub(crate) local_store: Store,
+    pub(crate) local_store: DocumentStore,
     pub(crate) host_runtime_dir: HostRuntimeDir,
 }
 
 #[derive(Debug, Error)]
 pub enum StatePrepareError {
     #[error(transparent)]
-    Docker(#[from] helios_oci::Error),
+    Docker(#[from] oci::Error),
 
     #[error(transparent)]
     ReadState(#[from] ReadStateError),
+
+    #[error("failed to initialize store: {0}")]
+    StoreInit(std::io::Error),
 }
 
 pub async fn prepare(
@@ -50,7 +53,9 @@ pub async fn prepare(
     let docker = Docker::connect().await?;
 
     // Create a store for local state
-    let local_store = Store::new(dirs::state_dir());
+    let local_store = DocumentStore::with_root(dirs::state_dir())
+        .await
+        .map_err(StatePrepareError::StoreInit)?;
 
     let StateConfig {
         host_os,

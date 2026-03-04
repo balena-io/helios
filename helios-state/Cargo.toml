@@ -20,6 +20,7 @@ balenahup = []
 [dependencies]
 helios-legacy.workspace = true
 helios-oci.workspace = true
+helios-store.workspace = true
 helios-util.workspace = true
 helios-remote-model.workspace = true
 

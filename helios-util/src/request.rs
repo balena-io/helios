@@ -8,6 +8,7 @@ use thiserror::Error;
 use tracing::{Span, debug, field, instrument, warn};
 
 use crate::crypto::sha256_hex_digest;
+use crate::fs;
 use crate::interrupt::Interrupt;
 
 /// Base configuration for HTTP request behavior including timeouts, rate
@@ -379,13 +380,16 @@ impl Get {
     }
 
     /// Write cache entry to file
-    async fn write_cache_file(&self, entry: &CacheEntry) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = self.cache_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
+    async fn write_cache_file(&self, entry: &CacheEntry) -> std::io::Result<()> {
+        let cache_path = self.cache_path.clone();
         let contents = serde_json::to_string(entry)?;
-        tokio::fs::write(&self.cache_path, contents).await?;
+        fs::run_async(move || {
+            if let Some(parent) = cache_path.parent() {
+                fs::ensure_exists(parent)?;
+            }
+            fs::safe_write_all(&cache_path, contents)
+        })
+        .await?;
         Ok(())
     }
 

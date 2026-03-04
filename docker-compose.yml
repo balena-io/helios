@@ -37,15 +37,22 @@ services:
       # used for the `runtime` volume
       - BALENA_HOST_RUNTIME_DIR=/tmp/balena-supervisor
     volumes:
-      # Base directory for app configuration and update locks
-      - runtime:/tmp/run
-      # Service cache
+      # Critical configurations
+      - config:/config/helios
+      # Request caching
       - cache:/cache/helios
-      # Configurations and local data
-      - local:/local/helios
+      # Persistent system state data that can be reconstructed from
+      # the target state
+      - state:/local/helios
+      # Runtime directory. Data here does not persist reboots
+      - runtime:/tmp/run
 
 volumes:
-  local:
+  config:
+  state:
+    labels:
+      # the database version, can be bumped to re-create the state
+      io.balena.private.db-version: 0
   cache:
   runtime:
     driver: local

@@ -73,7 +73,7 @@ export HELIOS_REMOTE_POLL_INTERVAL_MS
 
 # Set XDG variables to directories on volumes
 export XDG_CACHE_HOME=/cache
-export XDG_CONFIG_HOME=/local
+export XDG_CONFIG_HOME=/config
 export XDG_STATE_HOME=/local
 export XDG_RUNTIME_DIR=/tmp/run
 

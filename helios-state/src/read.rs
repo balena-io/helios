@@ -9,8 +9,8 @@ use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
 use crate::models::{HostRelease, HostReleaseStatus};
 use crate::oci::{Client as Docker, Error as DockerError};
+use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
-use crate::util::store::{Store, StoreError};
 
 use super::models::{
     App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID, Volume,
@@ -19,13 +19,13 @@ use super::models::{
 #[derive(Debug, Error)]
 pub enum ReadStateError {
     #[error(transparent)]
-    DockerError(#[from] DockerError),
+    Docker(#[from] DockerError),
 
     #[error(transparent)]
     InvalidRegistryUri(#[from] InvalidImageUriError),
 
     #[error(transparent)]
-    StoreReadFailed(#[from] StoreError),
+    Store(#[from] store::Error),
 
     #[error(transparent)]
     IO(#[from] std::io::Error),
@@ -35,12 +35,10 @@ pub enum ReadStateError {
 async fn get_or_create_app<'a>(
     apps: &'a mut Map<Uuid, App>,
     app_uuid: &Uuid,
-    local_store: &Store,
+    local_store: &DocumentStore,
 ) -> Result<&'a mut App, ReadStateError> {
     if !apps.contains_key(app_uuid) {
-        let name = local_store
-            .read(format!("/apps/{app_uuid}"), "name")
-            .await?;
+        let name = local_store.get(format!("apps/{app_uuid}/name")).await?;
 
         apps.insert(
             app_uuid.clone(),
@@ -59,44 +57,54 @@ async fn get_or_create_app<'a>(
 #[instrument(name = "read_state", skip_all)]
 pub async fn read(
     docker: &Docker,
-    local_store: &Store,
+    local_store: &DocumentStore,
     uuid: Uuid,
     os: Option<OperatingSystem>,
 ) -> Result<Device, ReadStateError> {
     let mut device = Device::new(uuid, os);
 
     // read the device name from the local store
-    device.name = local_store.read("/", "device_name").await?;
+    device.name = local_store.get("device_name").await?;
 
     // Read the hostapp information from the local store
     if let Some(host) = &mut device.host {
-        let host_releases: Vec<Uuid> = local_store.list("/host/releases").await?;
+        let host_releases_view = local_store.as_view().at("host/releases")?;
+        let host_releases: Vec<Uuid> = host_releases_view
+            .keys()
+            .await?
+            .into_iter()
+            .map(Uuid::from)
+            .collect();
         for release_uuid in host_releases {
-            if let Some(mut doc) = local_store
-                .open::<_>(format!("/host/releases/{release_uuid}"), "hostapp")
-                .await?
+            match local_store
+                .open(format!("host/releases/{release_uuid}/hostapp"))
+                .await
             {
-                let mut hostapp: HostRelease = doc.read_as()?;
-                // ignore the status on the store and deduce it instead
-                hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
-                    HostReleaseStatus::Running
-                } else if fs::try_exists(
-                    runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
-                )
-                .await?
-                {
-                    HostReleaseStatus::Installed
-                } else {
-                    HostReleaseStatus::Created
-                };
+                Ok(hostapp_doc) => {
+                    let last_modified = hostapp_doc.modified().unwrap_or_else(SystemTime::now);
+                    let mut hostapp: HostRelease = hostapp_doc.into_value().await?;
+                    // ignore the status on the store and deduce it instead
+                    hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
+                        HostReleaseStatus::Running
+                    } else if fs::try_exists(
+                        runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
+                    )
+                    .await?
+                    {
+                        HostReleaseStatus::Installed
+                    } else {
+                        HostReleaseStatus::Created
+                    };
 
-                let last_modified = doc.modified().unwrap_or_else(|_| SystemTime::now());
-                if SystemTime::now() - Duration::from_secs(3600 * 24) > last_modified {
-                    // reset the install attempts after 24 hours
-                    hostapp.install_attempts = 0;
+                    if SystemTime::now() - Duration::from_secs(3600 * 24) > last_modified {
+                        // reset the install attempts after 24 hours
+                        hostapp.install_attempts = 0;
+                    }
+
+                    host.releases.insert(release_uuid, hostapp);
                 }
-
-                host.releases.insert(release_uuid, hostapp);
+                Err(store::Error::NotFound { .. }) => {}
+                Err(e) => return Err(e)?,
             }
         }
     }
@@ -113,12 +121,16 @@ pub async fn read(
         let apps = &mut device.apps;
 
         // read apps from local state
-        let app_uuids: Vec<Uuid> = local_store.list("/apps").await?;
+        let apps_view = local_store.as_view().at("apps")?;
+        let app_uuids: Vec<Uuid> = apps_view
+            .keys()
+            .await?
+            .into_iter()
+            .map(Uuid::from)
+            .collect();
         for app_uuid in app_uuids {
-            if let Some(id) = local_store.read(format!("/apps/{app_uuid}"), "id").await? {
-                let name = local_store
-                    .read(format!("/apps/{app_uuid}"), "name")
-                    .await?;
+            if let Some(id) = apps_view.get(format!("{app_uuid}/id")).await? {
+                let name = apps_view.get(format!("{app_uuid}/name")).await?;
                 apps.insert(
                     app_uuid,
                     App {
@@ -167,11 +179,8 @@ pub async fn read(
                 rel
             } else {
                 // only read the install state when creating the release
-                let installed = local_store
-                    .read(
-                        format!("/apps/{app_uuid}/releases/{release_uuid}"),
-                        "installed",
-                    )
+                let installed = apps_view
+                    .get(format!("{app_uuid}/releases/{release_uuid}/installed"))
                     .await?
                     .unwrap_or_default();
 
@@ -187,11 +196,10 @@ pub async fn read(
             let mut svc = Service::from(local_container);
 
             // Link the service to the local image if there is state metadata about it
-            svc.image = local_store
-                .read(
-                    format!("/apps/{app_uuid}/releases/{release_uuid}/services/{service_name}"),
-                    "image",
-                )
+            svc.image = apps_view
+                .get(format!(
+                    "{app_uuid}/releases/{release_uuid}/services/{service_name}/image"
+                ))
                 .await?
                 // use the image id if no store metadata is available
                 .unwrap_or(svc.image);
