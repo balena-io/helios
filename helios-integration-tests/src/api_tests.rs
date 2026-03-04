@@ -1,29 +1,12 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use bollard::{Docker, query_parameters::PruneImagesOptions};
 use reqwest::StatusCode;
 use serde_json::json;
 
-const HELIOS_URL: &str = "http://helios-api";
+use super::common::{HELIOS_URL, wait_for_target_apply};
 
-async fn wait_for_target_apply() -> serde_json::Value {
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    loop {
-        let status_res: serde_json::Value = reqwest::get(format!("{HELIOS_URL}/v3/status"))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-
-        let status = status_res.get("status").unwrap();
-        if *status != "applying changes" {
-            return status_res;
-        }
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
+const TEST_APP_UUID: &str = "test-app";
 
 async fn cleanup() {
     let docker = Docker::connect_with_defaults().unwrap();
@@ -64,7 +47,7 @@ async fn test_initial_state() {
 async fn test_get_app_state() {
     let client = reqwest::Client::new();
     let body = client
-        .get(format!("{HELIOS_URL}/v3/device/apps/test-app"))
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .send()
         .await
         .unwrap();
@@ -76,7 +59,7 @@ async fn test_set_app_target() {
     let client = reqwest::Client::new();
     let target = json!({"id": 0, "name": "my-app"});
     let body = client
-        .post(format!("{HELIOS_URL}/v3/device/apps/test-app"))
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .json(&target)
         .send()
         .await
@@ -85,14 +68,25 @@ async fn test_set_app_target() {
     let status = wait_for_target_apply().await;
     assert_eq!(status, json!({"status": "done"}));
 
-    let app: serde_json::Value = reqwest::get(format!("{HELIOS_URL}/v3/device/apps/test-app"))
-        .await
-        .unwrap()
-        .json()
+    let app: serde_json::Value =
+        reqwest::get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+    assert_eq!(app, json!({"id": 0, "name": "my-app", "releases": {}}));
+
+    // remove the test app
+    let body = client
+        .delete(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
         .await
         .unwrap();
-
-    assert_eq!(app, json!({"id": 0, "name": "my-app", "releases": {}}))
+    assert_eq!(body.status(), StatusCode::ACCEPTED);
+    let status = wait_for_target_apply().await;
+    assert_eq!(status, json!({"status": "done"}));
 }
 
 #[tokio::test]
@@ -128,7 +122,7 @@ async fn test_set_app_target_install_images() {
         }
     });
     let body = client
-        .post(format!("{HELIOS_URL}/v3/device/apps/test-app"))
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .json(&target)
         .send()
         .await
@@ -147,7 +141,7 @@ async fn test_set_app_target_install_images() {
 
     let app = device
         .get("apps")
-        .and_then(|apps| apps.get("test-app"))
+        .and_then(|apps| apps.get(TEST_APP_UUID))
         .unwrap();
 
     let svc_one_container_id = app
@@ -196,7 +190,7 @@ async fn test_set_app_target_install_images() {
     assert_eq!(config.cmd.unwrap(), vec!["sleep", "infinity"]);
     assert_eq!(
         config.labels.unwrap().get("io.balena.app-uuid").unwrap(),
-        "test-app"
+        TEST_APP_UUID
     );
 
     let container = docker
@@ -207,8 +201,18 @@ async fn test_set_app_target_install_images() {
     let config = container.config.unwrap();
     assert_eq!(config.cmd.unwrap(), vec!["sleep", "10"]);
     let labels = config.labels.unwrap();
-    assert_eq!(labels.get("io.balena.app-uuid").unwrap(), "test-app");
+    assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
+
+    // remove the test app
+    let body = client
+        .delete(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(body.status(), StatusCode::ACCEPTED);
+    let status = wait_for_target_apply().await;
+    assert_eq!(status, json!({"status": "done"}));
 
     cleanup().await;
 }
