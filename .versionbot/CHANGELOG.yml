@@ -1,4 +1,45 @@
 - commits:
+    - subject: Update docker volume configuration
+      hash: ce533c490a7877f138df1f57f02cd22faa54d53a
+      body: |
+        Configuration now lives on a different directory than state data. This
+        allows that if a problem happens or a migration is needed, the state
+        volume can be recreated without affecting configuration.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+    - subject: Migrate to helios-store
+      hash: bc468da00fcf378fc5465015a9e2021004e299c2
+      body: |
+        Removes usage of the old helios-util::store module and replaces it with
+        DocumentStore calls.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: felipe
+      nested: []
+    - subject: Add helios-store module
+      hash: e5dbd67127a99216c3ff4a9590aa3ff9a1f15683
+      body: >
+        The module provides a DocumentStore struct that should replace the
+
+        existing store module in helios-util. The new store ensures safe
+
+        concurrent access by using Linux `flock` via rust `std::fs::File::lock`
+        and
+
+        `std::fs::File::lock_shared` functions.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: felipe
+      nested: []
+  version: 0.20.0
+  title: ""
+  date: 2026-03-04T01:39:48.109Z
+- commits:
     - subject: Remove the container and image after HUP
       hash: cb5a2bfc9212fca49ef6b9ae4d68b43db534603f
       body: |
