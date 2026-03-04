@@ -1,0 +1,22 @@
+FROM alpine:3.23 AS builder
+
+RUN apk add --update --no-cache \
+		build-base \
+		rust cargo \
+		clang clang-dev cmake
+
+WORKDIR /usr/src/app
+
+COPY helios-integration-tests ./
+COPY helios-util ./helios-util
+
+RUN cargo build --release --bin mock-remote
+
+FROM alpine:3.23
+
+RUN apk add --no-cache wget libstdc++
+
+
+COPY --from=builder /usr/src/app/target/release/mock-remote /usr/local/bin/mock-remote
+
+CMD ["mock-remote"]

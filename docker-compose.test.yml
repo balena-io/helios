@@ -11,11 +11,14 @@ services:
     volumes:
       - dind:/var/run
       - dbus:/shared/dbus
+      - runtime:/tmp/run
     depends_on:
       docker:
         condition: service_healthy
       helios-api:
         condition: service_started
+      mock-remote:
+        condition: service_healthy
       systemd:
         condition: service_healthy
 
@@ -46,22 +49,56 @@ services:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
       BALENA_DEVICE_UUID: 'test-uuid'
       BALENA_SUPERVISOR_PORT: 48484
+      BALENA_API_URL: 'http://mock-remote'
+      BALENA_API_KEY: 'test-api-key'
+      BALENA_HOST_RUNTIME_DIR: '/tmp/run'
+      BALENA_HOST_OS_VERSION: '6.0.39'
+      BALENA_HOST_OS_BOARD_REV: 'test-board-rev-000'
+      DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
+      HELIOS_REMOTE_POLL_MIN_INTERVAL_MS: '500'
+      HELIOS_REMOTE_POLL_MAX_JITTER_MS: '0'
     volumes:
       - dind:/var/run
+      - dbus:/shared/dbus
     depends_on:
       docker:
         condition: service_healthy
+      mock-remote:
+        condition: service_healthy
+      systemd:
+        condition: service_healthy
+
+  mock-remote:
+    build:
+      context: .
+      dockerfile: ./helios-integration-tests/Dockerfile.mock-remote
+    environment:
+      RUST_LOG: debug
+    healthcheck:
+      test: ['CMD', 'wget', '-O', '-', '-q', 'http://127.0.0.1/health']
+      interval: 5s
+      retries: 10
+      timeout: 3s
 
   docker:
     image: docker:28-dind
     privileged: true
+    command: ['--insecure-registry', 'registry:5000']
     volumes:
       - dind:/var/run
+    depends_on:
+      registry:
+        condition: service_started
     healthcheck:
       test: ['CMD', 'docker', 'ps']
       interval: 10s
       retries: 5
       timeout: 5s
+
+  registry:
+    image: registry:3
+    volumes:
+      - registry:/var/lib/registry
 
   systemd:
     image: ghcr.io/balena-os/mock-systemd-bus
@@ -70,6 +107,7 @@ services:
       DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
     volumes:
       - dbus:/shared/dbus
+      - runtime:/tmp/run
     healthcheck:
       test:
         [
@@ -86,10 +124,6 @@ services:
       timeout: 3s
 
 volumes:
-  dind:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
   dbus:
     driver_opts:
       type: tmpfs
@@ -99,3 +133,5 @@ volumes:
       type: tmpfs
       o: ''
       device: tmpfs
+  dind:
+  registry:

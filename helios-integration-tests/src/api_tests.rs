@@ -1,23 +1,10 @@
-use std::collections::HashMap;
-
-use bollard::{Docker, query_parameters::PruneImagesOptions};
+use bollard::Docker;
 use reqwest::StatusCode;
 use serde_json::json;
 
-use super::common::{HELIOS_URL, wait_for_target_apply};
+use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
 
 const TEST_APP_UUID: &str = "test-app";
-
-async fn cleanup() {
-    let docker = Docker::connect_with_defaults().unwrap();
-    let mut filters = HashMap::new();
-    filters.insert("dangling".to_string(), vec!["false".to_string()]);
-    let _ = docker
-        .prune_images(Some(PruneImagesOptions {
-            filters: Some(filters),
-        }))
-        .await;
-}
 
 #[tokio::test]
 async fn test_service_running() {
@@ -91,7 +78,7 @@ async fn test_set_app_target() {
 
 #[tokio::test]
 async fn test_set_app_target_install_images() {
-    cleanup().await;
+    prune_images().await;
 
     let client = reqwest::Client::new();
     let target = json!({
@@ -214,5 +201,7 @@ async fn test_set_app_target_install_images() {
     let status = wait_for_target_apply().await;
     assert_eq!(status, json!({"status": "done"}));
 
-    cleanup().await;
+    // images should be cleaned up after removing the app
+    assert!(docker.inspect_image("ubuntu:latest").await.is_err());
+    assert!(docker.inspect_image("alpine:latest").await.is_err());
 }
