@@ -49,7 +49,7 @@ impl From<RemoteVolume> for VolumeConfig {
 impl From<RemoteVolume> for Volume {
     fn from(vol: RemoteVolume) -> Self {
         Volume {
-            // Placeholder name, filled in during normalization
+            // Filled in during normalization
             volume_name: String::new(),
             config: vol.into(),
         }
