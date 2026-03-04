@@ -167,6 +167,40 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
     })
 }
 
+/// If modifying a release, make sure `release.installed` is set to false to
+/// ensure the release gets finished afterwards
+fn ensure_release_is_finalized(
+    mut rel: View<Release>,
+    Target(tgt_rel): Target<Release>,
+) -> View<Release> {
+    if tgt_rel.services.iter().any(|(svc_name, tgt_svc)| {
+        rel.services
+            .get(svc_name)
+            .map(|svc| tgt_svc != &ServiceTarget::from(svc.clone()))
+            // target service does not exist yet or has a different config
+            .unwrap_or(true)
+    }) || tgt_rel.networks.iter().any(|(net_name, tgt_net)| {
+        rel.networks
+            .get(net_name)
+            .map(|net| tgt_net != net)
+            // target network does not exist yet or has a different config
+            .unwrap_or(true)
+    }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
+        rel.volumes
+            .get(vol_name)
+            .map(|vol| tgt_vol != vol)
+            // target volume does not exist yet or has a different config
+            .unwrap_or(true)
+    }) {
+        // We only modify the release in memory to avoid writing to disk.
+        // If something interrupts the update, services/network/volumes won't match
+        // so this task will be executed again
+        rel.installed = false;
+    }
+
+    rel
+}
+
 /// Finalize an installed release
 fn finish_release(
     mut release: View<Release>,
@@ -175,31 +209,40 @@ fn finish_release(
     store: Res<DocumentStore>,
 ) -> IO<Release, store::Error> {
     // all target services have been installed
-    enforce!(target.services.iter().all(|(svc_name, tgt_svc)| {
-        release
-            .services
-            .get(svc_name)
-            .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.services.iter().all(|(svc_name, tgt_svc)| {
+            release
+                .services
+                .get(svc_name)
+                .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+                .unwrap_or_default()
+        }),
+        "all services should have the correct configuration"
+    );
 
     // all target networks have been created
-    enforce!(target.networks.iter().all(|(net_name, tgt_net)| {
-        release
-            .networks
-            .get(net_name)
-            .map(|net| tgt_net == net)
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.networks.iter().all(|(net_name, tgt_net)| {
+            release
+                .networks
+                .get(net_name)
+                .map(|net| tgt_net == net)
+                .unwrap_or_default()
+        }),
+        "all networks should have the correct configuration"
+    );
 
     // all target volumes have been created
-    enforce!(target.volumes.iter().all(|(vol_name, tgt_vol)| {
-        release
-            .volumes
-            .get(vol_name)
-            .map(|vol| tgt_vol == vol)
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.volumes.iter().all(|(vol_name, tgt_vol)| {
+            release
+                .volumes
+                .get(vol_name)
+                .map(|vol| tgt_vol == vol)
+                .unwrap_or_default()
+        }),
+        "all volumes should have the correct configuration"
+    );
 
     release.installed = true;
     with_io(release, async move |release| {
@@ -925,6 +968,11 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::create(create_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+                job::update(ensure_release_is_finalized).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("prepare release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
                 job::update(finish_release).with_description(

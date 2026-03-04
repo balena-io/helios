@@ -398,11 +398,12 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "stop service 'my-service' for release 'my-release-uuid'",
             "remove container for service 'my-service' for release 'my-release-uuid'",
             "install service 'my-service' for release 'my-release-uuid'",
-            "start service 'my-service' for release 'my-release-uuid'"
-        ) + seq!(
+            "start service 'my-service' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "clean-up host metadata and images",
             "clean-up app metadata and images"
         );
@@ -483,12 +484,13 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("rename container for service 'my-service' for release 'my-release-uuid'",)
-                + seq!(
-                    "clean-up host metadata and images",
-                    "clean-up app metadata and images"
-                );
+        let expected: Dag<&str> = seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "rename container for service 'my-service' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "clean-up host metadata and images",
+            "clean-up app metadata and images"
+        );
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -690,8 +692,7 @@ mod tests {
             )
         ) + seq!(
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-            "remove app with uuid 'my-app-uuid'"
-        ) + seq!(
+            "remove app with uuid 'my-app-uuid'",
             "clean-up host metadata and images",
             "clean-up app metadata and images"
         );
@@ -786,7 +787,9 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "update image metadata for service 'one' of release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "clean-up host metadata and images",
             "clean-up app metadata and images"
         );
@@ -1175,13 +1178,17 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = par!(
-            "remove network 'network-a' for app 'my-app-uuid'",
-            "setup network 'network-b' for app 'my-app-uuid'",
-        ) + seq!(
-            "clean-up host metadata and images",
-            "clean-up app metadata and images"
-        );
+        let expected: Dag<&str> =
+            seq!("prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",)
+                + par!(
+                    "remove network 'network-a' for app 'my-app-uuid'",
+                    "setup network 'network-b' for app 'my-app-uuid'",
+                )
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up host metadata and images",
+                    "clean-up app metadata and images"
+                );
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -1253,8 +1260,10 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "remove network 'my-network' for app 'my-app-uuid'",
             "setup network 'my-network' for app 'my-app-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "clean-up host metadata and images",
             "clean-up app metadata and images"
         );
@@ -1507,13 +1516,17 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = par!(
-            "remove volume 'volume-a' for app 'my-app-uuid'",
-            "setup volume 'volume-b' for app 'my-app-uuid'",
-        ) + seq!(
-            "clean-up host metadata and images",
-            "clean-up app metadata and images"
-        );
+        let expected: Dag<&str> =
+            seq!("prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+                + par!(
+                    "remove volume 'volume-a' for app 'my-app-uuid'",
+                    "setup volume 'volume-b' for app 'my-app-uuid'",
+                )
+                + seq!(
+                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+                    "clean-up host metadata and images",
+                    "clean-up app metadata and images"
+                );
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -1588,8 +1601,10 @@ mod tests {
             .find_workflow(target)
             .unwrap();
         let expected: Dag<&str> = seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "remove volume 'my-volume' for app 'my-app-uuid'",
             "setup volume 'my-volume' for app 'my-app-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "clean-up host metadata and images",
             "clean-up app metadata and images"
         );
