@@ -4,7 +4,7 @@ use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
@@ -105,25 +105,27 @@ fn install_hostapp_release(
         "OS release already installed"
     );
 
-    // increase the install counter and set the status after
-    // the successful run of the task
+    // increase the install counter
     release.install_attempts += 1;
-    release.status = HostReleaseStatus::Installed;
-
     with_io(release, async move |release| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let local_store = store.as_ref().expect("store should be available");
 
-        // Pull the docker image for the updater
-        debug!("pull hostapp updater script from '{}'", release.updater);
-        docker.image().pull(&release.updater, None).await?;
-
-        // only install the target OS if the builds don't match
         let container_helper = docker.container();
 
         // remove any existing `balenahup` container
         container_helper.remove(BALENAHUP).await?;
+
+        // write the release data into the store to update install_attempts
+        local_store
+            .put(format!("host/releases/{release_uuid}/hostapp"), &*release)
+            .await?;
+
+        // Pull the docker image for the updater
+        debug!("pull hostapp updater script from '{}'", release.updater);
+        docker.image().pull(&release.updater, None).await?;
 
         // create a `balenahup` container from the update image
         let id = container_helper
@@ -170,44 +172,28 @@ fn install_hostapp_release(
                 release_uuid.as_str(),
                 "--target-image-uri",
                 release.image.as_str(),
-                "--no-reboot",
+                // FIXME: this needs to be re-added after helios handles update-locks
+                // "--no-reboot"
             ])
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
 
-        // remove the balenahup container and image
-        debug!("cleaning up");
-        let cleanup_res = async {
-            container_helper.remove(BALENAHUP).await?;
-            docker.image().remove(&release.updater).await
-        }
-        .await;
-
-        if let Err(e) = cleanup_res {
-            warn!("clean-up failed: {e}");
-        }
-
-        // write the release data into the store
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .put(format!("host/releases/{release_uuid}/hostapp"), &*release)
-                .await?;
-        }
-
+        // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
+        // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
+        // HUP after a rollback. Since the hup script may reboot immediately after finishing, this
+        // step may be skipped, but that is fine since the breadcrumb is not longer needed at that
+        // point
         run_async(move || {
-            // set the reboot breadcrumb to tell the legacy supervisor to reboot
-            fs::File::create(runtime_dir().join("reboot-after-apply"))?;
-
-            // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
-            // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
-            // HUP after a rollback
-            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))?;
-
-            Ok(())
+            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))
         })
         .await?;
 
         Ok(release)
+    })
+    .map(|mut rel| {
+        // set the status after the successful run of the task
+        rel.status = HostReleaseStatus::Installed;
+        rel
     })
 }
 
