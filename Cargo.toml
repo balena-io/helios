@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [ "helios", "helios-api", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util" ]
+members = [ "helios", "helios-api", "helios-balenahup", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util" ]
 
 [workspace.package]
 version = "0.20.4"
@@ -27,6 +27,10 @@ fastrand = "2.3.0"
 regex = "1.12"
 pretty_assertions = "1.4.1"
 tar = "0.4"
+
+[workspace.dependencies.helios-balenahup]
+path = "./helios-balenahup"
+version = "0"
 
 [workspace.dependencies.helios-legacy]
 path = "./helios-legacy"

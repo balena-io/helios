@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 
 use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
@@ -6,25 +7,27 @@ use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
 use tracing::debug;
 
-use crate::config::HostRuntimeDir;
-use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
-use crate::oci::{Client as Docker, Error as DockerError};
-use crate::store::{self, DocumentStore};
+use crate::common_types::Uuid;
+use crate::oci::{self, Client as Docker};
+use crate::store::{self as store, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
+use super::models::{Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget};
+use super::{BALENAHUP, HostRuntimeDir};
+
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
     #[error(transparent)]
-    Docker(#[from] DockerError),
+    Docker(#[from] oci::Error),
 
     #[error(transparent)]
-    LocalStore(#[from] store::Error),
+    Store(#[from] store::Error),
 
     #[error(transparent)]
-    IO(#[from] std::io::Error),
+    IO(#[from] io::Error),
 
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
@@ -34,12 +37,12 @@ enum HostUpdateError {
 ///
 /// Applies to `create(/host/releases/<rel_uuid>)`
 fn init_hostapp_release(
-    mut maybe_rel: View<Option<HostRelease>>,
+    maybe_rel: View<Option<HostRelease>>,
     Args(release_uuid): Args<String>,
     Target(tgt): Target<HostRelease>,
     System(device): System<Device>,
     store: Res<DocumentStore>,
-) -> IO<Option<HostRelease>, store::Error> {
+) -> IO<HostRelease, store::Error> {
     let HostReleaseTarget {
         app,
         image,
@@ -48,8 +51,7 @@ fn init_hostapp_release(
         ..
     } = tgt;
 
-    // Get the running status by comparing
-    // to the current os build
+    // Get the running status by comparing to the current os build
     let is_running = device
         .host
         .and_then(|host| host.meta.build)
@@ -72,22 +74,20 @@ fn init_hostapp_release(
     };
 
     // set the host release with the details from the target
-    maybe_rel.replace(rel);
+    let host_release = maybe_rel.create(rel);
 
-    with_io(maybe_rel, async move |maybe_rel| {
+    with_io(host_release, async move |host_release| {
         // write the release data into the store
-        if let (Some(rel), Some(local_store)) = (maybe_rel.as_ref(), store.as_ref()) {
-            local_store
-                .put(format!("host/releases/{release_uuid}/hostapp"), rel)
-                .await?;
-        }
-        Ok(maybe_rel)
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .put(
+                format!("host/releases/{release_uuid}/hostapp"),
+                &*host_release,
+            )
+            .await?;
+        Ok(host_release)
     })
 }
-
-// prefix for container/dir and files for balenahup
-// XXX: use a more generic container name?
-const BALENAHUP: &str = "balenahup";
 
 /// Install the hostapp release
 ///
@@ -221,11 +221,10 @@ fn update_script_uri(
 
     with_io(rel, async move |rel| {
         // write the release data into the store
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .put(format!("host/releases/{release_uuid}/hostapp"), &*rel)
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .put(format!("host/releases/{release_uuid}/hostapp"), &*rel)
+            .await?;
 
         Ok(rel)
     })
@@ -242,13 +241,72 @@ fn remove_old_metadata(
 
     with_io(rel, async move |rel| {
         // remove the old release metadata
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .delete(format!("host/releases/{release_uuid}/hostapp"))
-                .await?;
-        }
+        let local_store = store.as_ref().expect("store should be available");
+        local_store
+            .delete(format!("host/releases/{release_uuid}/hostapp"))
+            .await?;
 
         Ok(rel)
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HostCleanupError {
+    #[error(transparent)]
+    Oci(#[from] oci::Error),
+
+    #[error(transparent)]
+    Store(#[from] store::Error),
+}
+
+/// Clean up balenahup container and host release metadata/images.
+///
+/// Called from the main device cleanup task when the balenahup feature is active.
+pub fn cleanup_hostapp(
+    host: View<Option<Host>>,
+    docker: Res<Docker>,
+    store: Res<DocumentStore>,
+) -> IO<Option<Host>, HostCleanupError> {
+    with_io(host, async move |host| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let local_store = store.as_ref().expect("store should be available");
+
+        // clean up balenahup container if it exists
+        docker.container().remove(BALENAHUP).await?;
+
+        // clean up old host release metadata and images
+        let host_releases_view = local_store.as_view().at("host/releases")?;
+        let host_release_uuids: Vec<Uuid> = host_releases_view
+            .keys()
+            .await?
+            .into_iter()
+            .map(Uuid::from)
+            .collect();
+
+        for release_uuid in host_release_uuids {
+            if let Some(rel) = host_releases_view
+                .get::<HostRelease>(format!("{release_uuid}/hostapp"))
+                .await?
+            {
+                // remove the updater image if it exists
+                docker.image().remove(&rel.updater).await?;
+            }
+
+            // if the release does not exist in the target state
+            if !host
+                .as_ref()
+                .map(|host| host.releases.contains_key(&release_uuid))
+                .unwrap_or_default()
+            {
+                // remove the release metadata
+                host_releases_view
+                    .delete(format!("{release_uuid}/*"))
+                    .await?;
+            }
+        }
+        Ok(host)
     })
 }
 
@@ -259,25 +317,29 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             [
                 job::create(init_hostapp_release).with_description(
                     |Args(release_uuid): Args<String>| {
-                        format!("initialize hostOS release '{release_uuid}'")
+                        format!("initialize host OS release '{release_uuid}'")
                     },
                 ),
                 job::update(install_hostapp_release).with_description(
                     |Args(release_uuid): Args<String>| {
-                        format!("install hostOS release '{release_uuid}'")
+                        format!("install host OS release '{release_uuid}'")
                     },
                 ),
                 job::update(update_script_uri).with_description(
                     |Args(release_uuid): Args<String>| {
-                        format!("update metadata for release '{release_uuid}'")
+                        format!("update metadata for host OS release '{release_uuid}'")
                     },
                 ),
                 job::delete(remove_old_metadata).with_description(
                     |Args(release_uuid): Args<String>| {
-                        format!("clean up metadata for previous hostOS release '{release_uuid}'",)
+                        format!("remove metadata for host OS release '{release_uuid}'",)
                     },
                 ),
             ],
+        )
+        .job(
+            "/host",
+            job::none(cleanup_hostapp).with_description(|| "clean-up host metadata and images"),
         )
         // ignore requests to delete the host field if the target OS is set to null
         .exception("/host", exception::delete(|| true))

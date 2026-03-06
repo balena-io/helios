@@ -18,6 +18,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY helios ./helios
 COPY helios-api ./helios-api
 COPY helios-legacy ./helios-legacy
+COPY helios-balenahup ./helios-balenahup
 COPY helios-oci ./helios-oci
 COPY helios-remote ./helios-remote
 COPY helios-remote-model ./helios-remote-model

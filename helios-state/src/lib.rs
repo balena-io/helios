@@ -15,3 +15,6 @@ use helios_remote_model as remote_model;
 use helios_store as store;
 use helios_util as util;
 use helios_util::types as common_types;
+
+#[cfg(feature = "balenahup")]
+use helios_balenahup as balenahup;

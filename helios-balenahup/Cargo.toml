@@ -1,6 +1,6 @@
 [package]
-name = "helios-state"
-description = "Helios state engine"
+name = "helios-balenahup"
+description = "Helios HostOS update (balenahup) support"
 readme = "README.md"
 
 authors.workspace = true
@@ -12,14 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
-[features]
-default = []
-userapps = []
-balenahup = ["helios-balenahup"]
-
 [dependencies]
-helios-balenahup = { workspace = true, optional = true }
-helios-legacy.workspace = true
 helios-oci.workspace = true
 helios-store.workspace = true
 helios-util.workspace = true
@@ -27,13 +20,6 @@ helios-remote-model.workspace = true
 
 mahler.workspace = true
 serde.workspace = true
-serde_with.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-stream = { workspace = true, features = ["time"] }
 tracing.workspace = true
-
-[dev-dependencies]
-pretty_assertions.workspace = true
-tracing-subscriber.workspace = true

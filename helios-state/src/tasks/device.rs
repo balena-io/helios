@@ -5,9 +5,12 @@ use mahler::worker::{Uninitialized, Worker};
 use tracing::debug;
 
 use crate::common_types::{ImageUri, Uuid};
-use crate::models::{Device, HostRelease, ImageRef};
+use crate::models::{Device, ImageRef};
 use crate::oci::{Client as Docker, Error as OciError};
 use crate::store::{self, DocumentStore};
+
+#[cfg(feature = "balenahup")]
+use crate::balenahup;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -17,10 +20,29 @@ enum Error {
     Oci(#[from] OciError),
 }
 
+#[cfg(feature = "balenahup")]
+impl From<balenahup::HostCleanupError> for Error {
+    fn from(value: balenahup::HostCleanupError) -> Self {
+        use balenahup::HostCleanupError::*;
+        match value {
+            Oci(e) => Error::Oci(e),
+            Store(e) => Error::Store(e),
+        }
+    }
+}
+
+fn perform_cleanup() -> Vec<Task> {
+    vec![
+        #[cfg(feature = "balenahup")]
+        balenahup::cleanup_hostapp.into_task(),
+        cleanup_userapps.into_task(),
+    ]
+}
+
 /// Clean up the device state after the target has been reached
 ///
 /// This should be the final task for every workflow
-fn perform_cleanup(
+fn cleanup_userapps(
     device: View<Device>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
@@ -30,41 +52,6 @@ fn perform_cleanup(
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
-
-        // clean up balenahup container if it exists
-        docker.container().remove("balenahup").await?;
-
-        // clean up old host release metadata and images
-        let host_releases_view = local_store.as_view().at("host/releases")?;
-        let host_release_uuids: Vec<Uuid> = host_releases_view
-            .keys()
-            .await?
-            .into_iter()
-            .map(Uuid::from)
-            .collect();
-
-        for release_uuid in host_release_uuids {
-            if let Some(rel) = host_releases_view
-                .get::<HostRelease>(format!("{release_uuid}/hostapp"))
-                .await?
-            {
-                // remove the updater image if it exists
-                docker.image().remove(&rel.updater).await?;
-            }
-
-            // if the release does not exist in the target state
-            if !device
-                .host
-                .as_ref()
-                .map(|host| host.releases.contains_key(&release_uuid))
-                .unwrap_or_default()
-            {
-                // remove the release metadata
-                host_releases_view
-                    .delete(format!("{release_uuid}/*"))
-                    .await?;
-            }
-        }
 
         // clean up old app/release metadata and images
         let apps_view = local_store.as_view().at("apps")?;
@@ -96,7 +83,7 @@ fn perform_cleanup(
                         .unwrap_or_default()
                     {
                         // if there is an image reference for the service
-                        if let Some(img_uri) = services_view.get::<ImageUri>(format!("{service_name}/image")).await? 
+                        if let Some(img_uri) = services_view.get::<ImageUri>(format!("{service_name}/image")).await?
                         // and the image is not being used by any other service
                         && !device.apps.iter().any(|(a_uuid, app)| {
                             app.releases.iter().any(|(r_uuid, rel)| {
@@ -173,6 +160,10 @@ pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unini
         .job(
             "/name",
             job::any(set_device_name).with_description(|| "update device name"),
+        )
+        .job(
+            "",
+            job::none(cleanup_userapps).with_description(|| "clean-up app metadata and images"),
         )
         .with_cleanup(perform_cleanup)
 }

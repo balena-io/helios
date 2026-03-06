@@ -12,6 +12,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+balenahup = ["helios-state/balenahup"]
+
 [dependencies]
 helios-state.workspace = true
 helios-store.workspace = true
