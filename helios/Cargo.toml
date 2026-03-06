@@ -30,7 +30,7 @@ tracing.workspace = true
 default = ["all"]
 all = ["userapps", "balenahup", "v3-api"]
 userapps = ["helios-state/userapps"]
-balenahup = ["helios-state/balenahup"]
+balenahup = ["helios-state/balenahup", "helios-remote/balenahup"]
 v3-api = ["helios-api/v3"]
 
 [dev-dependencies]

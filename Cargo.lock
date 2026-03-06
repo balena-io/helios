@@ -992,6 +992,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "helios-balenahup"
+version = "0.20.1"
+dependencies = [
+ "helios-oci",
+ "helios-remote-model",
+ "helios-store",
+ "helios-util",
+ "mahler",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "helios-legacy"
 version = "0.20.1"
 dependencies = [
@@ -1018,7 +1033,6 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.18",
  "tokio-stream",
- "tracing",
 ]
 
 [[package]]
@@ -1053,6 +1067,7 @@ dependencies = [
 name = "helios-state"
 version = "0.20.1"
 dependencies = [
+ "helios-balenahup",
  "helios-legacy",
  "helios-oci",
  "helios-remote-model",
@@ -1079,7 +1094,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tokio",
  "tracing",

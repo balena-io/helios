@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::remote_model::HostApp as RemoteHostAppTarget;
 
+/// Alternative Device definition to avoid cicular dependencies
+#[derive(State, Debug, Clone)]
+pub(crate) struct Device {
+    /// The "hostapp" configuration
+    pub host: Option<Host>,
+}
+
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct Host {

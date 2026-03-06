@@ -106,6 +106,7 @@ impl From<LocalState> for DeviceReport {
             status: seek_status,
             device:
                 Device {
+                    #[cfg(feature = "balenahup")]
                     host,
                     apps: userapps,
                     images,
@@ -115,6 +116,7 @@ impl From<LocalState> for DeviceReport {
         } = state;
 
         // Convert the host data into an app report if any
+        #[cfg(feature = "balenahup")]
         if let Some(host_state) = host {
             // Get the current release
             let release_uuid = host_state
