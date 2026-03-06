@@ -160,6 +160,12 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
         ));
     }
 
+    // If a previous transient unit with this name still exists (e.g., cleanup was
+    // skipped due to a D-Bus error or task cancellation), reset it so it can be
+    // garbage-collected. This only affects stopped/failed units — running units
+    // won't be disturbed since reset_failed_unit is a no-op for non-failed units.
+    let _ = manager.reset_failed_unit(&full_unit_name).await;
+
     // Start the transient unit
     let start_job_path = manager
         .start_transient_unit(&full_unit_name, "fail", properties, vec![])
@@ -213,10 +219,6 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
 
     // Get the exit code from the service
     let exit_code = service_proxy.exec_main_status().await?;
-
-    // Reset the failed state to allow reuse of the same unit name
-    let _ = manager.reset_failed_unit(&full_unit_name).await;
-
     if exit_code != 0 {
         return Err(Error::ExitStatus(exit_code));
     }

@@ -52,7 +52,7 @@ services:
       BALENA_API_URL: 'http://mock-remote'
       BALENA_API_KEY: 'test-api-key'
       BALENA_HOST_RUNTIME_DIR: '/tmp/run'
-      BALENA_HOST_OS_VERSION: '6.0.39'
+      BALENA_HOST_OS_VERSION: 'balenaOS 6.0.39'
       BALENA_HOST_OS_BOARD_REV: 'test-board-rev-000'
       DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
       HELIOS_REMOTE_POLL_MIN_INTERVAL_MS: '500'
