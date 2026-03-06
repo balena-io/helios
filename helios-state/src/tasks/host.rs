@@ -4,7 +4,7 @@ use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::HostRuntimeDir;
 use crate::models::{Device, HostRelease, HostReleaseStatus, HostReleaseTarget};
@@ -96,7 +96,6 @@ fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
     docker: Res<Docker>,
-    store: Res<DocumentStore>,
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
@@ -170,40 +169,19 @@ fn install_hostapp_release(
                 release_uuid.as_str(),
                 "--target-image-uri",
                 release.image.as_str(),
-                "--no-reboot",
+                // FIXME: this needs to be re-added after helios handles update-locks
+                // "--no-reboot"
             ])
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
 
-        // remove the balenahup container and image
-        debug!("cleaning up");
-        let cleanup_res = async {
-            container_helper.remove(BALENAHUP).await?;
-            docker.image().remove(&release.updater).await
-        }
-        .await;
-
-        if let Err(e) = cleanup_res {
-            warn!("clean-up failed: {e}");
-        }
-
-        // write the release data into the store
-        if let Some(local_store) = store.as_ref() {
-            local_store
-                .put(format!("host/releases/{release_uuid}/hostapp"), &*release)
-                .await?;
-        }
-
+        // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
+        // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
+        // HUP after a rollback. Since the hup script may reboot immediately after finishing, this
+        // step may be skipped, but that is fine since the breadcrumb is not longer needed at that
+        // point
         run_async(move || {
-            // set the reboot breadcrumb to tell the legacy supervisor to reboot
-            fs::File::create(runtime_dir().join("reboot-after-apply"))?;
-
-            // leave a breadcrumb in the runtime-dir to indicate that the os release was installed.
-            // The breadcrumb will be removed after a reboot, so the worker will be able to re-try
-            // HUP after a rollback
-            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))?;
-
-            Ok(())
+            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))
         })
         .await?;
 

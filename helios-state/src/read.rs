@@ -83,16 +83,21 @@ pub async fn read(
                 Ok(hostapp_doc) => {
                     let last_modified = hostapp_doc.modified().unwrap_or_else(SystemTime::now);
                     let mut hostapp: HostRelease = hostapp_doc.into_value().await?;
+
                     // ignore the status on the store and deduce it instead
                     hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
+                        // if the hostapp build is the current OS build then the release is running
                         HostReleaseStatus::Running
                     } else if fs::try_exists(
                         runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
                     )
                     .await?
                     {
+                        // if there is a balenahup breadcrumb, then we are still waiting for a
+                        // reboot
                         HostReleaseStatus::Installed
                     } else {
+                        // otherwise the release has only been created
                         HostReleaseStatus::Created
                     };
 
