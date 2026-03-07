@@ -991,7 +991,9 @@ mod tests {
                                 },
                             },
                             "networks": {
-                                "my-network": {},
+                                "my-network": {
+                                    "network_name": "my-app-uuid_my-network",
+                                },
                             },
                         }
                     }
@@ -1004,20 +1006,16 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-                + par!(
-                    "create network 'my-network' for app 'my-app-uuid'",
-                    "initialize service 'service1' for release 'my-release-uuid'",
-                )
-                + seq!("pull image 'ubuntu:latest'")
-                + seq!("install service 'service1' for release 'my-release-uuid'")
-                + seq!("start service 'service1' for release 'my-release-uuid'")
-                + seq!(
-                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                    "clean-up"
-                );
-
+        let expected: Dag<&str> = seq!(
+            "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "create network 'my-network' for app 'my-app-uuid'",
+            "initialize service 'service1' for release 'my-release-uuid'",
+            "pull image 'ubuntu:latest'",
+            "install service 'service1' for release 'my-release-uuid'",
+            "start service 'service1' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
         let workflow = workflow.unwrap();
         assert_eq!(
             workflow.to_string(),
@@ -1117,7 +1115,9 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "network-b": {},
+                                "network-b": {
+                                    "network_name": "my-app-uuid_network-b",
+                                },
                             },
                         }
                     }
@@ -1130,10 +1130,11 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = par!(
+        let expected: Dag<&str> = seq!(
             "remove network 'network-a' for app 'my-app-uuid'",
             "create network 'network-b' for app 'my-app-uuid'",
-        ) + seq!("clean-up");
+            "clean-up",
+        );
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -1244,8 +1245,12 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "net-a": {},
-                                "net-b": {},
+                                "net-a": {
+                                    "network_name": "my-app-uuid_net-a",
+                                },
+                                "net-b": {
+                                    "network_name": "my-app-uuid_net-b",
+                                },
                             },
                         }
                     }
@@ -1258,17 +1263,13 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-                + par!(
-                    "create network 'net-a' for app 'my-app-uuid'",
-                    "create network 'net-b' for app 'my-app-uuid'",
-                )
-                + seq!(
-                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                    "clean-up",
-                );
-
+        let expected: Dag<&str> = seq!(
+            "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "create network 'net-a' for app 'my-app-uuid'",
+            "create network 'net-b' for app 'my-app-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
         let workflow = workflow.unwrap();
         assert_eq!(
             workflow.to_string(),
@@ -1310,7 +1311,9 @@ mod tests {
                                 },
                             },
                             "volumes": {
-                                "my-volume": {},
+                                "my-volume": {
+                                    "volume_name": "my-app-uuid_my-volume",
+                                },
                             },
                         }
                     }
@@ -1323,20 +1326,16 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-                + par!(
-                    "initialize service 'service1' for release 'my-release-uuid'",
-                    "create volume 'my-volume' for app 'my-app-uuid'",
-                )
-                + seq!("pull image 'ubuntu:latest'")
-                + seq!("install service 'service1' for release 'my-release-uuid'")
-                + seq!("start service 'service1' for release 'my-release-uuid'")
-                + seq!(
-                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                    "clean-up"
-                );
-
+        let expected: Dag<&str> = seq!(
+            "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "initialize service 'service1' for release 'my-release-uuid'",
+            "pull image 'ubuntu:latest'",
+            "install service 'service1' for release 'my-release-uuid'",
+            "start service 'service1' for release 'my-release-uuid'",
+            "create volume 'my-volume' for app 'my-app-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
         let workflow = workflow.unwrap();
         assert_eq!(
             workflow.to_string(),
@@ -1436,7 +1435,9 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "volumes": {
-                                "volume-b": {},
+                                "volume-b": {
+                                    "volume_name": "my-app-uuid_volume-b",
+                                },
                             },
                         }
                     }
@@ -1449,10 +1450,11 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> = par!(
+        let expected: Dag<&str> = seq!(
             "remove volume 'volume-a' for app 'my-app-uuid'",
             "create volume 'volume-b' for app 'my-app-uuid'",
-        ) + seq!("clean-up");
+            "clean-up",
+        );
 
         let workflow = workflow.unwrap();
         assert_eq!(
@@ -1565,8 +1567,12 @@ mod tests {
                             "installed": true,
                             "services": {},
                             "volumes": {
-                                "vol-a": {},
-                                "vol-b": {},
+                                "vol-a": {
+                                    "volume_name": "my-app-uuid_vol-a",
+                                },
+                                "vol-b": {
+                                    "volume_name": "my-app-uuid_vol-b",
+                                },
                             },
                         }
                     }
@@ -1579,17 +1585,13 @@ mod tests {
             .initial_state(initial_state)
             .find_workflow(target)
             .unwrap();
-        let expected: Dag<&str> =
-            seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
-                + par!(
-                    "create volume 'vol-a' for app 'my-app-uuid'",
-                    "create volume 'vol-b' for app 'my-app-uuid'",
-                )
-                + seq!(
-                    "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-                    "clean-up",
-                );
-
+        let expected: Dag<&str> = seq!(
+            "initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "create volume 'vol-a' for app 'my-app-uuid'",
+            "create volume 'vol-b' for app 'my-app-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
         let workflow = workflow.unwrap();
         assert_eq!(
             workflow.to_string(),
@@ -1863,5 +1865,440 @@ mod tests {
             .unwrap();
         let expected: Dag<&str> = seq!("update device name", "clean-up");
         assert_eq!(workflow.unwrap().to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn it_finds_a_workflow_for_migrating_networks() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+
+        let workflow = workflow.unwrap();
+
+        let expected: Dag<&str> = seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+            "create network 'my-net' for app 'my-app-uuid'"
+        ) + par!(
+            "remove data for network 'my-net' from release 'old-release'",
+            "migrate network 'my-net' to release 'new-release'"
+        ) + seq!(
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_for_migrating_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+
+        let workflow = workflow.unwrap();
+
+        let expected: Dag<&str> = seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+            "create volume 'my-vol' for app 'my-app-uuid'"
+        ) + par!(
+            "remove data for volume 'my-vol' from release 'old-release'",
+            "migrate volume 'my-vol' to release 'new-release'"
+        ) + seq!(
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+
+        let workflow = workflow.expect("workflow should be found");
+
+        let expected: Dag<&str> = seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+            "create network 'my-net' for app 'my-app-uuid'",
+            "create volume 'my-vol' for app 'my-app-uuid'",
+        ) + dag!(
+            par!(
+                "remove data for network 'my-net' from release 'old-release'",
+                "migrate network 'my-net' to release 'new-release'"
+            ),
+            par!(
+                "remove data for volume 'my-vol' from release 'old-release'",
+                "migrate volume 'my-vol' to release 'new-release'"
+            )
+        ) + seq!(
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
+    }
+
+    #[test]
+    fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
+        before();
+
+        let initial_state = serde_json::from_value::<Device>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "old-release_my-svc",
+                                    "started": true,
+                                    "container": {
+                                        "id": "deadbeef",
+                                        "status": "running",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "engine_id": "111"
+                },
+            },
+        }))
+        .unwrap();
+        let target = serde_json::from_value::<DeviceTarget>(json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as old release, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "container_name": "new-release_my-svc",
+                                    "started": true,
+                                    "config": {},
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "network_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "volume_name": "my-app-uuid_my-vol",
+                                    "config": {
+                                        "driver_opts": {
+                                            "type": "nfs",
+                                            "o": "addr=10.0.0.1,rw",
+                                            "device": ":/export/data"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let (_, workflow) = worker()
+            .initial_state(initial_state)
+            .find_workflow(target)
+            .unwrap();
+
+        let workflow = workflow.expect("workflow should be found");
+
+        let expected: Dag<&str> = seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+            "create network 'my-net' for app 'my-app-uuid'"
+        ) + dag!(
+            seq!("initialize service 'my-svc' for release 'new-release'"),
+            par!(
+                "remove data for network 'my-net' from release 'old-release'",
+                "migrate network 'my-net' to release 'new-release'"
+            )
+        ) + seq!(
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'",
+            "create volume 'my-vol' for app 'my-app-uuid'"
+        ) + dag!(
+            par!(
+                "remove data for 'my-svc' for release 'old-release'",
+                "migrate service 'my-svc' to release 'new-release'"
+            ),
+            par!(
+                "remove data for volume 'my-vol' from release 'old-release'",
+                "migrate volume 'my-vol' to release 'new-release'"
+            )
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "rename container for service 'my-svc' for release 'new-release'",
+        ) + seq!(
+            "update image metadata for service 'my-svc' of release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "clean-up",
+        );
+        assert_eq!(
+            workflow.to_string(),
+            expected.to_string(),
+            "unexpected plan:\n{workflow}"
+        );
     }
 }
