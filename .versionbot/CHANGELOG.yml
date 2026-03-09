@@ -1,4 +1,31 @@
 - commits:
+    - subject: Reset failed systemd unit before creating a new unit
+      hash: d2b8e4d139a31fbf38fe324d35f0c42c011298b9
+      body: |
+        If the future created by systemd::run gets dropped, and the unit fails,
+        then reset_failed_unit at the end is never reached. Moving it to the
+        beginning means a new call can always be performed.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Allow balenaOS updater script to reboot after install
+      hash: 64048104e69368e35da90f6655c026ef7e3d8cc2
+      body: |
+        The HUP script creates some breadcrumbs that prevent the supervisor
+        from rebooting. This removes the `--no-reboot` option passed to the
+        script to allow it to handle rebooting via `safe_reboot`. This is only
+        temporary until helios handles update locks.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.20.3
+  title: ""
+  date: 2026-03-09T21:45:42.053Z
+- commits:
     - subject: Report 'downloading' state if service image does not exist yet
       hash: ce80231fe0c5a7f68ff228cb30d5bf2516da68d9
       body: |
