@@ -191,7 +191,9 @@ impl From<LocalState> for DeviceReport {
                             // progress
                             None => {
                                 let maybe_img = images.get(&svc_img);
-                                if let Some(img) = maybe_img
+                                if maybe_img.is_none() {
+                                    (ServiceStatus::Downloading, Some(0))
+                                } else if let Some(img) = maybe_img
                                     && img.download_progress < 100
                                 {
                                     (ServiceStatus::Downloading, Some(img.download_progress))
@@ -447,6 +449,14 @@ mod tests {
                                     "started": false,
                                     "container_name": "new-release_three",
                                     "config": {},
+                                },
+                                // the image for this service does not exist yet
+                                "four": {
+                                    "id": 4,
+                                    "image": "debian",
+                                    "started": false,
+                                    "container_name": "new-release_four",
+                                    "config": {},
                                 }
                             }
                         }
@@ -504,6 +514,17 @@ mod tests {
                 .and_then(|rel| rel.services.get("three"))
                 .map(|svc| (&svc.status, svc.download_progress)),
             Some((&ServiceStatus::Installing, None)),
+        );
+        assert_eq!(
+            report
+                .0
+                .get("device-123")
+                .and_then(|device| device.apps.as_ref())
+                .and_then(|apps| apps.get(&Uuid::from("my-app")))
+                .and_then(|app| app.releases.get(&Uuid::from("new-release")))
+                .and_then(|rel| rel.services.get("four"))
+                .map(|svc| (&svc.status, svc.download_progress)),
+            Some((&ServiceStatus::Downloading, Some(0))),
         );
     }
 
