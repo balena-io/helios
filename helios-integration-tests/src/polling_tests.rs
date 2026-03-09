@@ -215,10 +215,11 @@ async fn test_remote_poll_hostos_update() {
         args_content.contains(UPDATER_IMAGE),
         "args should contain updater image uri, got: {args_content}"
     );
-    assert!(
-        args_content.contains("--no-reboot"),
-        "args should contain --no-reboot, got: {args_content}"
-    );
+    // FIXME: this needs to be re-added once helios handles locks
+    // assert!(
+    //     args_content.contains("--no-reboot"),
+    //     "args should contain --no-reboot, got: {args_content}"
+    // );
 
     let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(

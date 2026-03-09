@@ -64,8 +64,11 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum HostReleaseStatus {
+    /// the release metadata has been written to disk and it should be installed next
     Created,
+    /// the release has been installed and we are waiting for a reboot
     Installed,
+    /// the release is currently running
     Running,
 }
 
