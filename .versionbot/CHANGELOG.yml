@@ -1,4 +1,19 @@
 - commits:
+    - subject: Report 'downloading' state if service image does not exist yet
+      hash: ce80231fe0c5a7f68ff228cb30d5bf2516da68d9
+      body: |
+        If the service is initialized but the image has not begun fetching, the
+        service should be reported as `Downloading` with progress of `0`,
+        however it was reporting `Installing`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.20.2
+  title: ""
+  date: 2026-03-09T21:03:43.616Z
+- commits:
     - subject: Add integration tests for API target poll
       hash: 20dff551dfea91b4c32d873058a6bfb2f0919674
       body: |
