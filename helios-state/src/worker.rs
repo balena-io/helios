@@ -7,11 +7,11 @@ use crate::oci::{Client as Docker, RegistryAuth};
 #[cfg(feature = "balenahup")]
 use super::config::HostRuntimeDir;
 use super::models::Device;
+use super::tasks::with_device_tasks;
 #[cfg(feature = "balenahup")]
 use super::tasks::with_hostapp_tasks;
 #[cfg(feature = "userapps")]
-use super::tasks::with_userapp_tasks;
-use super::tasks::{with_device_tasks, with_image_tasks};
+use super::tasks::{with_image_tasks, with_userapp_tasks};
 
 /// Configure the worker jobs
 ///
@@ -20,7 +20,6 @@ fn worker() -> Worker<Device, Uninitialized> {
     let mut worker = Worker::new();
 
     worker = with_device_tasks(worker);
-    worker = with_image_tasks(worker);
 
     #[cfg(feature = "balenahup")]
     {
@@ -29,6 +28,7 @@ fn worker() -> Worker<Device, Uninitialized> {
 
     #[cfg(feature = "userapps")]
     {
+        worker = with_image_tasks(worker);
         worker = with_userapp_tasks(worker);
     }
     #[cfg(not(feature = "userapps"))]

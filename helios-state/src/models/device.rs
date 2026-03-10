@@ -128,6 +128,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
+        #[cfg(feature = "userapps")]
         let mut userapps = Map::new();
         #[cfg(feature = "balenahup")]
         let mut hostapps = Vec::new();
@@ -152,7 +153,10 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
 
         Self {
             name: Some(name),
+            #[cfg(feature = "userapps")]
             apps: userapps,
+            #[cfg(not(feature = "userapps"))]
+            apps: Map::new(),
             // Get only the first hostapp if any
             #[cfg(feature = "balenahup")]
             host: hostapps.pop(),
