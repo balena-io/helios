@@ -14,7 +14,9 @@ use crate::store::{self, DocumentStore};
 use crate::oci::{Client as Docker, Error as OciError, WithContext};
 
 use super::image::create_image;
-use super::utils::{find_future_service, find_installed_service};
+use super::utils::{
+    find_future_network, find_future_service, find_future_volume, find_installed_service,
+};
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -227,37 +229,57 @@ fn remove_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release
 }
 
-/// Create a network in Docker and the state tree
+/// Create or migrate a network
+///
+/// If the network already exists in Docker with the same config, migrate it
+/// from the previous release. If it doesn't exist, create it fresh. If it
+/// exists with different config, skip and let the planner retry after the old
+/// network is uninstalled.
 fn create_network(
     net: View<Option<Network>>,
     Target(tgt): Target<Network>,
-    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Network, Error> {
-    let net = net.create(tgt);
+    let net = net.create(Network {
+        network_name: tgt.network_name.clone(),
+        config: tgt.config,
+    });
 
     with_io(net, async move |mut net| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let network_name = net.network_name.clone();
+
         docker
             .network()
-            .create(&net.network_name, net.config.clone().into())
+            .create(&network_name, net.config.clone().into())
             .await?;
 
-        // Re-read the network from Docker to capture engine-assigned values
         let local_network = docker
             .network()
-            .inspect(&net.network_name)
+            .inspect(&network_name)
             .await
-            .with_context(|| format!("failed to inspect network '{}'", net.network_name))?;
+            .with_context(|| format!("failed to inspect network '{network_name}'"))?;
         *net = Network::from(local_network);
+
         Ok(net)
     })
 }
 
-/// Remove a network from Docker and the state tree
-fn remove_network(
+/// Reconfigure a network by uninstalling it when the config has changed
+///
+/// After uninstall, the planner will re-create the network with the new config.
+fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Option<Task> {
+    if net.config != tgt.config {
+        Some(uninstall_network.into_task())
+    } else {
+        None
+    }
+}
+
+/// Uninstall a network from Docker and the state tree
+fn uninstall_network(
     net: View<Network>,
     Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
@@ -274,37 +296,57 @@ fn remove_network(
     })
 }
 
-/// Create a volume in Docker and the state tree
+/// Create or migrate a volume
+///
+/// If the volume already exists in Docker with the same config, migrate it
+/// from the previous release. If it doesn't exist, create it fresh. If it
+/// exists with different config, skip and let the planner retry after the old
+/// volume is uninstalled.
 fn create_volume(
     vol: View<Option<Volume>>,
     Target(tgt): Target<Volume>,
-    Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
-    let vol = vol.create(tgt);
+    let vol = vol.create(Volume {
+        volume_name: tgt.volume_name.clone(),
+        config: tgt.config,
+    });
 
     with_io(vol, async move |mut vol| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let volume_name = vol.volume_name.clone();
+
         docker
             .volume()
-            .create(&vol.volume_name, vol.config.clone().into())
+            .create(&volume_name, vol.config.clone().into())
             .await?;
 
-        // Re-read the volume from Docker to capture engine-assigned values
         let local_volume = docker
             .volume()
-            .inspect(&vol.volume_name)
+            .inspect(&volume_name)
             .await
-            .with_context(|| format!("failed to inspect volume '{}'", vol.volume_name))?;
+            .with_context(|| format!("failed to inspect volume '{volume_name}'"))?;
         *vol = Volume::from(local_volume);
+
         Ok(vol)
     })
 }
 
-/// Remove a volume from Docker and the state tree
-fn remove_volume(
+/// Reconfigure a volume by uninstalling it when the config has changed
+///
+/// After uninstall, the planner will re-create the volume with the new config.
+fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<Task> {
+    if vol.config != tgt.config {
+        Some(uninstall_volume.into_task())
+    } else {
+        None
+    }
+}
+
+/// Uninstall a volume from Docker and the state tree
+fn uninstall_volume(
     vol: View<Volume>,
     Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
@@ -319,6 +361,84 @@ fn remove_volume(
         docker.volume().remove(&docker_name).await?;
         Ok(vol)
     })
+}
+
+/// Migrate or remove a network
+///
+/// If the same-named network exists in the target with identical config,
+/// perform a state-only removal and migration of data. Otherwise do a full
+/// Docker removal.
+fn remove_network_when_requirements_are_met(
+    net: View<Network>,
+    System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
+    Args((app_uuid, rel_uuid, net_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    if let Some((t_rel_uuid, future_net)) =
+        find_future_network(&t_device, &app_uuid, &rel_uuid, &net_name)
+        && net.config == future_net.config
+    {
+        // Wait until the target release's network has been created in state
+        // before emitting migration tasks
+        let new_net_exists = device
+            .apps
+            .get(&app_uuid)
+            .and_then(|app| app.releases.get(t_rel_uuid))
+            .is_some_and(|rel| rel.networks.contains_key(&net_name));
+
+        if !new_net_exists {
+            return None;
+        }
+
+        // State-only removal, Docker network preserved for new release to adopt
+        Some(remove_network.into_task())
+    } else {
+        Some(uninstall_network.into_task())
+    }
+}
+
+/// Remove network from the current release state
+fn remove_network(net: View<Network>) -> View<Option<Network>> {
+    net.delete()
+}
+
+/// Migrate or remove a volume
+///
+/// If the same-named volume exists in the target with identical config,
+/// perform a state-only removal and migration of data. Otherwise do a full
+/// Docker removal.
+fn remove_volume_when_requirements_are_met(
+    vol: View<Volume>,
+    System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
+    Args((app_uuid, rel_uuid, vol_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    if let Some((t_rel_uuid, future_vol)) =
+        find_future_volume(&t_device, &app_uuid, &rel_uuid, &vol_name)
+        && vol.config == future_vol.config
+    {
+        // Wait until the target release's volume has been created in state
+        // before emitting migration tasks
+        let new_vol_exists = device
+            .apps
+            .get(&app_uuid)
+            .and_then(|app| app.releases.get(t_rel_uuid))
+            .is_some_and(|rel| rel.volumes.contains_key(&vol_name));
+
+        if !new_vol_exists {
+            return None;
+        }
+
+        // State-only removal, Docker volume preserved for new release to adopt
+        Some(remove_volume.into_task())
+    } else {
+        Some(uninstall_volume.into_task())
+    }
+}
+
+/// Remove volume from the current release state
+fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
+    vol.delete()
 }
 
 /// Create the service in memory before initiating download
@@ -824,17 +944,19 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             [
                 job::create(create_network).with_description(
                     |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("create network '{network_name}' for app '{app_uuid}'")
+                        format!("setup network '{network_name}' for app '{app_uuid}'")
                     },
                 ),
-                job::update(remove_network).with_description(
+                job::update(reconfigure_network),
+                job::none(uninstall_network).with_description(
                     |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
                         format!("remove network '{network_name}' for app '{app_uuid}'")
                     },
                 ),
-                job::delete(remove_network).with_description(
-                    |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("remove network '{network_name}' for app '{app_uuid}'")
+                job::delete(remove_network_when_requirements_are_met),
+                job::none(remove_network).with_description(
+                    |Args((_, commit, network_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove data for network '{network_name}' from release '{commit}'")
                     },
                 ),
             ],
@@ -844,17 +966,19 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             [
                 job::create(create_volume).with_description(
                     |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("create volume '{volume_name}' for app '{app_uuid}'")
+                        format!("setup volume '{volume_name}' for app '{app_uuid}'")
                     },
                 ),
-                job::update(remove_volume).with_description(
+                job::update(reconfigure_volume),
+                job::none(uninstall_volume).with_description(
                     |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
                         format!("remove volume '{volume_name}' for app '{app_uuid}'")
                     },
                 ),
-                job::delete(remove_volume).with_description(
-                    |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
-                        format!("remove volume '{volume_name}' for app '{app_uuid}'")
+                job::delete(remove_volume_when_requirements_are_met),
+                job::none(remove_volume).with_description(
+                    |Args((_, commit, volume_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("remove data for volume '{volume_name}' from release '{commit}'")
                     },
                 ),
             ],

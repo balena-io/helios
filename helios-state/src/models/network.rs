@@ -89,7 +89,7 @@ impl From<RemoteNetwork> for NetworkConfig {
 impl From<RemoteNetwork> for Network {
     fn from(net: RemoteNetwork) -> Self {
         Network {
-            // Placeholder name, filled in during normalization
+            // Filled in during normalization
             network_name: String::new(),
             config: net.into(),
         }
