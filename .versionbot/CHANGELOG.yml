@@ -1,4 +1,23 @@
 - commits:
+    - subject: Migrate same-config networks and volumes
+      hash: c2d580451338c16ca8795a6b9cac83a247665fc3
+      body: |
+        If networks or volumes didn't change between releases before,
+        helios would remove and reinstall them regardless of there being
+        differences in config. This commit adds the ability to do a state-only
+        migration of network and volume data to the target state while
+        retaining the Docker object, in the same pattern as service migration.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Christina Ying Wang <christina@balena.io>
+        signed-off-by: Christina Ying Wang <christina@balena.io>
+      author: Christina Ying Wang
+      nested: []
+  version: 0.20.4
+  title: ""
+  date: 2026-03-10T18:40:17.790Z
+- commits:
     - subject: Reset failed systemd unit before creating a new unit
       hash: d2b8e4d139a31fbf38fe324d35f0c42c011298b9
       body: |
