@@ -104,6 +104,14 @@ impl Display for ImageUri {
     }
 }
 
+impl std::ops::Deref for ImageUri {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.normalized
+    }
+}
+
 static IMAGE_URI_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:(localhost|.*?[.:].*?)/)?(.+?)(?::(.*?))?(?:@(.*?))?$").unwrap()
 });
