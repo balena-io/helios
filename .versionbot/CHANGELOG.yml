@@ -1,4 +1,26 @@
 - commits:
+    - subject: Fix compilation warnings when userapps feature is disabled
+      hash: 4de5f9e8c120a7301e2a1350a93a5208d3c1b662
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor balena hostOS update code into helios-balenahup
+      hash: 6363ee4d336b0e100979478a287fc65632eefbc9
+      body: |
+        This moves all code related to hostOS updates to the helios-balenahup
+        crate. Code is now gated under the feature balenahup
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.20.5
+  title: ""
+  date: 2026-03-11T22:45:12.749Z
+- commits:
     - subject: Migrate same-config networks and volumes
       hash: c2d580451338c16ca8795a6b9cac83a247665fc3
       body: |
