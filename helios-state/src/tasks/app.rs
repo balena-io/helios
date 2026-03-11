@@ -487,16 +487,12 @@ fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id,
-        container_name,
-        image,
-        config,
-        ..
+        id, image, config, ..
     } = tgt;
     maybe_svc.create(Service {
         id,
-        container_name,
         image,
+        container_name: None,
         started: false,
         container: None,
         config,
@@ -555,6 +551,10 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
+    debug_assert!(
+        tgt.container_name.is_some(),
+        "target container name should be available"
+    );
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -568,32 +568,34 @@ fn install_service(
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
+        let container_name = svc
+            .container_name
+            .take()
+            .expect("container name should be available");
 
-        if let ImageRef::Uri(svc_img) = svc.image.clone() {
-            let container_config = std::mem::take(&mut svc.config).into();
-            let container_id = docker
-                .container()
-                .create(&svc.container_name, &svc_img, container_config)
-                .await?;
+        let container_config = std::mem::take(&mut svc.config).into();
+        let container_id = docker
+            .container()
+            .create(&container_name, &svc.image, container_config)
+            .await?;
 
-            // check that the container was created and generate the Service configuration
-            // from the image config and container info
-            let local_container = docker
-                .container()
-                .inspect(&container_id)
-                .await
-                .context("failed to inspect container for service")?;
-            *svc = Service::from(local_container);
-            svc.image = ImageRef::Uri(svc_img);
+        // check that the container was created and generate the Service configuration
+        // from the image config and container info
+        let local_container = docker
+            .container()
+            .inspect(&container_id)
+            .await
+            .context("failed to inspect container for service")?;
+        *svc = Service::from(local_container);
+        svc.image = tgt.image;
 
-            // store the image uri that corresponds to the current release service
-            local_store
-                .put(
-                    format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
-                    &svc.image,
-                )
-                .await?;
-        }
+        // store the image uri that corresponds to the current release service
+        local_store
+            .put(
+                format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
+                &svc.image,
+            )
+            .await?;
 
         Ok(svc)
     })
@@ -683,6 +685,10 @@ fn rename_service_container(
     Target(tgt): Target<Service>,
     docker: Res<Docker>,
 ) -> IO<Service, OciError> {
+    debug_assert!(
+        tgt.container_name.is_some(),
+        "target container name should be available"
+    );
     let container_id = if let Some(id) = svc.container.as_ref().map(|c| c.id.clone())
         && svc.container_name != tgt.container_name
     {
@@ -701,10 +707,14 @@ fn rename_service_container(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let container_name = svc
+            .container_name
+            .as_ref()
+            .expect("target container name should be available");
 
         docker
             .container()
-            .rename(&container_id, &svc.container_name)
+            .rename(&container_id, container_name)
             .await
             .context("failed to rename container for service")?;
 

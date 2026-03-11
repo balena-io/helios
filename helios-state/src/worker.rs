@@ -251,23 +251,23 @@ mod tests {
                                     "id": 3,
                                     // different image same digest
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
-                                    "started": true,
                                     "container_name": "my-release-uuid_service3",
+                                    "started": true,
                                     "config": {},
                                 },
                                 // additional images to test download batching
                                 "service4": {
                                     "id": 4,
                                     "image": "alpine:latest",
-                                    "started": true,
                                     "container_name": "my-release-uuid_service4",
+                                    "started": true,
                                     "config": {},
                                 },
                                 "service5": {
                                     "id": 5,
                                     "image": "alpine:3.20",
-                                    "container_name": "my-release-uuid_service5",
                                     "started": true,
+                                    "container_name": "my-release-uuid_service5",
                                     "config": {},
                                 },
                             }

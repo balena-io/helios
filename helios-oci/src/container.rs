@@ -74,12 +74,7 @@ impl Container<'_> {
     ///
     /// Returns a reference to the container, either the newly created id or
     /// the container name if the container already exists
-    pub async fn create(
-        &self,
-        name: &str,
-        image: &ImageUri,
-        config: ContainerConfig,
-    ) -> Result<String> {
+    pub async fn create(&self, name: &str, image: &str, config: ContainerConfig) -> Result<String> {
         let options = Some(CreateContainerOptions {
             name: Some(name.to_owned()),
             platform: String::from(""),
