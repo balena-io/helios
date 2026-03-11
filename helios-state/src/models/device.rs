@@ -5,9 +5,11 @@ use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
-use super::host::Host;
 use super::image::Image;
 use super::network::Network;
+
+#[cfg(feature = "balenahup")]
+use crate::balenahup::Host;
 
 /// The current state of a device that will be stored
 /// by the worker
@@ -18,6 +20,7 @@ pub struct Device {
     #[mahler(internal)]
     pub uuid: Uuid,
 
+    /// The device name on the remote
     pub name: Option<String>,
 
     /// List of docker images on the device
@@ -28,6 +31,7 @@ pub struct Device {
     pub apps: Map<Uuid, App>,
 
     /// The "hostapp" configuration
+    #[cfg(feature = "balenahup")]
     pub host: Option<Host>,
 }
 
@@ -36,6 +40,7 @@ impl Default for DeviceTarget {
         DeviceTarget {
             name: None,
             apps: Map::new(),
+            #[cfg(feature = "balenahup")]
             host: None,
         }
     }
@@ -43,11 +48,14 @@ impl Default for DeviceTarget {
 
 impl Device {
     pub fn new(uuid: Uuid, os: Option<OperatingSystem>) -> Self {
+        #[cfg(not(feature = "balenahup"))]
+        let _ = os;
         Self {
             uuid,
             name: None,
             images: Map::new(),
             apps: Map::new(),
+            #[cfg(feature = "balenahup")]
             host: os.map(Host::new),
         }
     }
@@ -58,9 +66,11 @@ impl From<Device> for DeviceTarget {
         let Device {
             name,
             apps,
+            #[cfg(feature = "balenahup")]
             host,
             uuid: _,
             images: _,
+            ..
         } = device;
         Self {
             name,
@@ -68,6 +78,7 @@ impl From<Device> for DeviceTarget {
                 .into_iter()
                 .map(|(uuid, app)| (uuid, app.into()))
                 .collect(),
+            #[cfg(feature = "balenahup")]
             host: host.map(|r| r.into()),
         }
     }
@@ -117,32 +128,38 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
+        #[cfg(feature = "userapps")]
         let mut userapps = Map::new();
+        #[cfg(feature = "balenahup")]
         let mut hostapps = Vec::new();
         for (app_uuid, app) in apps {
             match app {
                 // Read the hostapp info if it exists and the feature is enabled
+                #[cfg(feature = "balenahup")]
                 RemoteAppTarget::Host(hostapp) => {
-                    if cfg!(feature = "balenahup") {
-                        hostapps.push((app_uuid, hostapp).into());
-                    }
+                    hostapps.push((app_uuid, hostapp).into());
                 }
+                #[cfg(not(feature = "balenahup"))]
+                RemoteAppTarget::Host(_) => {}
                 // Read the userapp info if it exists and the feature is enabled
+                #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
-                    if cfg!(feature = "userapps") {
-                        userapps.insert(app_uuid, userapp.into());
-                    }
+                    userapps.insert(app_uuid, userapp.into());
                 }
+                #[cfg(not(feature = "userapps"))]
+                RemoteAppTarget::User(_) => {}
             };
         }
 
-        // Get only the first hostapp if any
-        let hostapp = hostapps.pop();
-
         Self {
             name: Some(name),
+            #[cfg(feature = "userapps")]
             apps: userapps,
-            host: hostapp,
+            #[cfg(not(feature = "userapps"))]
+            apps: Map::new(),
+            // Get only the first hostapp if any
+            #[cfg(feature = "balenahup")]
+            host: hostapps.pop(),
         }
     }
 }
@@ -272,12 +289,6 @@ mod tests {
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
             "uuid": "device-uuid",
-            "host": {
-                "meta": {
-                    "name": "balenaOS",
-                    "version": "6.5.4",
-                }
-            },
             "apps": {
                 "aaa": {
                     "name": "my-app",

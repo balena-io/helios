@@ -992,6 +992,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "helios-balenahup"
+version = "0.20.4"
+dependencies = [
+ "helios-oci",
+ "helios-remote-model",
+ "helios-store",
+ "helios-util",
+ "mahler",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "helios-legacy"
 version = "0.20.4"
 dependencies = [
@@ -1018,7 +1033,6 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.18",
  "tokio-stream",
- "tracing",
 ]
 
 [[package]]
@@ -1053,6 +1067,7 @@ dependencies = [
 name = "helios-state"
 version = "0.20.4"
 dependencies = [
+ "helios-balenahup",
  "helios-legacy",
  "helios-oci",
  "helios-remote-model",
@@ -1079,7 +1094,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tokio",
  "tracing",
@@ -1528,9 +1542,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mahler"
-version = "0.25.5"
+version = "0.25.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91afc66a7c3ef95c206656a985440434db3fcb8a95734c74e1cbb6419cbeffb2"
+checksum = "60146b8ea6c311d3849fba8e190e4ea616f2769fc2f5e6927c84106d43b952a6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1547,9 +1561,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-core"
-version = "0.25.5"
+version = "0.25.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc4ba8f2fe218d494eca7ba87d74dba7bd910adb21f32d4b635d3dfcbf30aef"
+checksum = "34b85b614ba12da47aac4fc1d68ad7340593db52bf900de0996a2a809766ab6a"
 dependencies = [
  "async-trait",
  "futures",
@@ -1563,9 +1577,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-derive"
-version = "0.25.5"
+version = "0.25.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5acbdbb86021c56f0d7ef3a97e9a6ecf07f939fa1175f08247198ff132f48e3a"
+checksum = "ce85ebeeeb489edd39dfdf9efdfc68497ab54ba3a77ece42d230a7f9c1f07a24"
 dependencies = [
  "proc-macro2",
  "quote",

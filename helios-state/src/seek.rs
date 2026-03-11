@@ -17,7 +17,7 @@ use crate::util::interrupt::Interrupt;
 
 use super::config::Resources;
 use super::models::{Device, DeviceTarget};
-use super::read::{ReadStateError, read as read_state};
+use super::read::{self, read as read_state};
 use super::worker::{LocalWorker, create};
 
 /// Represents the service update status according to
@@ -122,7 +122,7 @@ impl Default for SeekRequest {
 #[derive(Debug, thiserror::Error)]
 pub enum SeekError {
     #[error("failed to read state: {0}")]
-    ReadState(#[from] ReadStateError),
+    ReadState(#[from] read::Error),
 
     #[error("failed to reach target state: {0}")]
     SeekTargetState(#[from] mahler::error::Error),
@@ -226,8 +226,11 @@ async fn seek_target(
             let has_exceptions = !workflow.exceptions().is_empty();
             if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
                 warn!("the following operations were ignored during planning");
-                for op in workflow.exceptions() {
-                    warn!("- {op}");
+                for ignored in workflow.exceptions() {
+                    warn!("- {}", ignored.operation);
+                    if let Some(reason) = ignored.reason.as_ref() {
+                        warn!("    reason: {reason}");
+                    }
                 }
             }
 
@@ -320,7 +323,10 @@ pub async fn start_seek(
 
     // Keep track of the current state and update status
     let uuid = initial_state.uuid.clone();
+    #[cfg(feature = "balenahup")]
     let os = initial_state.host.as_ref().map(|host| host.meta.clone());
+    #[cfg(not(feature = "balenahup"))]
+    let os: Option<crate::common_types::OperatingSystem> = None;
     let mut current_state = initial_state.clone();
     let mut update_status = UpdateStatus::default();
 
@@ -328,6 +334,7 @@ pub async fn start_seek(
         docker,
         local_store,
         registry_auth_client,
+        #[cfg(feature = "balenahup")]
         host_runtime_dir,
     } = runtime;
 
@@ -335,6 +342,7 @@ pub async fn start_seek(
     let worker = create(
         docker.clone(),
         local_store.clone(),
+        #[cfg(feature = "balenahup")]
         host_runtime_dir.clone(),
         registry_auth_client.clone(),
     );

@@ -1,25 +1,20 @@
-use std::time::{Duration, SystemTime};
-
 use mahler::state::Map;
 use thiserror::Error;
-use tokio::fs;
 use tracing::{instrument, trace};
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::models::{HostRelease, HostReleaseStatus};
-use crate::oci::{Client as Docker, Error as DockerError};
+use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
-use crate::util::dirs::runtime_dir;
 
 use super::models::{
     App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID, Volume,
 };
 
 #[derive(Debug, Error)]
-pub enum ReadStateError {
+pub enum Error {
     #[error(transparent)]
-    Docker(#[from] DockerError),
+    Oci(#[from] oci::Error),
 
     #[error(transparent)]
     InvalidRegistryUri(#[from] InvalidImageUriError),
@@ -31,12 +26,24 @@ pub enum ReadStateError {
     IO(#[from] std::io::Error),
 }
 
+#[cfg(feature = "balenahup")]
+impl From<crate::balenahup::read::Error> for Error {
+    fn from(value: crate::balenahup::read::Error) -> Error {
+        use crate::balenahup::read::Error::*;
+        match value {
+            Oci(e) => Error::Oci(e),
+            Store(e) => Error::Store(e),
+            IO(e) => Error::IO(e),
+        }
+    }
+}
+
 /// Find or create an app entry
 async fn get_or_create_app<'a>(
     apps: &'a mut Map<Uuid, App>,
     app_uuid: &Uuid,
     local_store: &DocumentStore,
-) -> Result<&'a mut App, ReadStateError> {
+) -> Result<&'a mut App, Error> {
     if !apps.contains_key(app_uuid) {
         let name = local_store.get(format!("apps/{app_uuid}/name")).await?;
 
@@ -60,58 +67,16 @@ pub async fn read(
     local_store: &DocumentStore,
     uuid: Uuid,
     os: Option<OperatingSystem>,
-) -> Result<Device, ReadStateError> {
+) -> Result<Device, Error> {
     let mut device = Device::new(uuid, os);
 
     // read the device name from the local store
     device.name = local_store.get("device_name").await?;
 
     // Read the hostapp information from the local store
+    #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
-        let host_releases_view = local_store.as_view().at("host/releases")?;
-        let host_releases: Vec<Uuid> = host_releases_view
-            .keys()
-            .await?
-            .into_iter()
-            .map(Uuid::from)
-            .collect();
-        for release_uuid in host_releases {
-            match local_store
-                .open(format!("host/releases/{release_uuid}/hostapp"))
-                .await
-            {
-                Ok(hostapp_doc) => {
-                    let last_modified = hostapp_doc.modified().unwrap_or_else(SystemTime::now);
-                    let mut hostapp: HostRelease = hostapp_doc.into_value().await?;
-
-                    // ignore the status on the store and deduce it instead
-                    hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
-                        // if the hostapp build is the current OS build then the release is running
-                        HostReleaseStatus::Running
-                    } else if fs::try_exists(
-                        runtime_dir().join(format!("balenahup-{release_uuid}-breadcrumb")),
-                    )
-                    .await?
-                    {
-                        // if there is a balenahup breadcrumb, then we are still waiting for a
-                        // reboot
-                        HostReleaseStatus::Installed
-                    } else {
-                        // otherwise the release has only been created
-                        HostReleaseStatus::Created
-                    };
-
-                    if SystemTime::now() - Duration::from_secs(3600 * 24) > last_modified {
-                        // reset the install attempts after 24 hours
-                        hostapp.install_attempts = 0;
-                    }
-
-                    host.releases.insert(release_uuid, hostapp);
-                }
-                Err(store::Error::NotFound { .. }) => {}
-                Err(e) => return Err(e)?,
-            }
-        }
+        crate::balenahup::read::from_store(host, local_store).await?;
     }
 
     // Read the state of images
