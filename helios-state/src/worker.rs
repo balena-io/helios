@@ -35,7 +35,10 @@ fn worker() -> Worker<Device, Uninitialized> {
     {
         // ignore user apps when planning
         use mahler::exception;
-        worker = worker.exception("/apps", exception::update(|| true));
+        worker = worker.exception(
+            "/apps",
+            exception::update(|| true).with_description(|| "app update support is disabled"),
+        );
     }
 
     worker

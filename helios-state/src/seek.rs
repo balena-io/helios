@@ -226,8 +226,11 @@ async fn seek_target(
             let has_exceptions = !workflow.exceptions().is_empty();
             if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
                 warn!("the following operations were ignored during planning");
-                for op in workflow.exceptions() {
-                    warn!("- {op}");
+                for ignored in workflow.exceptions() {
+                    warn!("- {}", ignored.operation);
+                    if let Some(reason) = ignored.reason.as_ref() {
+                        warn!("    reason: {reason}");
+                    }
                 }
             }
 

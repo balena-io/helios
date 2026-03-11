@@ -342,13 +342,22 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             job::none(cleanup_hostapp).with_description(|| "clean-up host metadata and images"),
         )
         // ignore requests to delete the host field if the target OS is set to null
-        .exception("/host", exception::delete(|| true))
+        .exception(
+            "/host",
+            exception::delete(|| true).with_description(|| "target host release missing"),
+        )
         // ignore requests to update the host if it has already been installed (we are waiting for
         // a reboot) or we reached the number of install attempts
         .exception(
             "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>| rel.status == HostReleaseStatus::Installed)
+                .with_description(|| "update needs a reboot to complete"),
+        )
+        .exception(
+            "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
-                rel.status == HostReleaseStatus::Installed || rel.install_attempts > 3
-            }),
+                rel.status == HostReleaseStatus::Created && rel.install_attempts > 3
+            })
+            .with_description(|| "too many failed installs, check device"),
         )
 }
