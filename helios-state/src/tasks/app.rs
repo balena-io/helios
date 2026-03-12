@@ -551,10 +551,7 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
-    debug_assert!(
-        tgt.container_name.is_some(),
-        "target container name should be available"
-    );
+    debug_assert!(tgt.container_name.is_some());
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -573,7 +570,8 @@ fn install_service(
             .take()
             .expect("container name should be available");
 
-        let container_config = std::mem::take(&mut svc.config).into();
+        let container_config =
+            std::mem::take(&mut svc.config).into_container_config(svc.id, &svc_name, &app_uuid);
         let container_id = docker
             .container()
             .create(&container_name, &svc.image, container_config)
@@ -640,7 +638,9 @@ fn start_service(
     // need to loop again to re-create the container
     enforce!(
         svc.config == tgt_svc.config,
-        "service configuration should match the target before"
+        "service configuration should match the target before start: {:?}, {:?}",
+        svc.config,
+        tgt_svc.config
     );
 
     svc.started = true;
@@ -685,10 +685,7 @@ fn rename_service_container(
     Target(tgt): Target<Service>,
     docker: Res<Docker>,
 ) -> IO<Service, OciError> {
-    debug_assert!(
-        tgt.container_name.is_some(),
-        "target container name should be available"
-    );
+    debug_assert!(tgt.container_name.is_some());
     let container_id = if let Some(id) = svc.container.as_ref().map(|c| c.id.clone())
         && svc.container_name != tgt.container_name
     {

@@ -1,6 +1,7 @@
 use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
+use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{ContainerState, ContainerStatus, DateTime, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
 
@@ -126,11 +127,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         // merge the composition labels with the top level service labels
         // giving priority to the latter
-        let mut labels: Map<String, String> =
-            composition.labels.into_iter().chain(labels).collect();
-
-        // add the service id to the container labels
-        labels.insert("io.balena.service-id".to_string(), id.to_string());
+        let labels: Map<String, String> = composition.labels.into_iter().chain(labels).collect();
 
         // convert the composition command to a List
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
@@ -148,13 +145,13 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 }
 
 impl From<LocalContainer> for Service {
-    fn from(container: LocalContainer) -> Self {
+    fn from(mut container: LocalContainer) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
             .labels
-            .as_ref()
-            .and_then(|value| value.get("io.balena.service-id"))
+            .as_mut()
+            .and_then(|value| value.remove(LABEL_SERVICE_ID))
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
