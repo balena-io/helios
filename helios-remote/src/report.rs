@@ -19,7 +19,7 @@ use super::config::RemoteConfig;
 #[derive(Serialize, Debug, PartialEq, Eq)]
 enum ServiceStatus {
     Downloading,
-    Installing,
+    Downloaded,
     Installed,
     Running,
     Stopping,
@@ -30,11 +30,13 @@ enum ServiceStatus {
 #[derive(Clone, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateStatus {
-    Done,
+    // Rejected,
     Aborted,
+    Downloading,
+    Downloaded,
     #[serde(rename = "applying changes")]
     ApplyingChanges,
-    // Rejected,
+    Done,
 }
 
 #[derive(Serialize, Debug)]
@@ -98,6 +100,57 @@ fn applying_unless_aborted(status: &LocalUpdateStatus) -> UpdateStatus {
     }
 }
 
+#[cfg(feature = "balenahup")]
+fn report_host_app(
+    host_state: crate::state::models::Host,
+    seek_status: &LocalUpdateStatus,
+    apps: &mut HashMap<Uuid, AppReport>,
+) {
+    let release_uuid = host_state
+        .releases
+        .iter()
+        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
+        .map(|(uuid, _)| uuid.clone());
+
+    for (rel_uuid, release) in host_state.releases {
+        let (update_status, service_status, app_release) =
+            if Some(&rel_uuid) == release_uuid.as_ref() {
+                (
+                    UpdateStatus::Done,
+                    ServiceStatus::Running,
+                    Some(rel_uuid.clone()),
+                )
+            } else {
+                (
+                    applying_unless_aborted(seek_status),
+                    ServiceStatus::Downloaded,
+                    None,
+                )
+            };
+
+        let app = apps.entry(release.app).or_insert(AppReport {
+            release_uuid: app_release,
+            releases: HashMap::new(),
+        });
+
+        app.releases.insert(
+            rel_uuid,
+            ReleaseReport {
+                update_status,
+                services: [(
+                    "hostapp".to_owned(),
+                    ServiceReport {
+                        image: release.image.repo(),
+                        status: service_status,
+                        download_progress: None,
+                    },
+                )]
+                .into(),
+            },
+        );
+    }
+}
+
 impl From<LocalState> for DeviceReport {
     fn from(state: LocalState) -> Self {
         let mut apps = HashMap::new();
@@ -117,60 +170,8 @@ impl From<LocalState> for DeviceReport {
 
         // Convert the host data into an app report if any
         #[cfg(feature = "balenahup")]
-        if let Some(host_state) = host {
-            // Get the current release
-            let release_uuid = host_state
-                .releases
-                .iter()
-                .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
-                .map(|(uuid, _)| uuid.clone());
-
-            for (rel_uuid, release) in host_state.releases {
-                // Get the status of the app as services based on
-                // whether the running release is the current release
-                let (update_status, service_status, app_release) =
-                    if Some(&rel_uuid) == release_uuid.as_ref() {
-                        (
-                            UpdateStatus::Done,
-                            ServiceStatus::Running,
-                            Some(rel_uuid.clone()),
-                        )
-                    } else {
-                        (
-                            // report as applying changes unless the target state apply
-                            // has reported the status as aborted
-                            applying_unless_aborted(&seek_status),
-                            ServiceStatus::Installing,
-                            None,
-                        )
-                    };
-
-                // Get the app that corresponds to the current release
-                // or create one
-                let app = apps.entry(release.app).or_insert(AppReport {
-                    release_uuid: app_release,
-                    releases: HashMap::new(),
-                });
-
-                // Update the releases
-                app.releases.insert(
-                    rel_uuid,
-                    ReleaseReport {
-                        update_status,
-                        services: [(
-                            // the backend doesn't really care for the service name, it creates
-                            // image installs using the image uri
-                            "hostapp".to_owned(),
-                            ServiceReport {
-                                image: release.image.repo(),
-                                status: service_status,
-                                download_progress: None,
-                            },
-                        )]
-                        .into(),
-                    },
-                );
-            }
+        if let Some(host) = host {
+            report_host_app(host, &seek_status, &mut apps);
         }
 
         // convert the user apps to an accepted report
@@ -200,7 +201,7 @@ impl From<LocalState> for DeviceReport {
                                 {
                                     (ServiceStatus::Downloading, Some(img.download_progress))
                                 } else {
-                                    (ServiceStatus::Installing, None)
+                                    (ServiceStatus::Downloaded, None)
                                 }
                             }
                             Some(LocalServiceStatus::Installed) => (ServiceStatus::Installed, None),
@@ -210,12 +211,19 @@ impl From<LocalState> for DeviceReport {
                             Some(LocalServiceStatus::Dead) => (ServiceStatus::Dead, None),
                         };
 
-                    // if the release has been finalized, then report it as the current release
-                    let (update_status, cur_release_uuid) = if release_is_unique && rel.installed {
-                        (UpdateStatus::Done, Some(rel_uuid.clone()))
-                    } else {
-                        (applying_unless_aborted(&seek_status), None)
-                    };
+                    let (update_status, cur_release_uuid) =
+                        // derive the update status from the service status if downloading|downloaded
+                        if service_status == ServiceStatus::Downloading {
+                            (UpdateStatus::Downloading, None)
+                        } else if service_status == ServiceStatus::Downloaded {
+                            (UpdateStatus::Downloaded, None)
+                        // if the release has been finalized, then report it as the current release
+                        } else if release_is_unique && rel.installed {
+                            (UpdateStatus::Done, Some(rel_uuid.clone()))
+                        // otherwise assume is applying unless the stare engine reports 'aborted'
+                        } else {
+                            (applying_unless_aborted(&seek_status), None)
+                        };
 
                     // Get or create the app
                     let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
@@ -231,7 +239,8 @@ impl From<LocalState> for DeviceReport {
                             services: HashMap::new(),
                         });
 
-                    if release.update_status < update_status {
+                    // use the lowest status precedence
+                    if release.update_status > update_status {
                         release.update_status = update_status;
                     }
 
@@ -482,7 +491,7 @@ mod tests {
                 .and_then(|apps| apps.get(&Uuid::from("my-app")))
                 .and_then(|app| app.releases.get(&Uuid::from("new-release")))
                 .map(|rel| &rel.update_status),
-            Some(&UpdateStatus::ApplyingChanges),
+            Some(&UpdateStatus::Downloading),
         );
         assert_eq!(
             report
@@ -515,7 +524,7 @@ mod tests {
                 .and_then(|app| app.releases.get(&Uuid::from("new-release")))
                 .and_then(|rel| rel.services.get("three"))
                 .map(|svc| (&svc.status, svc.download_progress)),
-            Some((&ServiceStatus::Installing, None)),
+            Some((&ServiceStatus::Downloaded, None)),
         );
         assert_eq!(
             report

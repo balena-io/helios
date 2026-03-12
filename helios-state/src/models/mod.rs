@@ -15,3 +15,6 @@ pub use network::*;
 pub use release::*;
 pub use service::*;
 pub use volume::*;
+
+#[cfg(feature = "balenahup")]
+pub use crate::balenahup::{Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget};
