@@ -167,6 +167,40 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
     })
 }
 
+/// If modifying a release, make sure `release.installed` is set to false to
+/// ensure the release gets finished afterwards
+fn ensure_release_is_finalized(
+    mut rel: View<Release>,
+    Target(tgt_rel): Target<Release>,
+) -> View<Release> {
+    if tgt_rel.services.iter().any(|(svc_name, tgt_svc)| {
+        rel.services
+            .get(svc_name)
+            .map(|svc| tgt_svc != &ServiceTarget::from(svc.clone()))
+            // target service does not exist yet or has a different config
+            .unwrap_or(true)
+    }) || tgt_rel.networks.iter().any(|(net_name, tgt_net)| {
+        rel.networks
+            .get(net_name)
+            .map(|net| tgt_net != net)
+            // target network does not exist yet or has a different config
+            .unwrap_or(true)
+    }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
+        rel.volumes
+            .get(vol_name)
+            .map(|vol| tgt_vol != vol)
+            // target volume does not exist yet or has a different config
+            .unwrap_or(true)
+    }) {
+        // We only modify the release in memory to avoid writing to disk.
+        // If something interrupts the update, services/network/volumes won't match
+        // so this task will be executed again
+        rel.installed = false;
+    }
+
+    rel
+}
+
 /// Finalize an installed release
 fn finish_release(
     mut release: View<Release>,
@@ -175,31 +209,40 @@ fn finish_release(
     store: Res<DocumentStore>,
 ) -> IO<Release, store::Error> {
     // all target services have been installed
-    enforce!(target.services.iter().all(|(svc_name, tgt_svc)| {
-        release
-            .services
-            .get(svc_name)
-            .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.services.iter().all(|(svc_name, tgt_svc)| {
+            release
+                .services
+                .get(svc_name)
+                .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+                .unwrap_or_default()
+        }),
+        "all services should have the correct configuration"
+    );
 
     // all target networks have been created
-    enforce!(target.networks.iter().all(|(net_name, tgt_net)| {
-        release
-            .networks
-            .get(net_name)
-            .map(|net| tgt_net == net)
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.networks.iter().all(|(net_name, tgt_net)| {
+            release
+                .networks
+                .get(net_name)
+                .map(|net| tgt_net == net)
+                .unwrap_or_default()
+        }),
+        "all networks should have the correct configuration"
+    );
 
     // all target volumes have been created
-    enforce!(target.volumes.iter().all(|(vol_name, tgt_vol)| {
-        release
-            .volumes
-            .get(vol_name)
-            .map(|vol| tgt_vol == vol)
-            .unwrap_or_default()
-    }));
+    enforce!(
+        target.volumes.iter().all(|(vol_name, tgt_vol)| {
+            release
+                .volumes
+                .get(vol_name)
+                .map(|vol| tgt_vol == vol)
+                .unwrap_or_default()
+        }),
+        "all volumes should have the correct configuration"
+    );
 
     release.installed = true;
     with_io(release, async move |release| {
@@ -239,6 +282,7 @@ fn create_network(
     net: View<Option<Network>>,
     Target(tgt): Target<Network>,
     docker: Res<Docker>,
+    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
 ) -> IO<Network, Error> {
     let net = net.create(Network {
         network_name: tgt.network_name.clone(),
@@ -249,16 +293,18 @@ fn create_network(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let network_name = net.network_name.clone();
+
+        let network_config = std::mem::take(&mut net.config);
+        let network_name = &net.network_name;
 
         docker
             .network()
-            .create(&network_name, net.config.clone().into())
+            .create(network_name, network_config.into_oci_config(&app_uuid))
             .await?;
 
         let local_network = docker
             .network()
-            .inspect(&network_name)
+            .inspect(network_name)
             .await
             .with_context(|| format!("failed to inspect network '{network_name}'"))?;
         *net = Network::from(local_network);
@@ -279,11 +325,7 @@ fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Opti
 }
 
 /// Uninstall a network from Docker and the state tree
-fn uninstall_network(
-    net: View<Network>,
-    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
-    docker: Res<Docker>,
-) -> IO<Option<Network>, Error> {
+fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Network>, Error> {
     let docker_name = net.network_name.clone();
     let net = net.delete();
 
@@ -305,6 +347,7 @@ fn uninstall_network(
 fn create_volume(
     vol: View<Option<Volume>>,
     Target(tgt): Target<Volume>,
+    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
     let vol = vol.create(Volume {
@@ -316,11 +359,12 @@ fn create_volume(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let volume_config = std::mem::take(&mut vol.config);
         let volume_name = vol.volume_name.clone();
 
         docker
             .volume()
-            .create(&volume_name, vol.config.clone().into())
+            .create(&volume_name, volume_config.into_oci_config(&app_uuid))
             .await?;
 
         let local_volume = docker
@@ -346,11 +390,7 @@ fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<
 }
 
 /// Uninstall a volume from Docker and the state tree
-fn uninstall_volume(
-    vol: View<Volume>,
-    Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
-    docker: Res<Docker>,
-) -> IO<Option<Volume>, Error> {
+fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>, Error> {
     let docker_name = vol.volume_name.clone();
     let vol = vol.delete();
 
@@ -444,16 +484,12 @@ fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id,
-        container_name,
-        image,
-        config,
-        ..
+        id, image, config, ..
     } = tgt;
     maybe_svc.create(Service {
         id,
-        container_name,
         image,
+        container_name: None,
         started: false,
         container: None,
         config,
@@ -512,6 +548,7 @@ fn install_service(
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
+    debug_assert!(tgt.container_name.is_some());
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -525,32 +562,35 @@ fn install_service(
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
+        let container_name = svc
+            .container_name
+            .take()
+            .expect("container name should be available");
 
-        if let ImageRef::Uri(svc_img) = svc.image.clone() {
-            let container_config = std::mem::take(&mut svc.config).into();
-            let container_id = docker
-                .container()
-                .create(&svc.container_name, &svc_img, container_config)
-                .await?;
+        let container_config =
+            std::mem::take(&mut svc.config).into_container_config(svc.id, &svc_name, &app_uuid);
+        let container_id = docker
+            .container()
+            .create(&container_name, &svc.image, container_config)
+            .await?;
 
-            // check that the container was created and generate the Service configuration
-            // from the image config and container info
-            let local_container = docker
-                .container()
-                .inspect(&container_id)
-                .await
-                .context("failed to inspect container for service")?;
-            *svc = Service::from(local_container);
-            svc.image = ImageRef::Uri(svc_img);
+        // check that the container was created and generate the Service configuration
+        // from the image config and container info
+        let local_container = docker
+            .container()
+            .inspect(&container_id)
+            .await
+            .context("failed to inspect container for service")?;
+        *svc = Service::from(local_container);
+        svc.image = tgt.image;
 
-            // store the image uri that corresponds to the current release service
-            local_store
-                .put(
-                    format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
-                    &svc.image,
-                )
-                .await?;
-        }
+        // store the image uri that corresponds to the current release service
+        local_store
+            .put(
+                format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
+                &svc.image,
+            )
+            .await?;
 
         Ok(svc)
     })
@@ -595,7 +635,9 @@ fn start_service(
     // need to loop again to re-create the container
     enforce!(
         svc.config == tgt_svc.config,
-        "service configuration should match the target before"
+        "service configuration should match the target before start: {:?}, {:?}",
+        svc.config,
+        tgt_svc.config
     );
 
     svc.started = true;
@@ -640,6 +682,7 @@ fn rename_service_container(
     Target(tgt): Target<Service>,
     docker: Res<Docker>,
 ) -> IO<Service, OciError> {
+    debug_assert!(tgt.container_name.is_some());
     let container_id = if let Some(id) = svc.container.as_ref().map(|c| c.id.clone())
         && svc.container_name != tgt.container_name
     {
@@ -658,10 +701,14 @@ fn rename_service_container(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let container_name = svc
+            .container_name
+            .as_ref()
+            .expect("target container name should be available");
 
         docker
             .container()
-            .rename(&container_id, &svc.container_name)
+            .rename(&container_id, container_name)
             .await
             .context("failed to rename container for service")?;
 
@@ -925,6 +972,11 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::create(create_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("initialize release '{commit}' for app with uuid '{uuid}'")
+                    },
+                ),
+                job::update(ensure_release_is_finalized).with_description(
+                    |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
+                        format!("prepare release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
                 job::update(finish_release).with_description(

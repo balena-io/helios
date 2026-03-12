@@ -3,8 +3,9 @@ use std::ops::{Deref, DerefMut};
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::labels::LABEL_SUPERVISED;
-use crate::oci::{LocalVolume, VolumeConfig as OciVolumeConfig, VolumeDriver};
+use crate::common_types::Uuid;
+use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
+use crate::oci::{self, LocalVolume, VolumeDriver};
 use crate::remote_model::Volume as RemoteVolume;
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -20,10 +21,10 @@ impl State for Volume {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-pub struct VolumeConfig(OciVolumeConfig);
+pub struct VolumeConfig(oci::VolumeConfig);
 
 impl Deref for VolumeConfig {
-    type Target = OciVolumeConfig;
+    type Target = oci::VolumeConfig;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -38,7 +39,7 @@ impl DerefMut for VolumeConfig {
 
 impl From<RemoteVolume> for VolumeConfig {
     fn from(vol: RemoteVolume) -> Self {
-        VolumeConfig(OciVolumeConfig {
+        VolumeConfig(oci::VolumeConfig {
             driver: vol.driver.map(VolumeDriver::from).unwrap_or_default(),
             driver_opts: vol.driver_opts.into_iter().collect(),
             labels: vol.labels.into_iter().collect(),
@@ -64,10 +65,11 @@ impl From<LocalVolume> for Volume {
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
+        labels.remove(LABEL_APP_UUID);
 
         Volume {
             volume_name,
-            config: VolumeConfig(OciVolumeConfig {
+            config: VolumeConfig(oci::VolumeConfig {
                 driver: vol.driver,
                 driver_opts: vol.driver_opts,
                 labels,
@@ -76,14 +78,19 @@ impl From<LocalVolume> for Volume {
     }
 }
 
-impl From<VolumeConfig> for OciVolumeConfig {
-    fn from(vol: VolumeConfig) -> Self {
-        let mut inner = vol.0;
+impl VolumeConfig {
+    pub fn into_oci_config(self, app_uuid: &Uuid) -> oci::VolumeConfig {
+        let mut inner = self.0;
 
         // Mark the volume as supervised
         inner
             .labels
             .insert(LABEL_SUPERVISED.to_string(), "".to_string());
+
+        // Add app metadata
+        inner
+            .labels
+            .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
 
         inner
     }
@@ -139,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_to_oci_config_injects_supervised_label() {
-        let config = VolumeConfig(OciVolumeConfig {
+        let config = VolumeConfig(oci::VolumeConfig {
             driver: VolumeDriver::from("local".to_string()),
             driver_opts: [("o".to_string(), "bind".to_string())]
                 .into_iter()
@@ -149,7 +156,7 @@ mod tests {
                 .collect(),
         });
 
-        let oci_config: OciVolumeConfig = config.into();
+        let oci_config: oci::VolumeConfig = config.into_oci_config(&Uuid::from("aaa123"));
 
         assert_eq!(oci_config.driver.to_string(), "local");
         assert_eq!(oci_config.driver_opts.get("o"), Some(&"bind".to_string()));
@@ -160,6 +167,10 @@ mod tests {
         assert_eq!(
             oci_config.labels.get("io.balena.supervised"),
             Some(&"".to_string())
+        );
+        assert_eq!(
+            oci_config.labels.get("io.balena.app-uuid"),
+            Some(&"aaa123".to_string())
         );
     }
 

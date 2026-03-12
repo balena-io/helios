@@ -41,6 +41,17 @@ impl ImageRef {
     }
 }
 
+impl std::ops::Deref for ImageRef {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Uri(uri) => uri,
+            Self::Id(id) => id,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for ImageRef {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

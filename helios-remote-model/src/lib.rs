@@ -233,16 +233,41 @@ impl<'de> Deserialize<'de> for ReleaseMap {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Release {
-    #[serde(default)]
     pub services: HashMap<String, Service>,
-
-    #[serde(default)]
     pub volumes: HashMap<String, Volume>,
-
-    #[serde(default)]
     pub networks: HashMap<String, Network>,
+}
+
+impl<'de> Deserialize<'de> for Release {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ReleaseRaw {
+            #[serde(default)]
+            services: HashMap<String, Service>,
+            #[serde(default)]
+            volumes: HashMap<String, Volume>,
+            #[serde(default)]
+            networks: HashMap<String, Network>,
+        }
+
+        let mut raw: ReleaseRaw = ReleaseRaw::deserialize(deserializer)?;
+
+        // Add a default network to isolate app services
+        // FIXME: the network only needs to exist if there are services do not define a network
+        // and are not configured for host networking
+        raw.networks.entry("default".to_string()).or_default();
+
+        Ok(Release {
+            services: raw.services,
+            volumes: raw.volumes,
+            networks: raw.networks,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +462,61 @@ mod tests {
         } else {
             panic!("expected hostapp");
         }
+    }
+
+    #[test]
+    fn test_release_injects_default_network_when_missing() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {},
+            "volumes": {},
+            "networks": {}
+        }))
+        .unwrap();
+
+        assert!(release.networks.contains_key("default"));
+        let default_net = &release.networks["default"];
+        assert_eq!(default_net.driver, None);
+        assert!(default_net.ipam.is_none());
+    }
+
+    #[test]
+    fn test_release_preserves_explicit_default_network() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {},
+            "volumes": {},
+            "networks": {
+                "default": {
+                    "driver": "overlay",
+                    "internal": true
+                }
+            }
+        }))
+        .unwrap();
+
+        let default_net = &release.networks["default"];
+        assert_eq!(default_net.driver, Some("overlay".to_string()));
+        assert!(default_net.internal);
+    }
+
+    #[test]
+    fn test_release_preserves_other_networks_alongside_injected_default() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {},
+            "volumes": {},
+            "networks": {
+                "custom-net": {
+                    "driver": "overlay"
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(release.networks.len(), 2);
+        assert!(release.networks.contains_key("default"));
+        assert!(release.networks.contains_key("custom-net"));
+        assert_eq!(
+            release.networks["custom-net"].driver,
+            Some("overlay".to_string())
+        );
     }
 }

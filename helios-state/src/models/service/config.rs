@@ -2,6 +2,8 @@ use mahler::state::{List, Map, State};
 use serde::{Deserialize, Serialize};
 use serde_json as json;
 
+use crate::common_types::Uuid;
+use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
 use crate::oci::ContainerConfig;
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
@@ -15,6 +17,7 @@ pub struct ServiceConfig {
     pub command: Option<List<String>>,
 
     /// User-defined key/value metadata
+    #[serde(skip_serializing_if = "Map::is_empty")]
     pub labels: Map<String, String>,
 }
 
@@ -28,7 +31,9 @@ impl From<ContainerConfig> for ServiceConfig {
         let mut labels = config.labels.unwrap_or_default();
 
         // Remove the supervised label to skip it in the state comparison
-        labels.remove("io.balena.supervised");
+        labels.remove(LABEL_SUPERVISED);
+        labels.remove(LABEL_APP_UUID);
+        labels.remove(LABEL_SERVICE_NAME);
 
         // Read the list of fields defined in the composition used to create
         // this container
@@ -61,19 +66,24 @@ impl From<ContainerConfig> for ServiceConfig {
     }
 }
 
-impl From<ServiceConfig> for ContainerConfig {
+impl ServiceConfig {
     /// Converts the service config into container configuration
     ///
     /// Because some configurations may be defined on the image and the the composition,
     /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
     /// list of composition defined keys and labels. When reading the container state, these fields
     /// are used to determine if the specific field/label should be read back into the state.
-    fn from(svc: ServiceConfig) -> Self {
+    pub fn into_container_config(
+        self,
+        svc_id: u32,
+        svc_name: &str,
+        app_uuid: &Uuid,
+    ) -> ContainerConfig {
         let ServiceConfig {
             command,
             mut labels,
             ..
-        } = svc;
+        } = self;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
         // we will use these when reading the state to remove labels coming from
@@ -108,8 +118,11 @@ impl From<ServiceConfig> for ContainerConfig {
             label_config_fields_value.to_string(),
         );
 
-        // Set the supervised label when converting to a container
-        labels.insert("io.balena.supervised".to_string(), "".to_string());
+        // Set app and service metadata as labels when creating the container
+        labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
+        labels.insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+        labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
+        labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
 
         ContainerConfig {
             cmd,

@@ -1,9 +1,9 @@
 use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
+use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{ContainerState, ContainerStatus, DateTime, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
-use crate::util::rand::{ALPHA_NUM_LC, PseudoRng, RngExt as _};
 
 use super::image::ImageRef;
 
@@ -75,7 +75,7 @@ pub struct Service {
     pub id: u32,
 
     /// Custom service container name
-    pub container_name: String,
+    pub container_name: Option<String>,
 
     /// Service container state
     #[mahler(internal)]
@@ -127,22 +127,16 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         // merge the composition labels with the top level service labels
         // giving priority to the latter
-        let mut labels: Map<String, String> =
-            composition.labels.into_iter().chain(labels).collect();
-
-        // add the service id to the container labels
-        labels.insert("io.balena.service-id".to_string(), id.to_string());
+        let labels: Map<String, String> = composition.labels.into_iter().chain(labels).collect();
 
         // convert the composition command to a List
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
-
-        let mut rng = PseudoRng::new();
 
         ServiceTarget {
             id,
             // set the name to a random string by default, but a name will be set when transforming
             // from the target state
-            container_name: rng.string(ALPHA_NUM_LC, 24),
+            container_name: None,
             image: image.into(),
             started: true,
             config: ServiceConfig { command, labels },
@@ -151,13 +145,13 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 }
 
 impl From<LocalContainer> for Service {
-    fn from(container: LocalContainer) -> Self {
+    fn from(mut container: LocalContainer) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
             .labels
-            .as_ref()
-            .and_then(|value| value.get("io.balena.service-id"))
+            .as_mut()
+            .and_then(|value| value.remove(LABEL_SERVICE_ID))
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
@@ -174,7 +168,7 @@ impl From<LocalContainer> for Service {
 
         Self {
             id,
-            container_name: container.name,
+            container_name: Some(container.name),
             container: Some(container_summary),
             image,
             started,

@@ -198,7 +198,7 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
 async fn seek_target(
     worker: &LocalWorker,
     current_state: &mut Device,
-    target: DeviceTarget,
+    target: &DeviceTarget,
     interrupt: &Interrupt,
     state_tx: &Sender<LocalState>,
 ) -> Result<UpdateStatus, SeekError> {
@@ -212,7 +212,7 @@ async fn seek_target(
         // FIXME: changes here are likely to contain sensitive information
         // like env-vars that we want to mask
         if tracing::enabled!(tracing::Level::DEBUG) {
-            let changes = worker.distance(&target)?;
+            let changes = worker.distance(target)?;
             if !changes.is_empty() {
                 debug!("pending changes:");
                 for change in changes {
@@ -222,7 +222,7 @@ async fn seek_target(
         }
 
         let now = Instant::now();
-        if let Some(workflow) = worker.find_workflow(&target)? {
+        if let Some(workflow) = worker.find_workflow(target)? {
             let has_exceptions = !workflow.exceptions().is_empty();
             if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
                 warn!("the following operations were ignored during planning");
@@ -474,8 +474,7 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            // Look for a plan to the normalized target
-                            let target = target.clone().normalize();
+                            // Look for a plan to the target
                             update_status =
                                 seek_target(worker, current_state, target, &interrupt, state_tx)
                                     .await?;
