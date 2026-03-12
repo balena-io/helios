@@ -82,29 +82,6 @@ impl From<Device> for DeviceTarget {
     }
 }
 
-impl DeviceTarget {
-    pub fn normalize(mut self) -> DeviceTarget {
-        // Insert app metadata for every service of every app
-        for (app_uuid, app) in self.apps.iter_mut() {
-            for (rel_uuid, rel) in app.releases.iter_mut() {
-                for (svc_name, svc) in rel.services.iter_mut() {
-                    svc.container_name = Some(format!("{svc_name}_{rel_uuid}"));
-                }
-
-                for (net_key, net) in rel.networks.iter_mut() {
-                    net.network_name = format!("{app_uuid}_{net_key}");
-                }
-
-                for (vol_key, vol) in rel.volumes.iter_mut() {
-                    vol.volume_name = format!("{app_uuid}_{vol_key}");
-                }
-            }
-        }
-
-        self
-    }
-}
-
 impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
@@ -125,7 +102,8 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 // Read the userapp info if it exists and the feature is enabled
                 #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
-                    userapps.insert(app_uuid, userapp.into());
+                    let app = (&app_uuid, userapp).into();
+                    userapps.insert(app_uuid, app);
                 }
                 #[cfg(not(feature = "userapps"))]
                 RemoteAppTarget::User(_) => {}

@@ -267,7 +267,8 @@ async fn set_app_tgt_state(
     let state = state_rx.borrow();
     let device = state.device.clone();
     let mut target: LocalDeviceTarget = device.into();
-    target.apps.insert(app_uuid, app.into());
+    let app_target = (&app_uuid, app).into();
+    target.apps.insert(app_uuid, app_target);
 
     if seek_request_tx
         .send(SeekRequest {
