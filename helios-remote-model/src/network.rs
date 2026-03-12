@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use super::labels::Labels;
 
 /// Target network as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Network {
     #[serde(default)]
     pub driver: Option<String>,
@@ -17,10 +17,10 @@ pub struct Network {
     #[serde(default)]
     pub labels: Labels,
     #[serde(default)]
-    pub ipam: NetworkIpam,
+    pub ipam: Option<NetworkIpam>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct NetworkIpam {
     #[serde(default)]
     pub driver: Option<String>,
@@ -30,7 +30,7 @@ pub struct NetworkIpam {
     pub options: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct IpamConfig {
     pub subnet: Option<String>,
     pub gateway: Option<String>,
@@ -51,9 +51,7 @@ mod tests {
         assert_eq!(net.enable_ipv6, None);
         assert!(!net.internal);
         assert!(net.labels.is_empty());
-        assert_eq!(net.ipam.driver, None);
-        assert!(net.ipam.config.is_empty());
-        assert!(net.ipam.options.is_empty());
+        assert!(net.ipam.is_none());
     }
 
     #[test]
@@ -84,16 +82,14 @@ mod tests {
         assert_eq!(net.enable_ipv6, Some(true));
         assert!(net.internal);
         assert_eq!(net.labels.get("com.foo.bar").unwrap(), "app-label");
-        assert_eq!(net.ipam.driver, Some("custom".to_string()));
-        assert_eq!(net.ipam.config.len(), 1);
-        assert_eq!(net.ipam.config[0].subnet.as_deref(), Some("172.28.0.0/16"));
-        assert_eq!(net.ipam.config[0].gateway.as_deref(), Some("172.28.0.1"));
+        let ipam = net.ipam.unwrap();
+        assert_eq!(ipam.driver, Some("custom".to_string()));
+        assert_eq!(ipam.config.len(), 1);
+        assert_eq!(ipam.config[0].subnet.as_deref(), Some("172.28.0.0/16"));
+        assert_eq!(ipam.config[0].gateway.as_deref(), Some("172.28.0.1"));
+        assert_eq!(ipam.config[0].ip_range.as_deref(), Some("172.28.5.0/24"));
         assert_eq!(
-            net.ipam.config[0].ip_range.as_deref(),
-            Some("172.28.5.0/24")
-        );
-        assert_eq!(
-            net.ipam.config[0]
+            ipam.config[0]
                 .aux_addresses
                 .as_ref()
                 .unwrap()
@@ -101,7 +97,7 @@ mod tests {
                 .unwrap(),
             "172.28.1.5"
         );
-        assert_eq!(net.ipam.options.get("baz").unwrap(), "qux");
+        assert_eq!(ipam.options.get("baz").unwrap(), "qux");
     }
 
     #[test]
@@ -113,12 +109,13 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(net.ipam.driver, None);
-        assert_eq!(net.ipam.config.len(), 1);
-        assert_eq!(net.ipam.config[0].subnet.as_deref(), Some("10.0.0.0/8"));
-        assert!(net.ipam.config[0].gateway.is_none());
-        assert!(net.ipam.config[0].ip_range.is_none());
-        assert!(net.ipam.config[0].aux_addresses.is_none());
+        let ipam = net.ipam.unwrap();
+        assert_eq!(ipam.driver, None);
+        assert_eq!(ipam.config.len(), 1);
+        assert_eq!(ipam.config[0].subnet.as_deref(), Some("10.0.0.0/8"));
+        assert!(ipam.config[0].gateway.is_none());
+        assert!(ipam.config[0].ip_range.is_none());
+        assert!(ipam.config[0].aux_addresses.is_none());
     }
 
     #[test]

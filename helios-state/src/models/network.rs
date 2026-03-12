@@ -57,20 +57,10 @@ impl From<RemoteNetwork> for NetworkConfig {
             .or_else(|| enable_ipv6_opt.map(|v| v == "true"))
             .unwrap_or(false);
 
-        NetworkConfig(oci::NetworkConfig {
-            driver: net.driver.map(NetworkDriver::from).unwrap_or_default(),
-            driver_opts,
-            enable_ipv6,
-            internal: net.internal,
-            labels: net.labels.into_iter().collect(),
-            ipam: NetworkIpamConfig {
-                driver: net
-                    .ipam
-                    .driver
-                    .map(NetworkIpamDriver::from)
-                    .unwrap_or_default(),
-                config: net
-                    .ipam
+        let ipam = match net.ipam {
+            Some(ipam) => NetworkIpamConfig {
+                driver: ipam.driver.map(NetworkIpamDriver::from).unwrap_or_default(),
+                config: ipam
                     .config
                     .into_iter()
                     .map(|cfg| NetworkIpamPoolConfig {
@@ -80,8 +70,18 @@ impl From<RemoteNetwork> for NetworkConfig {
                         aux_addresses: cfg.aux_addresses,
                     })
                     .collect(),
-                options: net.ipam.options.into_iter().collect(),
+                options: ipam.options.into_iter().collect(),
             },
+            None => NetworkIpamConfig::default(),
+        };
+
+        NetworkConfig(oci::NetworkConfig {
+            driver: net.driver.map(NetworkDriver::from).unwrap_or_default(),
+            driver_opts,
+            enable_ipv6,
+            internal: net.internal,
+            labels: net.labels.into_iter().collect(),
+            ipam,
         })
     }
 }
