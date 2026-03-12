@@ -115,7 +115,9 @@ impl From<String> for VolumeDriver {
 #[serde(default)]
 pub struct VolumeConfig {
     pub driver: VolumeDriver,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub driver_opts: HashMap<String, String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
 }
 

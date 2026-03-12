@@ -347,6 +347,7 @@ fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Netwo
 fn create_volume(
     vol: View<Option<Volume>>,
     Target(tgt): Target<Volume>,
+    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
     let vol = vol.create(Volume {
@@ -358,11 +359,12 @@ fn create_volume(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+        let volume_config = std::mem::take(&mut vol.config);
         let volume_name = vol.volume_name.clone();
 
         docker
             .volume()
-            .create(&volume_name, vol.config.clone().into())
+            .create(&volume_name, volume_config.into_oci_config(&app_uuid))
             .await?;
 
         let local_volume = docker
@@ -388,11 +390,7 @@ fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<
 }
 
 /// Uninstall a volume from Docker and the state tree
-fn uninstall_volume(
-    vol: View<Volume>,
-    Args((_app_uuid, _, _volume_name)): Args<(Uuid, Uuid, String)>,
-    docker: Res<Docker>,
-) -> IO<Option<Volume>, Error> {
+fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>, Error> {
     let docker_name = vol.volume_name.clone();
     let vol = vol.delete();
 

@@ -1,7 +1,6 @@
 use mahler::state::{Map, State};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
-use crate::labels::LABEL_APP_UUID;
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
@@ -97,9 +96,6 @@ impl DeviceTarget {
                 }
 
                 for (vol_key, vol) in rel.volumes.iter_mut() {
-                    vol.config
-                        .labels
-                        .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
                     vol.volume_name = format!("{app_uuid}_{vol_key}");
                 }
             }
