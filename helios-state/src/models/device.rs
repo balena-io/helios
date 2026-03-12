@@ -93,9 +93,6 @@ impl DeviceTarget {
                 }
 
                 for (net_key, net) in rel.networks.iter_mut() {
-                    net.config
-                        .labels
-                        .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
                     net.network_name = format!("{app_uuid}_{net_key}");
                 }
 
@@ -157,37 +154,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    #[test]
-    fn normalize_applies_app_uuid_label_to_default_network() {
-        let target: DeviceTarget = serde_json::from_value(json!({
-            "apps": {
-                "app1": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "rel1": {
-                            "installed": true,
-                            "services": {},
-                            "networks": {
-                                "default": {}
-                            }
-                        }
-                    }
-                }
-            }
-        }))
-        .unwrap();
-
-        let target = target.normalize();
-        let app = target.apps.get(&"app1".into()).unwrap();
-        let rel = app.releases.get(&"rel1".into()).unwrap();
-        let default_net = rel.networks.get("default").unwrap();
-        assert_eq!(
-            default_net.config.labels.get("io.balena.app-uuid"),
-            Some(&"app1".to_string())
-        );
-    }
 
     #[test]
     fn device_state_should_be_serializable_into_target() {

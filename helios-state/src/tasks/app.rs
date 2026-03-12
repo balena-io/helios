@@ -282,6 +282,7 @@ fn create_network(
     net: View<Option<Network>>,
     Target(tgt): Target<Network>,
     docker: Res<Docker>,
+    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
 ) -> IO<Network, Error> {
     let net = net.create(Network {
         network_name: tgt.network_name.clone(),
@@ -292,16 +293,18 @@ fn create_network(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let network_name = net.network_name.clone();
+
+        let network_config = std::mem::take(&mut net.config);
+        let network_name = &net.network_name;
 
         docker
             .network()
-            .create(&network_name, net.config.clone().into())
+            .create(network_name, network_config.into_oci_config(&app_uuid))
             .await?;
 
         let local_network = docker
             .network()
-            .inspect(&network_name)
+            .inspect(network_name)
             .await
             .with_context(|| format!("failed to inspect network '{network_name}'"))?;
         *net = Network::from(local_network);
@@ -322,11 +325,7 @@ fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Opti
 }
 
 /// Uninstall a network from Docker and the state tree
-fn uninstall_network(
-    net: View<Network>,
-    Args((_app_uuid, _, _network_name)): Args<(Uuid, Uuid, String)>,
-    docker: Res<Docker>,
-) -> IO<Option<Network>, Error> {
+fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Network>, Error> {
     let docker_name = net.network_name.clone();
     let net = net.delete();
 

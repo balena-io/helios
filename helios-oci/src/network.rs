@@ -143,9 +143,11 @@ impl From<String> for NetworkIpamDriver {
 #[serde(default)]
 pub struct NetworkConfig {
     pub driver: NetworkDriver,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub driver_opts: HashMap<String, String>,
     pub enable_ipv6: bool,
     pub internal: bool,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
 }
@@ -155,7 +157,9 @@ pub struct NetworkConfig {
 #[serde(default)]
 pub struct NetworkIpamConfig {
     pub driver: NetworkIpamDriver,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<NetworkIpamPoolConfig>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub options: HashMap<String, String>,
 }
 

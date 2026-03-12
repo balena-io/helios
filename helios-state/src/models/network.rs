@@ -3,7 +3,8 @@ use std::ops::{Deref, DerefMut};
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::labels::LABEL_SUPERVISED;
+use crate::common_types::Uuid;
+use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
 use crate::oci::{
     self, LocalNetwork, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver, NetworkIpamPoolConfig,
 };
@@ -106,6 +107,7 @@ impl From<LocalNetwork> for Network {
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
+        labels.remove(LABEL_APP_UUID);
 
         // Always strip engine-injected driver_opts. These keys never appear
         // in the target state, so they should never appear in read-back.
@@ -158,14 +160,17 @@ impl From<LocalNetwork> for Network {
     }
 }
 
-impl From<NetworkConfig> for oci::NetworkConfig {
-    fn from(net: NetworkConfig) -> Self {
-        let mut inner = net.0;
+impl NetworkConfig {
+    pub fn into_oci_config(self, app_uuid: &Uuid) -> oci::NetworkConfig {
+        let mut inner = self.0;
 
-        // Mark the network as supervised
+        // Mark the network as supervised and add app metadata
         inner
             .labels
             .insert(LABEL_SUPERVISED.to_string(), "".to_string());
+        inner
+            .labels
+            .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
 
         // Serialize user-defined subnets into a label so engine-assigned pools
         // can be filtered out on read-back.
@@ -353,12 +358,9 @@ mod tests {
             .collect(),
             enable_ipv6: true,
             internal: true,
-            labels: [
-                ("com.example.label".to_string(), "value".to_string()),
-                ("io.balena.app-uuid".to_string(), "abc123".to_string()),
-            ]
-            .into_iter()
-            .collect(),
+            labels: [("com.example.label".to_string(), "value".to_string())]
+                .into_iter()
+                .collect(),
             ipam: NetworkIpamConfig {
                 driver: NetworkIpamDriver::from("custom".to_string()),
                 config: vec![NetworkIpamPoolConfig {
@@ -377,7 +379,7 @@ mod tests {
             },
         });
 
-        let oci_config: oci::NetworkConfig = config.into();
+        let oci_config: oci::NetworkConfig = config.into_oci_config(&Uuid::from("abc123"));
 
         // Basic fields
         assert_eq!(oci_config.driver.to_string(), "overlay");
