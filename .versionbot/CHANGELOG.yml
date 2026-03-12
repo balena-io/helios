@@ -1,4 +1,102 @@
 - commits:
+    - subject: Use debugging assertions for integration tests
+      hash: be30dcc09954fd43b1cde4dd799d3b49c9aad6e5
+      body: |
+        This should allow us to catch any bugs that come from `debug_assert`
+        calls in the code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove DeviceTarget::normalize
+      hash: c41c9116ac01f13aa8c509f2974ba3fc67082cff
+      body: |
+        Normalization now happens when converting from the remote target into
+        app.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove app-uuid from Volume target state
+      hash: f433f5c6b0c3372ed94e16b27deb27cf7b0317c8
+      body: |
+        This is internal metadata that doesn't need to be in the state reported
+        from helios
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove app-uuid from network target state
+      hash: b18cbcdbb73f45bb01f46d58d28f7a1812134d49
+      body: |
+        This is helios metadata that doesn't need to be in the current/target
+        state reported by the service
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove metadata labels from service target state
+      hash: 8734f3db3f6989cbef29a3aa26243efe036169b4
+      body: |
+        These mirror service metadata that is already part of the model, there
+        is no need to have them show as part of the state.
+
+        The only worry was for the scenario where moving between apps with the
+        same commit, in that case we need to re-create service containers so
+        metadata matches, however this already happens with the current worker
+        configuration.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Move `default` network definition to helios-remote-model
+      hash: 8de6d7bca2d62e140b0f97bd17e38896120643ea
+      body: >
+        This mirrors the behavior of compose-go, which always defines a
+        `default` network for
+
+        services that don't specify networks in order to prevent port clashing
+
+        with other apps.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Convert Service::container_name to Option
+      hash: ef798cf43a8de635a62b8962af2425a41ef0deb8
+      body: |
+        It's a bit confusing otherwise if the service returned by the API
+        doesn't have a container but has a container_name. This makes it that
+        the container name only exists after the container has been created.
+
+        This also removes the need for using ImageUri when creating a container
+        to improve the logic of the `install_service` task
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Ensure that a finish release always happens on update
+      hash: 965c3f76fca72d4d220857a0297a353adeb1ba92
+      body: |
+        This adds a task that sets `release.installed` to `false` any time a
+        release is modified to ensure that the finish release tasks runs and
+        performs the final check for the release services configuration.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.21.0
+  title: ""
+  date: 2026-03-12T19:06:01.149Z
+- commits:
     - subject: Fix compilation warnings when userapps feature is disabled
       hash: 4de5f9e8c120a7301e2a1350a93a5208d3c1b662
       body: ""
