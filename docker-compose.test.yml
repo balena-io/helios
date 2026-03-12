@@ -43,6 +43,7 @@ services:
       context: ./
       args:
         HELIOS_FEATURES: all
+        HELIOS_BUILD: 'debug'
     image: helios
     # Set-up required variables
     environment:

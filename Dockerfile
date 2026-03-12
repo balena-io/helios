@@ -1,9 +1,11 @@
 # Comma-separated list of features
 ARG HELIOS_FEATURES=all
+ARG HELIOS_BUILD=release
 
 FROM alpine:3.23 AS build
 
 ARG HELIOS_FEATURES
+ARG HELIOS_BUILD
 
 # Install build dependencies
 RUN apk add --update --no-cache \
@@ -28,10 +30,12 @@ COPY helios-store ./helios-store
 
 # Build release
 # Unit tests are run separately by CI
-RUN cargo build --no-default-features --features $HELIOS_FEATURES --release --locked
+RUN cargo build --no-default-features --features $HELIOS_FEATURES --locked $(test "$HELIOS_BUILD" = "release" && echo "--release")
 
 # Release target
 FROM alpine:3.23
+
+ARG HELIOS_BUILD
 
 WORKDIR /opt/helios
 
@@ -53,7 +57,7 @@ RUN apk add --no-cache \
   "docker-cli<29"
 
 COPY scripts /opt/helios
-COPY --from=build /usr/src/app/target/release/helios /usr/bin
+COPY --from=build /usr/src/app/target/$HELIOS_BUILD/helios /usr/bin
 
 VOLUME /config/helios
 VOLUME /cache/helios
