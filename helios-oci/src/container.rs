@@ -253,7 +253,7 @@ impl TryFrom<ContainerInspectResponse> for LocalContainer {
 #[derive(Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub enum ContainerStatus {
     #[default]
-    Installed,
+    Created,
     Running,
     Stopped,
     Dead,
@@ -263,8 +263,8 @@ impl From<ContainerStateStatusEnum> for ContainerStatus {
     fn from(value: ContainerStateStatusEnum) -> Self {
         use ContainerStateStatusEnum::*;
         match value {
-            EMPTY => ContainerStatus::Installed,
-            CREATED => ContainerStatus::Installed,
+            EMPTY => ContainerStatus::Created,
+            CREATED => ContainerStatus::Created,
             RUNNING => ContainerStatus::Running,
             PAUSED => ContainerStatus::Stopped,
             RESTARTING => ContainerStatus::Running,

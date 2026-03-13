@@ -490,6 +490,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         id,
         image,
         container_name: None,
+        installing: false,
         started: false,
         container: None,
         config,
@@ -566,6 +567,9 @@ fn install_service(
             .container_name
             .take()
             .expect("container name should be available");
+
+        svc.installing = true;
+        let _ = svc.flush().await;
 
         let container_config =
             std::mem::take(&mut svc.config).into_container_config(svc.id, &svc_name, &app_uuid);

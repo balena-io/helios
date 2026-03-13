@@ -16,7 +16,7 @@ pub use config::*;
 #[serde(rename_all = "lowercase")]
 pub enum ServiceContainerStatus {
     #[default]
-    Installed,
+    Created,
     Running,
     Stopping,
     Stopped,
@@ -27,7 +27,7 @@ impl From<ContainerStatus> for ServiceContainerStatus {
     fn from(value: ContainerStatus) -> Self {
         use ContainerStatus::*;
         match value {
-            Installed => Self::Installed,
+            Created => Self::Created,
             Running => Self::Running,
             Stopped => Self::Stopped,
             Dead => Self::Dead,
@@ -48,7 +48,7 @@ impl ServiceContainerSummary {
         Self {
             id: String::default(),
             created: DateTime::default(),
-            status: ServiceContainerStatus::Installed,
+            status: ServiceContainerStatus::Created,
         }
     }
 }
@@ -81,17 +81,24 @@ pub struct Service {
     #[mahler(internal)]
     pub container: Option<ServiceContainerSummary>,
 
+    /// Flag to indicate that the service container is being
+    /// created
+    #[mahler(internal, default)]
+    pub installing: bool,
+
     /// Flag to indicate that the service has been started.
     ///
     /// A service is considered started once the restart policy of
     /// the engine takes place, i.e. after the service has successfully started
     /// at least once
+    #[mahler(default)]
     pub started: bool,
 
     /// Service image URI
     pub image: ImageRef,
 
     /// Service configuration
+    #[mahler(default)]
     pub config: ServiceConfig,
 }
 
@@ -160,10 +167,10 @@ impl From<LocalContainer> for Service {
             ServiceContainerSummary::from((container.id.as_str(), container.state.clone()));
 
         // the service is considered started after the engine policy takes over
-        // for now this just means that the container status is different than `Installed`
+        // for now this just means that the container status is different than `Created`
         // FIXME: we probably want to handle the host/network manager race condition
         // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
-        let started = container_summary.status != ServiceContainerStatus::Installed;
+        let started = container_summary.status != ServiceContainerStatus::Created;
         let config = ServiceConfig::from(container.config);
 
         Self {
@@ -171,6 +178,7 @@ impl From<LocalContainer> for Service {
             container_name: Some(container.name),
             container: Some(container_summary),
             image,
+            installing: false,
             started,
             config,
         }

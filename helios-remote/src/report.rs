@@ -20,6 +20,7 @@ use super::config::RemoteConfig;
 enum ServiceStatus {
     Downloading,
     Downloaded,
+    Installing,
     Installed,
     Running,
     Stopping,
@@ -123,7 +124,7 @@ fn report_host_app(
             } else {
                 (
                     applying_unless_aborted(seek_status),
-                    ServiceStatus::Downloaded,
+                    ServiceStatus::Installing,
                     None,
                 )
             };
@@ -200,11 +201,13 @@ impl From<LocalState> for DeviceReport {
                                     && img.download_progress < 100
                                 {
                                     (ServiceStatus::Downloading, Some(img.download_progress))
+                                } else if svc.installing {
+                                    (ServiceStatus::Installing, None)
                                 } else {
                                     (ServiceStatus::Downloaded, None)
                                 }
                             }
-                            Some(LocalServiceStatus::Installed) => (ServiceStatus::Installed, None),
+                            Some(LocalServiceStatus::Created) => (ServiceStatus::Installed, None),
                             Some(LocalServiceStatus::Running) => (ServiceStatus::Running, None),
                             Some(LocalServiceStatus::Stopping) => (ServiceStatus::Stopping, None),
                             Some(LocalServiceStatus::Stopped) => (ServiceStatus::Stopped, None),
@@ -438,26 +441,22 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "started": false,
                                     "container_name": "new-release_one",
                                     "container": {
                                         "id": "abc",
-                                        "status": "installed",
+                                        "status": "created",
                                         "created": "2026-02-01T20:39:15+00:00"
                                     },
-                                    "config": {}
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "alpine",
-                                    "started": false,
                                     "container_name": "new-release_two",
-                                    "config": {}
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
-                                    "started": false,
+                                    "installing": true,
                                     "container_name": "new-release_three",
                                     "config": {},
                                 },
@@ -465,9 +464,7 @@ mod tests {
                                 "four": {
                                     "id": 4,
                                     "image": "debian",
-                                    "started": false,
                                     "container_name": "new-release_four",
-                                    "config": {},
                                 }
                             }
                         }
@@ -524,7 +521,7 @@ mod tests {
                 .and_then(|app| app.releases.get(&Uuid::from("new-release")))
                 .and_then(|rel| rel.services.get("three"))
                 .map(|svc| (&svc.status, svc.download_progress)),
-            Some((&ServiceStatus::Downloaded, None)),
+            Some((&ServiceStatus::Installing, None)),
         );
         assert_eq!(
             report
