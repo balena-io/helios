@@ -105,6 +105,7 @@ fn applying_unless_aborted(status: &LocalUpdateStatus) -> UpdateStatus {
 fn report_host_app(
     host_state: crate::state::models::Host,
     seek_status: &LocalUpdateStatus,
+    authorized_apps: &[Uuid],
     apps: &mut HashMap<Uuid, AppReport>,
 ) {
     let release_uuid = host_state
@@ -114,6 +115,11 @@ fn report_host_app(
         .map(|(uuid, _)| uuid.clone());
 
     for (rel_uuid, release) in host_state.releases {
+        // do not report on apps to which the device has no access
+        if !authorized_apps.contains(&release.app) {
+            continue;
+        }
+
         let (update_status, service_status, app_release) =
             if Some(&rel_uuid) == release_uuid.as_ref() {
                 (
@@ -157,6 +163,7 @@ impl From<LocalState> for DeviceReport {
         let mut apps = HashMap::new();
 
         let LocalState {
+            authorized_apps,
             status: seek_status,
             device:
                 Device {
@@ -172,11 +179,16 @@ impl From<LocalState> for DeviceReport {
         // Convert the host data into an app report if any
         #[cfg(feature = "balenahup")]
         if let Some(host) = host {
-            report_host_app(host, &seek_status, &mut apps);
+            report_host_app(host, &seek_status, &authorized_apps, &mut apps);
         }
 
         // convert the user apps to an accepted report
         for (app_uuid, app) in userapps {
+            // do not report on apps to which the device has no access
+            if !authorized_apps.contains(&app_uuid) {
+                continue;
+            }
+
             let release_is_unique = app.releases.len() == 1;
             for (rel_uuid, rel) in app.releases {
                 for (svc_name, svc) in rel.services {
@@ -415,7 +427,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_creates_a_device_report_from_a_device() {
+    fn it_reports_authorized_apps() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
             "images": {
@@ -476,6 +488,7 @@ mod tests {
         .unwrap();
 
         let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("my-app")],
             status: crate::state::UpdateStatus::ApplyingChanges,
             device,
         });
@@ -534,6 +547,72 @@ mod tests {
                 .map(|svc| (&svc.status, svc.download_progress)),
             Some((&ServiceStatus::Downloading, Some(0))),
         );
+    }
+
+    #[test]
+    fn it_excludes_unauthorized_user_apps_from_report() {
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {},
+            "apps": {
+                "my-app": {
+                    "id": 1,
+                    "releases": {
+                        "rel-1": {
+                            "installed": true,
+                            "services": {
+                                "svc-a": {
+                                    "id": 1,
+                                    "image": "img-a",
+                                    "container_name": "rel-1_svc-a",
+                                    "container": {
+                                        "id": "c1",
+                                        "status": "running",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+                "other-app": {
+                    "id": 2,
+                    "releases": {
+                        "rel-2": {
+                            "installed": true,
+                            "services": {
+                                "svc-b": {
+                                    "id": 2,
+                                    "image": "img-b",
+                                    "container_name": "rel-2_svc-b",
+                                    "container": {
+                                        "id": "c2",
+                                        "status": "running",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("my-app")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let apps = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .expect("apps should be present");
+
+        assert!(apps.contains_key(&Uuid::from("my-app")));
+        assert!(!apps.contains_key(&Uuid::from("other-app")));
     }
 
     #[test]
