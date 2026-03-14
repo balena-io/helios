@@ -4,10 +4,12 @@ use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
 
-const MOCK_REMOTE_URL: &str = "http://mock-remote";
 const UPDATER_IMAGE: &str = "registry:5000/test-updater:latest";
 
-use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
+use super::common::{
+    HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, wait_for_report,
+    wait_for_target_apply,
+};
 
 async fn build_test_updater_image(docker: &Docker) {
     let dockerfile =
@@ -167,6 +169,8 @@ async fn test_remote_poll_hostos_update() {
         "apps": serde_json::Value::Object(apps)
     });
 
+    clear_reports().await;
+
     let res = client
         .put(format!("{MOCK_REMOTE_URL}/mock/state"))
         .json(&device_target)
@@ -227,6 +231,14 @@ async fn test_remote_poll_hostos_update() {
         "breadcrumb file should exist at {breadcrumb}"
     );
 
+    // verify state report includes the hostapp with aborted status
+    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
+    assert_eq!(
+        release_report["services"]["hostapp"]["status"],
+        "Installing"
+    );
+
+    clear_reports().await;
     client
         .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
         .send()

@@ -12,6 +12,7 @@ use tokio::sync::{
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, trace, warn};
 
+use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
 use crate::util::interrupt::Interrupt;
 
@@ -44,6 +45,8 @@ pub enum UpdateStatus {
 /// Helios' state and apply status to be reported used by the API
 #[derive(Clone, Debug)]
 pub struct LocalState {
+    // Authorized apps
+    pub authorized_apps: Vec<Uuid>,
     pub device: Device,
     pub status: UpdateStatus,
 }
@@ -99,6 +102,15 @@ pub enum TargetState {
     Local {
         target: DeviceTarget,
     },
+}
+
+impl TargetState {
+    fn value(&self) -> Option<&DeviceTarget> {
+        match self {
+            TargetState::Remote { target, .. } => target.as_ref(),
+            TargetState::Local { target } => Some(target),
+        }
+    }
 }
 
 /// A request to reach a target state.
@@ -188,9 +200,30 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
     // FIXME: re-enable reporting once user app support is more advanced.
     // At that point helios should be the only one reporting
     if cfg!(feature = "userapps") {
-        let _ = tx.send(LocalState {
-            device: device.clone(),
-            status: status.clone(),
+        tx.send_modify(|state| {
+            state.device = device.clone();
+            state.status = status.clone();
+        });
+    }
+}
+
+fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) {
+    // FIXME: re-enable reporting once user app support is more advanced.
+    // At that point helios should be the only one reporting
+    if cfg!(feature = "userapps") {
+        tx.send_modify(|state| {
+            let app_keys = target_state.apps.keys();
+
+            #[cfg(feature = "balenahup")]
+            let host_keys: Vec<_> = target_state
+                .host
+                .iter()
+                .flat_map(|host| host.releases.values().map(|r| &r.app))
+                .collect();
+            #[cfg(not(feature = "balenahup"))]
+            let host_keys: Vec<&Uuid> = Vec::new();
+
+            state.authorized_apps = app_keys.chain(host_keys).cloned().collect()
         });
     }
 }
@@ -402,6 +435,11 @@ pub async fn start_seek(
             }
 
             SeekAction::Apply(update_req) => {
+                // Update authorization list
+                if let Some(target) = &update_req.target.value() {
+                    report_authorized_apps(&state_tx, target);
+                }
+
                 if matches!(update_status, UpdateStatus::ApplyingChanges) {
                     // A new target came while applying.
                     // Interrupt the target if we are asked to cancel.

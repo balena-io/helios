@@ -19,6 +19,7 @@ use super::config::RemoteConfig;
 #[derive(Serialize, Debug, PartialEq, Eq)]
 enum ServiceStatus {
     Downloading,
+    Downloaded,
     Installing,
     Installed,
     Running,
@@ -30,11 +31,13 @@ enum ServiceStatus {
 #[derive(Clone, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateStatus {
-    Done,
+    // Rejected,
     Aborted,
+    Downloading,
+    Downloaded,
     #[serde(rename = "applying changes")]
     ApplyingChanges,
-    // Rejected,
+    Done,
 }
 
 #[derive(Serialize, Debug)]
@@ -98,11 +101,69 @@ fn applying_unless_aborted(status: &LocalUpdateStatus) -> UpdateStatus {
     }
 }
 
+#[cfg(feature = "balenahup")]
+fn report_host_app(
+    host_state: crate::state::models::Host,
+    seek_status: &LocalUpdateStatus,
+    authorized_apps: &[Uuid],
+    apps: &mut HashMap<Uuid, AppReport>,
+) {
+    let release_uuid = host_state
+        .releases
+        .iter()
+        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
+        .map(|(uuid, _)| uuid.clone());
+
+    for (rel_uuid, release) in host_state.releases {
+        // do not report on apps to which the device has no access
+        if !authorized_apps.contains(&release.app) {
+            continue;
+        }
+
+        let (update_status, service_status, app_release) =
+            if Some(&rel_uuid) == release_uuid.as_ref() {
+                (
+                    UpdateStatus::Done,
+                    ServiceStatus::Running,
+                    Some(rel_uuid.clone()),
+                )
+            } else {
+                (
+                    applying_unless_aborted(seek_status),
+                    ServiceStatus::Installing,
+                    None,
+                )
+            };
+
+        let app = apps.entry(release.app).or_insert(AppReport {
+            release_uuid: app_release,
+            releases: HashMap::new(),
+        });
+
+        app.releases.insert(
+            rel_uuid,
+            ReleaseReport {
+                update_status,
+                services: [(
+                    "hostapp".to_owned(),
+                    ServiceReport {
+                        image: release.image.repo(),
+                        status: service_status,
+                        download_progress: None,
+                    },
+                )]
+                .into(),
+            },
+        );
+    }
+}
+
 impl From<LocalState> for DeviceReport {
     fn from(state: LocalState) -> Self {
         let mut apps = HashMap::new();
 
         let LocalState {
+            authorized_apps,
             status: seek_status,
             device:
                 Device {
@@ -117,64 +178,17 @@ impl From<LocalState> for DeviceReport {
 
         // Convert the host data into an app report if any
         #[cfg(feature = "balenahup")]
-        if let Some(host_state) = host {
-            // Get the current release
-            let release_uuid = host_state
-                .releases
-                .iter()
-                .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
-                .map(|(uuid, _)| uuid.clone());
-
-            for (rel_uuid, release) in host_state.releases {
-                // Get the status of the app as services based on
-                // whether the running release is the current release
-                let (update_status, service_status, app_release) =
-                    if Some(&rel_uuid) == release_uuid.as_ref() {
-                        (
-                            UpdateStatus::Done,
-                            ServiceStatus::Running,
-                            Some(rel_uuid.clone()),
-                        )
-                    } else {
-                        (
-                            // report as applying changes unless the target state apply
-                            // has reported the status as aborted
-                            applying_unless_aborted(&seek_status),
-                            ServiceStatus::Installing,
-                            None,
-                        )
-                    };
-
-                // Get the app that corresponds to the current release
-                // or create one
-                let app = apps.entry(release.app).or_insert(AppReport {
-                    release_uuid: app_release,
-                    releases: HashMap::new(),
-                });
-
-                // Update the releases
-                app.releases.insert(
-                    rel_uuid,
-                    ReleaseReport {
-                        update_status,
-                        services: [(
-                            // the backend doesn't really care for the service name, it creates
-                            // image installs using the image uri
-                            "hostapp".to_owned(),
-                            ServiceReport {
-                                image: release.image.repo(),
-                                status: service_status,
-                                download_progress: None,
-                            },
-                        )]
-                        .into(),
-                    },
-                );
-            }
+        if let Some(host) = host {
+            report_host_app(host, &seek_status, &authorized_apps, &mut apps);
         }
 
         // convert the user apps to an accepted report
         for (app_uuid, app) in userapps {
+            // do not report on apps to which the device has no access
+            if !authorized_apps.contains(&app_uuid) {
+                continue;
+            }
+
             let release_is_unique = app.releases.len() == 1;
             for (rel_uuid, rel) in app.releases {
                 for (svc_name, svc) in rel.services {
@@ -199,23 +213,32 @@ impl From<LocalState> for DeviceReport {
                                     && img.download_progress < 100
                                 {
                                     (ServiceStatus::Downloading, Some(img.download_progress))
-                                } else {
+                                } else if svc.installing {
                                     (ServiceStatus::Installing, None)
+                                } else {
+                                    (ServiceStatus::Downloaded, None)
                                 }
                             }
-                            Some(LocalServiceStatus::Installed) => (ServiceStatus::Installed, None),
+                            Some(LocalServiceStatus::Created) => (ServiceStatus::Installed, None),
                             Some(LocalServiceStatus::Running) => (ServiceStatus::Running, None),
                             Some(LocalServiceStatus::Stopping) => (ServiceStatus::Stopping, None),
                             Some(LocalServiceStatus::Stopped) => (ServiceStatus::Stopped, None),
                             Some(LocalServiceStatus::Dead) => (ServiceStatus::Dead, None),
                         };
 
-                    // if the release has been finalized, then report it as the current release
-                    let (update_status, cur_release_uuid) = if release_is_unique && rel.installed {
-                        (UpdateStatus::Done, Some(rel_uuid.clone()))
-                    } else {
-                        (applying_unless_aborted(&seek_status), None)
-                    };
+                    let (update_status, cur_release_uuid) =
+                        // derive the update status from the service status if downloading|downloaded
+                        if service_status == ServiceStatus::Downloading {
+                            (UpdateStatus::Downloading, None)
+                        } else if service_status == ServiceStatus::Downloaded {
+                            (UpdateStatus::Downloaded, None)
+                        // if the release has been finalized, then report it as the current release
+                        } else if release_is_unique && rel.installed {
+                            (UpdateStatus::Done, Some(rel_uuid.clone()))
+                        // otherwise assume is applying unless the stare engine reports 'aborted'
+                        } else {
+                            (applying_unless_aborted(&seek_status), None)
+                        };
 
                     // Get or create the app
                     let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
@@ -231,7 +254,8 @@ impl From<LocalState> for DeviceReport {
                             services: HashMap::new(),
                         });
 
-                    if release.update_status < update_status {
+                    // use the lowest status precedence
+                    if release.update_status > update_status {
                         release.update_status = update_status;
                     }
 
@@ -403,7 +427,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_creates_a_device_report_from_a_device() {
+    fn it_reports_authorized_apps() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
             "images": {
@@ -429,26 +453,22 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "started": false,
                                     "container_name": "new-release_one",
                                     "container": {
                                         "id": "abc",
-                                        "status": "installed",
+                                        "status": "created",
                                         "created": "2026-02-01T20:39:15+00:00"
                                     },
-                                    "config": {}
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "alpine",
-                                    "started": false,
                                     "container_name": "new-release_two",
-                                    "config": {}
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
-                                    "started": false,
+                                    "installing": true,
                                     "container_name": "new-release_three",
                                     "config": {},
                                 },
@@ -456,9 +476,7 @@ mod tests {
                                 "four": {
                                     "id": 4,
                                     "image": "debian",
-                                    "started": false,
                                     "container_name": "new-release_four",
-                                    "config": {},
                                 }
                             }
                         }
@@ -470,6 +488,7 @@ mod tests {
         .unwrap();
 
         let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("my-app")],
             status: crate::state::UpdateStatus::ApplyingChanges,
             device,
         });
@@ -482,7 +501,7 @@ mod tests {
                 .and_then(|apps| apps.get(&Uuid::from("my-app")))
                 .and_then(|app| app.releases.get(&Uuid::from("new-release")))
                 .map(|rel| &rel.update_status),
-            Some(&UpdateStatus::ApplyingChanges),
+            Some(&UpdateStatus::Downloading),
         );
         assert_eq!(
             report
@@ -528,6 +547,72 @@ mod tests {
                 .map(|svc| (&svc.status, svc.download_progress)),
             Some((&ServiceStatus::Downloading, Some(0))),
         );
+    }
+
+    #[test]
+    fn it_excludes_unauthorized_user_apps_from_report() {
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {},
+            "apps": {
+                "my-app": {
+                    "id": 1,
+                    "releases": {
+                        "rel-1": {
+                            "installed": true,
+                            "services": {
+                                "svc-a": {
+                                    "id": 1,
+                                    "image": "img-a",
+                                    "container_name": "rel-1_svc-a",
+                                    "container": {
+                                        "id": "c1",
+                                        "status": "running",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+                "other-app": {
+                    "id": 2,
+                    "releases": {
+                        "rel-2": {
+                            "installed": true,
+                            "services": {
+                                "svc-b": {
+                                    "id": 2,
+                                    "image": "img-b",
+                                    "container_name": "rel-2_svc-b",
+                                    "container": {
+                                        "id": "c2",
+                                        "status": "running",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("my-app")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let apps = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .expect("apps should be present");
+
+        assert!(apps.contains_key(&Uuid::from("my-app")));
+        assert!(!apps.contains_key(&Uuid::from("other-app")));
     }
 
     #[test]

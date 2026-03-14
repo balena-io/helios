@@ -2,7 +2,9 @@ use bollard::Docker;
 use reqwest::StatusCode;
 use serde_json::json;
 
-use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
+use super::common::{
+    HELIOS_URL, clear_reports, prune_images, wait_for_report, wait_for_target_apply,
+};
 
 const TEST_APP_UUID: &str = "test-app";
 
@@ -79,6 +81,7 @@ async fn test_set_app_target() {
 #[tokio::test]
 async fn test_set_app_target_install_images() {
     prune_images().await;
+    clear_reports().await;
 
     let client = reqwest::Client::new();
     let target = json!({
@@ -191,7 +194,19 @@ async fn test_set_app_target_install_images() {
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
 
+    // verify state report was sent with correct data
+    let release_report = wait_for_report(TEST_APP_UUID, "my-release-uuid", "done", 10).await;
+    assert_eq!(
+        release_report["services"]["service-one"]["status"],
+        "Running"
+    );
+    assert_eq!(
+        release_report["services"]["service-two"]["status"],
+        "Running"
+    );
+
     // remove the test app
+    clear_reports().await;
     let body = client
         .delete(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .send()

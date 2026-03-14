@@ -133,6 +133,7 @@ async fn start_supervisor(
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
     let (poll_request_tx, poll_request_rx) = watch::channel(remote::PollRequest::default());
     let (local_state_tx, local_state_rx) = watch::channel(state::LocalState {
+        authorized_apps: Vec::new(),
         device: initial_state.clone(),
         status: state::UpdateStatus::default(),
     });

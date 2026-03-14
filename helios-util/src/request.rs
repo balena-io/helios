@@ -711,7 +711,7 @@ impl Patch {
             }
             _ => {
                 // Other 4xx client errors are permanent - don't retry
-                debug!("bad request: {state_to_send}");
+                debug!("bad request: {state_to_send:#}");
                 state.error_count += 1;
                 // Reset the back-off since this terminates the loop
                 state.current_backoff = state.config.min_interval;
