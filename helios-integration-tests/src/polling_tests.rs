@@ -362,7 +362,7 @@ async fn test_hostos_update_retry_exhaustion() {
     );
 
     // Verify reported state shows aborted with Installing service status
-    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 30).await;
+    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
     assert_eq!(
         release_report["services"]["hostapp"]["status"],
         "Installing"
