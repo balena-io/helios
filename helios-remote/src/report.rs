@@ -382,19 +382,21 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
         // Wait for the report to be sent. Only interrupt the patch if the channel closes,
         // which indicates an error condition. State changes during the request should not
         // interrupt it - we'll report the new state after this request completes.
+        state_changed = false;
         last_report = loop {
             tokio::select! {
                 res = &mut report_future => break res,
-                Err(_) = state_rx.changed() => {
-                    // Channel closed - interrupt the request and exit
-                    interrupt.trigger();
-                    report_future.await;
-                    break 'report;
-                }
-                else => {
+                res = state_rx.changed() => {
+                    if res.is_err() {
+                        // Channel closed - interrupt the request and exit
+                        interrupt.trigger();
+                        report_future.await;
+                        break 'report;
+                    }
+
                     // mark the state changed and keep waiting
                     state_changed = true
-                },
+                }
             }
         };
     }
