@@ -5,6 +5,7 @@ use reqwest::StatusCode;
 use serde_json::json;
 
 const UPDATER_IMAGE: &str = "registry:5000/test-updater:latest";
+const FAILING_UPDATER_IMAGE: &str = "registry:5000/test-failing-updater:latest";
 
 use super::common::{
     HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, wait_for_report,
@@ -49,6 +50,46 @@ async fn build_test_updater_image(docker: &Docker) {
     }
 
     // remove leftover images after build
+    prune_images().await;
+}
+
+async fn build_failing_updater_image(docker: &Docker) {
+    let dockerfile =
+        b"FROM alpine:3.23\nRUN mkdir -p /app && printf '#!/bin/sh\\nexit 1\\n' > /app/entry.sh && chmod +x /app/entry.sh\n";
+
+    let mut tar_buf = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(dockerfile.len() as u64);
+    header.set_mode(0o644);
+    tar_buf
+        .append_data(&mut header, "Dockerfile", dockerfile.as_slice())
+        .unwrap();
+    let context_bytes = tar_buf.into_inner().unwrap();
+
+    let build_opts = BuildImageOptions {
+        t: Some(FAILING_UPDATER_IMAGE.to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.build_image(
+        build_opts,
+        None,
+        Some(bollard::body_full(context_bytes.into())),
+    );
+    while let Some(result) = stream.next().await {
+        result.expect("failing image build failed");
+    }
+
+    let push_opts = PushImageOptions {
+        tag: Some("latest".to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.push_image("registry:5000/test-failing-updater", Some(push_opts), None);
+    while let Some(result) = stream.next().await {
+        result.expect("failing image push failed");
+    }
+
     prune_images().await;
 }
 
@@ -233,6 +274,95 @@ async fn test_remote_poll_hostos_update() {
 
     // verify state report includes the hostapp with aborted status
     let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
+    assert_eq!(
+        release_report["services"]["hostapp"]["status"],
+        "Installing"
+    );
+
+    clear_reports().await;
+    client
+        .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .send()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_hostos_update_retry_exhaustion() {
+    let docker = Docker::connect_with_defaults().unwrap();
+    build_failing_updater_image(&docker).await;
+
+    let client = reqwest::Client::new();
+
+    const APP_UUID: &str = "test-hostapp-retry-uuid";
+    const RELEASE_COMMIT: &str = "ff00112233445566778899aabbccddee";
+
+    let mut releases = serde_json::Map::new();
+    releases.insert(
+        RELEASE_COMMIT.to_string(),
+        json!({
+            "services": {
+                "hostapp": {
+                    "id": 301,
+                    "image": FAILING_UPDATER_IMAGE,
+                    "labels": {
+                        "io.balena.private.updater": FAILING_UPDATER_IMAGE
+                    },
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "hostapp",
+                            "io.balena.private.hostapp.board-rev": "test-board-rev-retry"
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    let app_obj = json!({
+        "id": 300,
+        "name": "generic-aarch64",
+        "is_host": true,
+        "releases": serde_json::Value::Object(releases)
+    });
+    let mut apps = serde_json::Map::new();
+    apps.insert(APP_UUID.to_string(), app_obj);
+    let device_target = json!({
+        "name": "test-device",
+        "apps": serde_json::Value::Object(apps)
+    });
+
+    clear_reports().await;
+
+    let res = client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&device_target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    let status = wait_for_target_apply().await;
+
+    // After exhausting retries (install_attempts > 3), the exception fires
+    // and seek converges to "aborted"
+    assert_eq!(status, json!({"status": "aborted"}));
+
+    // The updater always fails, so no breadcrumb should exist
+    let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
+    assert!(
+        tokio::fs::metadata(&breadcrumb).await.is_err(),
+        "breadcrumb file should NOT exist at {breadcrumb} because install always fails"
+    );
+
+    // Verify reported state shows aborted with Installing service status
+    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 30).await;
     assert_eq!(
         release_report["services"]["hostapp"]["status"],
         "Installing"
