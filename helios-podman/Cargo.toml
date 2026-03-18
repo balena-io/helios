@@ -1,0 +1,17 @@
+[package]
+name = "helios-podman"
+description = "Helios support and tools to work with Podman"
+readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+helios-oci.workspace = true
+helios-util.workspace = true

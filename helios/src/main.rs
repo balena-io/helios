@@ -16,7 +16,10 @@ mod cli;
 
 use helios_api as api;
 use helios_legacy as legacy;
+#[cfg(not(feature = "podman"))]
 use helios_oci as oci;
+#[cfg(feature = "podman")]
+use helios_podman as oci;
 use helios_remote as remote;
 use helios_state as state;
 use helios_store::DocumentStore;

@@ -12,8 +12,13 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+default = []
+podman = ["helios-podman"]
+
 [dependencies]
 helios-oci.workspace = true
+helios-podman = { workspace = true, optional = true }
 helios-store.workspace = true
 helios-util.workspace = true
 helios-remote-model.workspace = true

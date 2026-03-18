@@ -8,7 +8,11 @@ mod tasks;
 pub use models::{Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget};
 pub use tasks::{HostCleanupError, cleanup_hostapp, with_hostapp_tasks};
 
+#[cfg(not(feature = "podman"))]
 use helios_oci as oci;
+#[cfg(feature = "podman")]
+use helios_podman as oci;
+
 use helios_remote_model as remote_model;
 use helios_store as store;
 use helios_util as util;

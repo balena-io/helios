@@ -16,6 +16,7 @@ version.workspace = true
 helios-api.workspace = true
 helios-legacy.workspace = true
 helios-oci.workspace = true
+helios-podman = { workspace = true, optional = true }
 helios-remote.workspace = true
 helios-state.workspace = true
 helios-store.workspace = true
@@ -28,8 +29,9 @@ tracing.workspace = true
 
 [features]
 default = ["all"]
-all = ["userapps", "balenahup", "v3-api"]
+all = ["userapps", "balenahup", "v3-api", "podman"]
 userapps = ["helios-state/userapps"]
+podman = ["helios-podman", "helios-state/podman"]
 balenahup = ["helios-state/balenahup", "helios-remote/balenahup"]
 v3-api = ["helios-api/v3"]
 

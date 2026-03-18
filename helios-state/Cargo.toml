@@ -16,6 +16,7 @@ version.workspace = true
 default = []
 userapps = []
 balenahup = ["helios-balenahup"]
+podman = ["helios-podman", "helios-balenahup/podman"]
 
 [dependencies]
 helios-balenahup = { workspace = true, optional = true }
@@ -24,6 +25,7 @@ helios-oci.workspace = true
 helios-store.workspace = true
 helios-util.workspace = true
 helios-remote-model.workspace = true
+helios-podman = { workspace = true, optional = true }
 
 mahler.workspace = true
 serde.workspace = true

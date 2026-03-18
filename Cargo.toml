@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [ "helios", "helios-api", "helios-balenahup", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util" ]
+members = [ "helios", "helios-api", "helios-balenahup", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util", "helios-podman" ]
 
 [workspace.package]
 version = "0.22.5"
@@ -51,6 +51,10 @@ version = "0"
 
 [workspace.dependencies.helios-util]
 path = "./helios-util"
+version = "0"
+
+[workspace.dependencies.helios-podman]
+path = "./helios-podman"
 version = "0"
 
 [workspace.dependencies.helios-remote]

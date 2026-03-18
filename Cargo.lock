@@ -965,6 +965,7 @@ dependencies = [
  "helios-api",
  "helios-legacy",
  "helios-oci",
+ "helios-podman",
  "helios-remote",
  "helios-state",
  "helios-store",
@@ -996,6 +997,7 @@ name = "helios-balenahup"
 version = "0.22.5"
 dependencies = [
  "helios-oci",
+ "helios-podman",
  "helios-remote-model",
  "helios-store",
  "helios-util",
@@ -1036,6 +1038,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "helios-podman"
+version = "0.22.3"
+dependencies = [
+ "helios-oci",
+ "helios-util",
+]
+
+[[package]]
 name = "helios-remote"
 version = "0.22.5"
 dependencies = [
@@ -1070,6 +1080,7 @@ dependencies = [
  "helios-balenahup",
  "helios-legacy",
  "helios-oci",
+ "helios-podman",
  "helios-remote-model",
  "helios-store",
  "helios-util",
