@@ -107,7 +107,7 @@ fn install_hostapp_release(
 
     // increase the install counter
     release.install_attempts += 1;
-    with_io(release, async move |release| {
+    with_io(release, async move |mut release| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
@@ -122,6 +122,9 @@ fn install_hostapp_release(
         local_store
             .put(format!("host/releases/{release_uuid}/hostapp"), &*release)
             .await?;
+
+        // commit the install attemps to the local state
+        let _ = release.commit().await;
 
         // Pull the docker image for the updater
         debug!("pull hostapp updater script from '{}'", release.updater);
