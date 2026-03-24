@@ -1,4 +1,62 @@
 - commits:
+    - subject: Update to mahler v0.25.9 to use the new View::commit feature
+      hash: c984267a385b04c5cd90f7d9bb3e540b8661bb19
+      body: |
+        The feature allows to update install attempts as soon as the state is
+        updated locally to ensure that the worker stop trying after
+        install_attempts > 3
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fix bug with reporting changes while sending
+      hash: 4de41b117f4e24f11155feaa2f8af1620c9ff2c7
+      body: >
+        The previous version would not detect changes while sending as the
+        `else`
+
+        branch on the `select!` was never really matched.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fix reporting of unchanged apps
+      hash: fde4a20f42a75ccf868421a104fad7b6473aba15
+      body: >
+        Unchanged apps would get removed from the reported state before,
+        resulting
+
+        in the backend assuming the app was deleted. We now report all apps if
+
+        one of them has changed or none.
+
+
+        This also updates integration testing of the reports to account for
+
+        partial reporting of apps.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add HUP retry integration test
+      hash: 874ae79e76675e6b818523d39bc58e56ba38d5a6
+      body: |
+        HUP should fail after 3 attempts, this tests the feature works properly.
+
+        This adds the `HELIOS_LOCAL_RETRY_INTERVAL_MS` helios CLI flag, to make
+        the interval configurable for tests.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.21.3
+  title: ""
+  date: 2026-03-24T02:14:54.001Z
+- commits:
     - subject: Add explicit SIGTERM handling to main process
       hash: eab5580a5ff44c744273a458ac7259b17becdb2e
       body: |
