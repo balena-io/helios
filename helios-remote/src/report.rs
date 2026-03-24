@@ -317,27 +317,9 @@ fn calculate_report_diff(
         && let Some(device) = new_report
             .get_mut(&device_uuid)
             .and_then(|d| d.as_object_mut())
-        && let Some(apps) = device.get_mut("apps").and_then(|a| a.as_object_mut())
     {
-        // Track which apps to remove
-        let apps_to_remove: Vec<String> = apps
-            .iter()
-            .filter(|(app_uuid, app)| {
-                old_device
-                    .get("apps")
-                    .and_then(|old_apps| old_apps.get(*app_uuid))
-                    == Some(*app)
-            })
-            .map(|(uuid, _)| uuid.clone())
-            .collect();
-
-        // Remove unchanged apps
-        for app_uuid in apps_to_remove {
-            apps.remove(&app_uuid);
-        }
-
-        // Remove apps field if empty
-        if apps.is_empty() {
+        // If apps haven't changed at all, remove the apps key
+        if device.get("apps") == old_device.get("apps") {
             device.remove("apps");
         }
     }
@@ -361,10 +343,11 @@ async fn send_report(
     // FIXME: this may conflict with service installs coming from the supervisor. Needs testing
     // Once we implement more complete service management, reporting can be done by this service
     // and we will block report calls from the legacy supervisor to the backend
-    let new_report: Value = calculate_report_diff(device_uuid, &last_report, report.into());
+    let full_report: Value = report.into();
+    let diff = calculate_report_diff(device_uuid, &last_report, full_report.clone());
 
-    match client.patch(new_report.clone(), Some(interrupt)).await {
-        Ok(_) => Some(new_report),
+    match client.patch(diff, Some(interrupt)).await {
+        Ok(_) => Some(full_report),
         Err(PatchError::Cancelled) => last_report,
         Err(e) => {
             error!("report failed: {e}");
@@ -399,19 +382,21 @@ pub async fn start_report(config: RemoteConfig, mut state_rx: Receiver<LocalStat
         // Wait for the report to be sent. Only interrupt the patch if the channel closes,
         // which indicates an error condition. State changes during the request should not
         // interrupt it - we'll report the new state after this request completes.
+        state_changed = false;
         last_report = loop {
             tokio::select! {
                 res = &mut report_future => break res,
-                Err(_) = state_rx.changed() => {
-                    // Channel closed - interrupt the request and exit
-                    interrupt.trigger();
-                    report_future.await;
-                    break 'report;
-                }
-                else => {
+                res = state_rx.changed() => {
+                    if res.is_err() {
+                        // Channel closed - interrupt the request and exit
+                        interrupt.trigger();
+                        report_future.await;
+                        break 'report;
+                    }
+
                     // mark the state changed and keep waiting
                     state_changed = true
-                },
+                }
             }
         };
     }
@@ -739,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn calculate_report_diff_handles_multiple_apps_with_partial_changes() {
+    fn calculate_report_diff_includes_all_apps_when_any_changed() {
         let device_uuid = "device-123".to_string();
         let unchanged_app = json!({
             "release_uuid": "release-789",
@@ -771,7 +756,7 @@ mod tests {
         let new_report = json!({
             "device-123": {
                 "apps": {
-                    "app-unchanged": unchanged_app,
+                    "app-unchanged": unchanged_app.clone(),
                     "app-changed": {
                         "release_uuid": "release-new",
                         "releases": {}
@@ -780,25 +765,14 @@ mod tests {
             }
         });
 
-        let result = calculate_report_diff(device_uuid, &last_report, new_report);
+        let result = calculate_report_diff(device_uuid, &last_report, new_report.clone());
 
-        assert_eq!(
-            result,
-            json!({
-                "device-123": {
-                    "apps": {
-                        "app-changed": {
-                            "release_uuid": "release-new",
-                            "releases": {}
-                        }
-                    }
-                }
-            })
-        );
+        // All apps are re-reported when any app changed
+        assert_eq!(result, new_report);
     }
 
     #[test]
-    fn calculate_report_diff_handles_new_apps() {
+    fn calculate_report_diff_includes_all_apps_when_app_added() {
         let device_uuid = "device-123".to_string();
         let last_report = Some(json!({
             "device-123": {
@@ -826,21 +800,10 @@ mod tests {
             }
         });
 
-        let result = calculate_report_diff(device_uuid, &last_report, new_report);
+        let result = calculate_report_diff(device_uuid, &last_report, new_report.clone());
 
-        assert_eq!(
-            result,
-            json!({
-                "device-123": {
-                    "apps": {
-                        "app-new": {
-                            "release_uuid": "release-999",
-                            "releases": {}
-                        }
-                    }
-                }
-            })
-        );
+        // All apps are re-reported when the set of apps changed
+        assert_eq!(result, new_report);
     }
 
     #[test]
@@ -863,6 +826,42 @@ mod tests {
 
         let result = calculate_report_diff(device_uuid, &last_report, new_report.clone());
 
+        assert_eq!(result, new_report);
+    }
+
+    #[test]
+    fn calculate_report_diff_includes_all_apps_when_app_removed() {
+        let device_uuid = "device-123".to_string();
+        let last_report = Some(json!({
+            "device-123": {
+                "apps": {
+                    "app-kept": {
+                        "release_uuid": "release-1",
+                        "releases": {}
+                    },
+                    "app-removed": {
+                        "release_uuid": "release-2",
+                        "releases": {}
+                    }
+                }
+            }
+        }));
+
+        // New report only has app-kept (app-removed was removed from state)
+        let new_report = json!({
+            "device-123": {
+                "apps": {
+                    "app-kept": {
+                        "release_uuid": "release-1",
+                        "releases": {}
+                    }
+                }
+            }
+        });
+
+        let result = calculate_report_diff(device_uuid, &last_report, new_report.clone());
+
+        // Apps differ (one removed), so all current apps are reported
         assert_eq!(result, new_report);
     }
 

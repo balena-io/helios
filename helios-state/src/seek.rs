@@ -234,6 +234,7 @@ async fn seek_target(
     target: &DeviceTarget,
     interrupt: &Interrupt,
     state_tx: &Sender<LocalState>,
+    retry_interval: Duration,
 ) -> Result<UpdateStatus, SeekError> {
     info!("applying target state");
 
@@ -316,17 +317,14 @@ async fn seek_target(
                         }
                         // if a recoverable error happened, we try-again
                         WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
-                            warn!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in 30s");
+                            warn!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in {retry_interval:#?}");
 
-                            // back-off. we use a constant back-off time for now. We may make this
-                            // configurable or use a back-off function in the future if it seems
-                            // necessary
                             tokio::select! {
                                 _ = interrupt.wait() => {
                                     info!(time = ?now.elapsed(), "interrupted by new target");
                                     return Ok(UpdateStatus::Interrupted)
                                 },
-                                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                                _ = tokio::time::sleep(retry_interval) => {},
                             }
 
                             // break-the inner loop after the back-off
@@ -351,6 +349,7 @@ pub async fn start_seek(
     legacy_config: Option<LegacyConfig>,
     mut seek_rx: Receiver<SeekRequest>,
     state_tx: Sender<LocalState>,
+    retry_interval: Duration,
 ) -> Result<(), SeekError> {
     info!("waiting for target");
 
@@ -513,9 +512,15 @@ pub async fn start_seek(
                             }
 
                             // Look for a plan to the target
-                            update_status =
-                                seek_target(worker, current_state, target, &interrupt, state_tx)
-                                    .await?;
+                            update_status = seek_target(
+                                worker,
+                                current_state,
+                                target,
+                                &interrupt,
+                                state_tx,
+                                retry_interval,
+                            )
+                            .await?;
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

@@ -101,6 +101,15 @@ pub struct Cli {
     )]
     pub remote_poll_max_jitter: Option<Duration>,
 
+    /// Seek retry backoff in milliseconds
+    #[arg(
+        env = "HELIOS_LOCAL_RETRY_INTERVAL_MS",
+        long = "local-retry-interval-ms",
+        value_name = "ms",
+        value_parser = parse_duration,
+    )]
+    pub local_retry_interval: Option<Duration>,
+
     /// URI of legacy Supervisor API
     #[arg(
         env = "HELIOS_LEGACY_API_ENDPOINT",

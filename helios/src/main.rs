@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::future::{self, Future};
+use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
@@ -96,7 +97,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
     };
 
-    start_supervisor(uuid, state_config, api_config, remote_config, legacy_config).await?;
+    let retry_interval = cli.local_retry_interval.unwrap_or(Duration::from_secs(30));
+
+    start_supervisor(
+        uuid,
+        state_config,
+        api_config,
+        remote_config,
+        legacy_config,
+        retry_interval,
+    )
+    .await?;
 
     Ok(())
 }
@@ -108,6 +119,7 @@ async fn start_supervisor(
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
+    retry_interval: Duration,
 ) -> Result<(), Box<dyn Error>> {
     trace!(
         uuid = ?uuid,
@@ -213,6 +225,7 @@ async fn start_supervisor(
             legacy_config,
             seek_request_rx,
             local_state_tx,
+            retry_interval,
         ) => res.map_err(|err| err.into()),
 
         // Wait for sigterm

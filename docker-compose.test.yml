@@ -58,6 +58,7 @@ services:
       DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
       HELIOS_REMOTE_POLL_MIN_INTERVAL_MS: '500'
       HELIOS_REMOTE_POLL_MAX_JITTER_MS: '0'
+      HELIOS_LOCAL_RETRY_INTERVAL_MS: '500'
     volumes:
       - dind:/var/run
       - dbus:/shared/dbus
