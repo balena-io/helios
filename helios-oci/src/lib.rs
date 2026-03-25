@@ -94,7 +94,7 @@ impl Client {
 
     /// Exposes methods to work with networks
     #[inline]
-    pub fn network(&self) -> Network<'_> {
+    pub fn network(&self) -> Network<'_, LocalNamespace> {
         Network::new(self)
     }
 

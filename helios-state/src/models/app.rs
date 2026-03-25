@@ -45,9 +45,6 @@ impl From<(&Uuid, RemoteAppTarget)> for AppTarget {
         // Namespace services/networks/volumes under the app_uuid
         for (rel_uuid, rel) in tgt.releases {
             let rel = releases.entry(rel_uuid.clone()).or_insert(rel.into());
-            for (net_key, net) in rel.networks.iter_mut() {
-                net.network_name = format!("{app_uuid}_{net_key}");
-            }
 
             for (vol_key, vol) in rel.volumes.iter_mut() {
                 vol.volume_name = format!("{app_uuid}_{vol_key}");

@@ -7,5 +7,8 @@ pub(crate) const LABEL_APP_UUID: &str = "io.balena.app-uuid";
 /// Label storing the service name on managed resources
 pub(crate) const LABEL_SERVICE_NAME: &str = "io.balena.service-name";
 
+/// Label storing the network name on managed resources
+pub(crate) const LABEL_NETWORK_NAME: &str = "io.balena.network-name";
+
 /// Label storing the service id on managed resources
 pub(crate) const LABEL_SERVICE_ID: &str = "io.balena.service-id";

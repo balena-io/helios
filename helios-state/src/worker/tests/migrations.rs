@@ -44,7 +44,6 @@ fn it_finds_a_workflow_for_migrating_networks() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -188,7 +187,6 @@ fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -304,7 +302,6 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                             },
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -416,13 +413,11 @@ fn it_finds_a_workflow_for_migrating_and_recreating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "same-net": {
-                                    "network_name": "my-app-uuid_same-net",
                                     "config": {
                                         "driver_opts": { "foo": "bar" },
                                     },
                                 },
                                 "changed-net": {
-                                    "network_name": "my-app-uuid_changed-net",
                                     "config": {
                                         "enable_ipv6": true,
                                     },

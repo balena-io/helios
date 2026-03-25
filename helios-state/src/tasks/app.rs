@@ -182,7 +182,7 @@ fn ensure_release_is_finalized(
     }) || tgt_rel.networks.iter().any(|(net_name, tgt_net)| {
         rel.networks
             .get(net_name)
-            .map(|net| tgt_net != net)
+            .map(|net| tgt_net.config != net.config)
             // target network does not exist yet or has a different config
             .unwrap_or(true)
     }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
@@ -226,7 +226,7 @@ fn finish_release(
             release
                 .networks
                 .get(net_name)
-                .map(|net| tgt_net == net)
+                .map(|net| tgt_net.config == net.config)
                 .unwrap_or_default()
         }),
         "all networks should have the correct configuration"
@@ -282,10 +282,11 @@ fn create_network(
     net: View<Option<Network>>,
     Target(tgt): Target<Network>,
     docker: Res<Docker>,
-    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, _, net_name)): Args<(Uuid, Uuid, String)>,
 ) -> IO<Network, Error> {
     let net = net.create(Network {
-        network_name: tgt.network_name.clone(),
+        // use a mock name for planning only
+        network_name: String::default(),
         config: tgt.config,
     });
 
@@ -294,17 +295,17 @@ fn create_network(
             .as_ref()
             .expect("docker resource should be available");
 
-        let network_config = std::mem::take(&mut net.config);
-        let network_name = &net.network_name;
+        let network_config = std::mem::take(&mut net.config).into_oci_config(&net_name);
 
-        docker
+        // create the network namespaced by app-uuid
+        let network_name = docker
             .network()
-            .create(network_name, network_config.into_oci_config(&app_uuid))
+            .create(&net_name, app_uuid.as_str(), network_config)
             .await?;
 
         let local_network = docker
             .network()
-            .inspect(network_name)
+            .inspect(&network_name)
             .await
             .with_context(|| format!("failed to inspect network '{network_name}'"))?;
         *net = Network::from(local_network);
