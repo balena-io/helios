@@ -1,9 +1,11 @@
 use mahler::state::Map;
 use thiserror::Error;
-use tracing::{instrument, trace};
+use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
-use crate::labels::{LABEL_APP_UUID, LABEL_NETWORK_NAME, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
+use crate::labels::{
+    LABEL_APP_UUID, LABEL_NETWORK_NAME, LABEL_SERVICE_NAME, LABEL_SUPERVISED, LABEL_VOLUME_NAME,
+};
 use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
 
@@ -226,22 +228,22 @@ pub async fn read(
         for volume_name in volumes {
             let local_volume = docker.volume().inspect(&volume_name).await?;
 
-            let Some(app_uuid_str) = local_volume.labels.get(LABEL_APP_UUID) else {
-                // Skip orphaned volumes with no app-uuid label
-                trace!(volume = %local_volume.name, "skipping orphaned volume");
-                continue;
-            };
-            let app_uuid: Uuid = app_uuid_str.as_str().into();
+            // get the volume name from the label
+            let vol_name: String = local_volume
+                .labels
+                .get(LABEL_VOLUME_NAME)
+                .map(|name| name.as_str())
+                .unwrap_or(&volume_name)
+                .into();
 
-            // Extract the volume name by stripping the "{app_uuid}_" prefix
-            let vol_name = local_volume
-                .name
-                .strip_prefix(&format!("{app_uuid}_"))
-                .unwrap_or(&local_volume.name)
-                .to_owned();
+            let app_uuid: Uuid = local_volume
+                .namespace(&vol_name)
+                .as_ref()
+                .map(|n| n.as_str())
+                .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
 
             let volume: Volume = local_volume.into();
-
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
             // If there are no releases, create an unknown release for cleanup

@@ -188,7 +188,7 @@ fn ensure_release_is_finalized(
     }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
         rel.volumes
             .get(vol_name)
-            .map(|vol| tgt_vol != vol)
+            .map(|vol| tgt_vol.config != vol.config)
             // target volume does not exist yet or has a different config
             .unwrap_or(true)
     }) {
@@ -238,7 +238,7 @@ fn finish_release(
             release
                 .volumes
                 .get(vol_name)
-                .map(|vol| tgt_vol == vol)
+                .map(|vol| tgt_vol.config == vol.config)
                 .unwrap_or_default()
         }),
         "all volumes should have the correct configuration"
@@ -348,11 +348,12 @@ fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Netwo
 fn create_volume(
     vol: View<Option<Volume>>,
     Target(tgt): Target<Volume>,
-    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, _, vol_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
     let vol = vol.create(Volume {
-        volume_name: tgt.volume_name.clone(),
+        // use a mock name for planning only
+        volume_name: String::new(),
         config: tgt.config,
     });
 
@@ -360,12 +361,12 @@ fn create_volume(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let volume_config = std::mem::take(&mut vol.config);
-        let volume_name = vol.volume_name.clone();
+        let volume_config = std::mem::take(&mut vol.config).into_oci_config(&vol_name);
 
-        docker
+        // create the volume namespaced by app_uuid
+        let volume_name = docker
             .volume()
-            .create(&volume_name, volume_config.into_oci_config(&app_uuid))
+            .create(&vol_name, app_uuid.as_str(), volume_config)
             .await?;
 
         let local_volume = docker

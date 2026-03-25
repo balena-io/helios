@@ -5,25 +5,42 @@ use bollard::models::VolumeCreateRequest;
 use bollard::query_parameters::ListVolumesOptions;
 use serde::{Deserialize, Serialize};
 
-use super::{Client, Error, Result, WithContext};
+use super::{Client, Error, LocalNamespace, Namespace, Result, WithContext};
 
 #[derive(Debug, Clone)]
-pub struct Volume<'a>(&'a Client);
+pub struct Volume<'a, N> {
+    client: &'a Client,
+    __: std::marker::PhantomData<N>,
+}
 
-impl<'a> Volume<'a> {
+impl<'a, N> Volume<'a, N> {
     pub fn new(client: &'a Client) -> Self {
-        Self(client)
+        Self {
+            client,
+            __: std::marker::PhantomData::<N>,
+        }
     }
 }
 
-impl Volume<'_> {
+impl<N: Namespace> Volume<'_, N> {
     /// Create a volume with the given name and configuration
-    pub async fn create(&self, name: &str, config: VolumeConfig) -> Result<()> {
+    pub async fn create(
+        &self,
+        name: &str,
+        namespace: impl Into<LocalNamespace>,
+        config: VolumeConfig,
+    ) -> Result<String> {
+        let id = namespace.into().to_identifier(name);
         let mut request: VolumeCreateRequest = config.into();
-        request.name = Some(name.to_owned());
+        request.name = Some(id.clone());
 
-        match self.0.inner().create_volume(request).await {
-            Ok(_) => Ok(()),
+        match self.client.inner().create_volume(request).await {
+            Ok(_) => Ok(id),
+            // ignore if the error if the volume already exists
+            // (not sure this error can happen according to the docker API)
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 409, ..
+            }) => Ok(id),
             Err(e) => {
                 Err(Error::from(e)).with_context(|| format!("failed to create volume {name}"))
             }
@@ -33,7 +50,7 @@ impl Volume<'_> {
     /// Remove a volume by name
     pub async fn remove(&self, name: &str) -> Result<()> {
         match self
-            .0
+            .client
             .inner()
             .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
             .await
@@ -50,11 +67,13 @@ impl Volume<'_> {
     }
 
     /// Returns low-level information about a volume.
-    pub async fn inspect(&self, name: &str) -> Result<LocalVolume> {
-        let volume_info =
-            self.0.inner().inspect_volume(name).await.map_err(|e| {
-                Error::from(e).context(format!("failed to inspect volume '{name}'"))
-            })?;
+    pub async fn inspect(&self, name: &str) -> Result<LocalVolume<N>> {
+        let volume_info = self
+            .client
+            .inner()
+            .inspect_volume(name)
+            .await
+            .map_err(|e| Error::from(e).context(format!("failed to inspect volume '{name}'")))?;
 
         Ok(volume_info.into())
     }
@@ -73,7 +92,7 @@ impl Volume<'_> {
         };
 
         let response = self
-            .0
+            .client
             .inner()
             .list_volumes(Some(opts))
             .await
@@ -122,21 +141,42 @@ pub struct VolumeConfig {
 }
 
 /// Information about a volume on the local Docker engine
-#[derive(Debug, Clone, Default)]
-pub struct LocalVolume {
+#[derive(Debug, Clone)]
+pub struct LocalVolume<N = LocalNamespace> {
     pub name: String,
     pub driver: VolumeDriver,
     pub driver_opts: HashMap<String, String>,
     pub labels: HashMap<String, String>,
+    pub __: std::marker::PhantomData<N>,
 }
 
-impl From<bollard::models::Volume> for LocalVolume {
+impl<N> Default for LocalVolume<N> {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            driver: VolumeDriver::default(),
+            driver_opts: HashMap::default(),
+            labels: HashMap::default(),
+            __: std::marker::PhantomData::<N>,
+        }
+    }
+}
+
+impl<N: Namespace> LocalVolume<N> {
+    /// Get the namepace from local volume metadata
+    pub fn namespace(&self, volume: &str) -> Option<N> {
+        N::from_identifier(&self.name, volume)
+    }
+}
+
+impl<N> From<bollard::models::Volume> for LocalVolume<N> {
     fn from(value: bollard::models::Volume) -> Self {
         LocalVolume {
             name: value.name,
             driver: VolumeDriver::from(value.driver),
             driver_opts: value.options,
             labels: value.labels,
+            __: std::marker::PhantomData::<N>,
         }
     }
 }

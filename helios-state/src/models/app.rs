@@ -3,7 +3,7 @@ use mahler::state::{Map, State};
 use crate::common_types::Uuid;
 use crate::remote_model::UserApp as RemoteAppTarget;
 
-use super::release::{Release, ReleaseTarget};
+use super::release::Release;
 
 /// The internal state of the app
 #[derive(State, Debug, Clone)]
@@ -36,25 +36,17 @@ impl From<App> for AppTarget {
 
 pub type AppMap = Map<Uuid, App>;
 
-impl From<(&Uuid, RemoteAppTarget)> for AppTarget {
-    fn from((app_uuid, tgt): (&Uuid, RemoteAppTarget)) -> Self {
-        let RemoteAppTarget { id, name, .. } = tgt;
-
-        let mut releases: Map<Uuid, ReleaseTarget> = Map::new();
-
-        // Namespace services/networks/volumes under the app_uuid
-        for (rel_uuid, rel) in tgt.releases {
-            let rel = releases.entry(rel_uuid.clone()).or_insert(rel.into());
-
-            for (vol_key, vol) in rel.volumes.iter_mut() {
-                vol.volume_name = format!("{app_uuid}_{vol_key}");
-            }
-        }
+impl From<RemoteAppTarget> for AppTarget {
+    fn from(tgt: RemoteAppTarget) -> Self {
+        let RemoteAppTarget { id, name, releases } = tgt;
 
         AppTarget {
             id,
             name: Some(name),
-            releases,
+            releases: releases
+                .into_iter()
+                .map(|(r_uuid, rel)| (r_uuid, rel.into()))
+                .collect(),
         }
     }
 }

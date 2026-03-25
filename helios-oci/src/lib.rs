@@ -100,7 +100,7 @@ impl Client {
 
     /// Exposes methods to work with volumes
     #[inline]
-    pub fn volume(&self) -> Volume<'_> {
+    pub fn volume(&self) -> Volume<'_, LocalNamespace> {
         Volume::new(self)
     }
 }

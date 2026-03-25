@@ -109,7 +109,6 @@ fn it_finds_a_workflow_for_migrating_volumes() {
                             "services": {},
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -196,7 +195,6 @@ fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
                             },
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -311,7 +309,6 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                             },
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -425,13 +422,11 @@ fn it_finds_a_workflow_for_migrating_and_recreating_networks_and_volumes() {
                             },
                             "volumes": {
                                 "same-vol": {
-                                    "volume_name": "my-app-uuid_same-vol",
                                     "config": {
                                         "driver_opts": { "type": "nfs" },
                                     },
                                 },
                                 "changed-vol": {
-                                    "volume_name": "my-app-uuid_changed-vol",
                                     "config": {
                                         "driver_opts": { "type": "tmpfs" },
                                     },

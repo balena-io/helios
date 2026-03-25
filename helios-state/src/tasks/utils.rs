@@ -1,5 +1,5 @@
 use crate::common_types::Uuid;
-use crate::models::{Device, DeviceTarget, NetworkTarget, Service, ServiceTarget, Volume};
+use crate::models::{Device, DeviceTarget, NetworkTarget, Service, ServiceTarget, VolumeTarget};
 
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
@@ -45,7 +45,7 @@ pub fn find_future_volume<'a>(
     app_uuid: &'a Uuid,
     commit: &'a Uuid,
     volume_name: &'a String,
-) -> Option<(&'a Uuid, &'a Volume)> {
+) -> Option<(&'a Uuid, &'a VolumeTarget)> {
     t_device.apps.get(app_uuid).and_then(|app| {
         app.releases
             .iter()

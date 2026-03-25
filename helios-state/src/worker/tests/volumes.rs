@@ -34,9 +34,7 @@ fn it_finds_a_workflow_to_create_volumes() {
                                 },
                             },
                             "volumes": {
-                                "my-volume": {
-                                    "volume_name": "my-app-uuid_my-volume",
-                                },
+                                "my-volume": {},
                             },
                         }
                     }
@@ -131,9 +129,7 @@ fn it_finds_a_workflow_to_create_and_remove_volumes() {
                             "installed": true,
                             "services": {},
                             "volumes": {
-                                "volume-b": {
-                                    "volume_name": "my-app-uuid_volume-b",
-                                },
+                                "volume-b": {}
                             },
                         }
                     }
@@ -192,7 +188,6 @@ fn it_finds_a_workflow_for_updating_volumes() {
                             "services": {},
                             "volumes": {
                                 "my-volume": {
-                                    "volume_name": "my-app-uuid_my-volume",
                                     "config": {
                                         "driver": "local",
                                         "driver_opts": {
@@ -243,12 +238,8 @@ fn it_finds_a_workflow_to_create_multiple_volumes_and_finalizes_release_after_vo
                             "installed": true,
                             "services": {},
                             "volumes": {
-                                "vol-a": {
-                                    "volume_name": "my-app-uuid_vol-a",
-                                },
-                                "vol-b": {
-                                    "volume_name": "my-app-uuid_vol-b",
-                                },
+                                "vol-a": {},
+                                "vol-b": {},
                             },
                         }
                     }
