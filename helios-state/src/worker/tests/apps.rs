@@ -105,18 +105,16 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
-                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("badc41f"),
+                                    "container": running_container("my-release-uuid_service1"),
                                 },
                                  "service2": {
                                     "id": 2,
                                     "image": "alpine:latest",
-                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("badbeef"),
+                                    "container": running_container("my-release-uuid_service2"),
                                 }
                             }
                         }
@@ -148,14 +146,12 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
-                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "alpine:latest",
-                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "config": {},
                                 },

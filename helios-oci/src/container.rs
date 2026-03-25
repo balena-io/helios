@@ -152,7 +152,7 @@ impl<N: Namespace> Container<'_, N> {
     }
 
     /// Rename the container with the given name
-    pub async fn rename(&self, id: &str, new_name: &str) -> Result<()> {
+    async fn rename(&self, id: &str, new_name: &str) -> Result<()> {
         self.client
             .inner()
             .rename_container(

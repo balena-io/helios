@@ -245,9 +245,8 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                                     "id": 1,
                                     // same digest as target, different URI name
                                     "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                                    "container_name": "old-release_my-svc",
                                     "started": true,
-                                    "container": running_container("deadbeef"),
+                                    "container": running_container("old-release_my-svc"),
                                     "config": {},
                                 },
                             },
@@ -299,7 +298,6 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                                     "id": 1,
                                     // same digest as old release, different URI name
                                     "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                                    "container_name": "new-release_my-svc",
                                     "started": true,
                                     "config": {},
                                 },
@@ -350,12 +348,9 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
             )
             + par!(
                 "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "rename container for service 'my-svc' for release 'new-release'",
-            )
-            + seq!(
                 "update image metadata for service 'my-svc' of release 'new-release'",
-                "finish release 'new-release' for app with uuid 'my-app-uuid'",
-            ),
+            )
+            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'",),
     );
 }
 

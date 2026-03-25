@@ -29,7 +29,6 @@ fn it_finds_a_workflow_to_create_networks() {
                                 "service1": {
                                     "id": 1,
                                     "started": true,
-                                    "container_name": "my-release-uuid_service1",
                                     "image": "ubuntu:latest",
                                     "config": {},
                                 },
