@@ -132,13 +132,9 @@ pub async fn read(
                 .unwrap_or(local_container.name.as_str())
                 .into();
             let release_uuid: Uuid = local_container
-                .name
-                .strip_prefix(&format!("{service_name}_"))
-                // if the remainder has underscores, assume the last
-                // component to be the release uuid
-                .and_then(|suffix| suffix.rsplit('_').next())
-                // ignore the value if empty
-                .filter(|r_uuid| !r_uuid.is_empty())
+                .namespace(&service_name)
+                .as_ref()
+                .map(|n| n.as_str())
                 .unwrap_or(UNKNOWN_RELEASE_UUID)
                 .into();
 

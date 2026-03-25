@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self};
 
 use bollard::Docker;
 
@@ -80,9 +80,15 @@ impl Client {
         Image::new(self)
     }
 
+    /// Exposes methods to work with non-namespaced containers
+    #[inline]
+    pub fn non_namepaced_container(&self) -> Container<'_, NoNamespace> {
+        Container::new(self)
+    }
+
     /// Exposes methods to work with container
     #[inline]
-    pub fn container(&self) -> Container<'_> {
+    pub fn container(&self) -> Container<'_, LocalNamespace> {
         Container::new(self)
     }
 
@@ -236,5 +242,71 @@ impl<T> WithContext<T> for Result<T> {
         F: FnOnce() -> String,
     {
         self.map_err(|err| err.context(f()))
+    }
+}
+
+pub trait Namespace: Sized {
+    /// Convert the given entity name to the namespaced identifier
+    fn to_identifier(&self, entity: &str) -> String;
+
+    /// Extract the namespace from the identifier and entity name
+    fn from_identifier(id: &str, entity: &str) -> Option<Self>;
+}
+
+pub struct NoNamespace;
+
+impl Namespace for NoNamespace {
+    fn to_identifier(&self, name: &str) -> String {
+        name.to_owned()
+    }
+
+    fn from_identifier(_: &str, _: &str) -> Option<Self> {
+        Some(NoNamespace)
+    }
+}
+
+impl From<()> for NoNamespace {
+    fn from(_: ()) -> Self {
+        NoNamespace
+    }
+}
+
+// The default namespace
+#[derive(Clone, Debug)]
+pub struct LocalNamespace(String);
+
+impl LocalNamespace {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Namespace for LocalNamespace {
+    fn to_identifier(&self, entity: &str) -> String {
+        format!("{entity}_{}", self.0)
+    }
+
+    fn from_identifier(id: &str, entity: &str) -> Option<Self> {
+        let namespace = id
+            .strip_prefix(&format!("{entity}_"))
+            // if the remainder has underscores, assume the last
+            // component to be the namespace
+            .and_then(|suffix| suffix.rsplit('_').next())
+            // ignore the value if empty
+            .filter(|part| !part.is_empty());
+
+        namespace.map(|n| Self(n.to_owned()))
+    }
+}
+
+impl From<String> for LocalNamespace {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for LocalNamespace {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }

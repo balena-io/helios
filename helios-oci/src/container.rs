@@ -13,18 +13,42 @@ use tokio_stream::StreamExt;
 use super::datetime::DateTime;
 use super::image::ImageConfig;
 use super::util::types::ImageUri;
-use super::{Client, Error, Result, WithContext};
+use super::{Client, Error, LocalNamespace, Namespace, NoNamespace, Result, WithContext};
 
 #[derive(Debug, Clone)]
-pub struct Container<'a>(&'a Client);
+pub struct Container<'a, N> {
+    client: &'a Client,
+    __: std::marker::PhantomData<N>,
+}
 
-impl<'a> Container<'a> {
+impl<'a, N> Container<'a, N> {
     pub fn new(client: &'a Client) -> Self {
-        Self(client)
+        Self {
+            client,
+            __: std::marker::PhantomData::<N>,
+        }
     }
 }
 
-impl Container<'_> {
+impl Container<'_, NoNamespace> {
+    /// Create a temporary container from the given image
+    ///
+    /// This is only meant to get access to the container files and not to be started
+    pub async fn create_tmp(&self, name: &str, image: &ImageUri) -> Result<String> {
+        self.create(
+            name,
+            NoNamespace,
+            image,
+            ContainerConfig {
+                cmd: Some(vec!["/bin/false".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+}
+
+impl<N: Namespace> Container<'_, N> {
     /// Returns the list of container ids on the server
     /// matching the given labels
     ///
@@ -43,21 +67,22 @@ impl Container<'_> {
             ..Default::default()
         };
 
-        let res = self.0.inner().list_containers(Some(opts)).await;
+        let res = self.client.inner().list_containers(Some(opts)).await;
 
         let container_list = res.map_err(Error::with_context("failed to list containers"))?;
 
         // find all
         Ok(container_list
             .into_iter()
-            .flat_map(|c| c.id.into_iter())
+            .flat_map(|c| c.names.into_iter().flatten())
+            .map(|n| n.trim_start_matches('/').to_string())
             .collect())
     }
 
     /// Returns low-level information about a container.
-    pub async fn inspect(&self, id: &str) -> Result<LocalContainer> {
+    pub async fn inspect(&self, id: &str) -> Result<LocalContainer<N>> {
         let container_info = self
-            .0
+            .client
             .inner()
             .inspect_container(id, None)
             .await
@@ -72,32 +97,39 @@ impl Container<'_> {
 
     /// Create the container with the passed options
     ///
-    /// Returns a reference to the container, either the newly created id or
-    /// the container name if the container already exists
-    pub async fn create(&self, name: &str, image: &str, config: ContainerConfig) -> Result<String> {
+    /// Returns the identifier (name) of the newly created container
+    pub async fn create(
+        &self,
+        service: &str,
+        namespace: impl Into<N>,
+        image: &str,
+        config: ContainerConfig,
+    ) -> Result<String> {
+        let id = namespace.into().to_identifier(service);
         let options = Some(CreateContainerOptions {
-            name: Some(name.to_owned()),
+            name: Some(id.clone()),
             platform: String::from(""),
         });
 
         let mut config: ContainerCreateBody = config.into();
         config.image = Some(image.to_string());
+
         // TODO: add networking and host config which should be passed as arguments to this
         // function
 
-        match self.0.inner().create_container(options, config).await {
-            Ok(c) => Ok(c.id),
+        match self.client.inner().create_container(options, config).await {
+            Ok(_) => Ok(id),
             // container already exists, ignore
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 409, ..
-            }) => Ok(name.to_owned()),
-            Err(e) => Err(Error::from(e).context(format!("failed to create container {name}"))),
+            }) => Ok(id),
+            Err(e) => Err(Error::from(e).context(format!("failed to create container {service}"))),
         }
     }
 
     /// Start the container with the given name
     pub async fn start(&self, name: &str) -> Result<()> {
-        match self.0.inner().start_container(name, None).await {
+        match self.client.inner().start_container(name, None).await {
             Ok(_) => Ok(()),
             // service already running, ignore
             Err(bollard::errors::Error::DockerResponseServerError {
@@ -109,7 +141,7 @@ impl Container<'_> {
 
     /// Stop the container with the given name
     pub async fn stop(&self, name: &str) -> Result<()> {
-        match self.0.inner().stop_container(name, None).await {
+        match self.client.inner().stop_container(name, None).await {
             Ok(_) => Ok(()),
             // service already stopped, ignore
             Err(bollard::errors::Error::DockerResponseServerError {
@@ -120,44 +152,41 @@ impl Container<'_> {
     }
 
     /// Rename the container with the given name
-    pub async fn rename(&self, old_name: &str, new_name: &str) -> Result<()> {
-        self.0
+    pub async fn rename(&self, id: &str, new_name: &str) -> Result<()> {
+        self.client
             .inner()
             .rename_container(
-                old_name,
+                id,
                 RenameContainerOptions {
                     name: new_name.to_owned(),
                 },
             )
             .await
             .map_err(Error::from)
-            .with_context(|| format!("failed to rename container {old_name}"))?;
+            .with_context(|| format!("failed to rename container {id}"))?;
 
         Ok(())
     }
 
-    /// Create a temporary container from the given image
-    ///
-    /// This is only meant to get access to the container files and not to be started
-    pub async fn create_tmp(&self, name: &str, image: &ImageUri) -> Result<String> {
-        self.create(
-            name,
-            image,
-            ContainerConfig {
-                cmd: Some(vec!["/bin/false".to_string()]),
-                ..Default::default()
-            },
-        )
-        .await
+    /// Migrate a container to a new namespace
+    pub async fn migrate(
+        &self,
+        id: &str,
+        service: &str,
+        namespace: impl Into<N>,
+    ) -> Result<String> {
+        let new_name = namespace.into().to_identifier(service);
+        self.rename(id, &new_name).await?;
+        Ok(new_name)
     }
 
     /// Remove a stopped container
-    pub async fn remove(&self, container_name: &str) -> Result<()> {
+    pub async fn remove(&self, id: &str) -> Result<()> {
         match self
-            .0
+            .client
             .inner()
             .remove_container(
-                container_name,
+                id,
                 Some(RemoveContainerOptions {
                     v: true,
                     ..Default::default()
@@ -169,16 +198,14 @@ impl Container<'_> {
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
             }) => Ok(()),
-            Err(e) => {
-                Err(Error::from(e).context(format!("failed to remove container {container_name}")))
-            }
+            Err(e) => Err(Error::from(e).context(format!("failed to remove container {id}"))),
         }
     }
 
     /// Reads a container directory contents into an array of bytes using tar representation
-    pub async fn read_from(&self, container_name: &str, container_path: &str) -> Result<Vec<u8>> {
-        let mut stream = self.0.inner().download_from_container(
-            container_name,
+    pub async fn read_from(&self, id: &str, container_path: &str) -> Result<Vec<u8>> {
+        let mut stream = self.client.inner().download_from_container(
+            id,
             Some(DownloadFromContainerOptions {
                 path: container_path.to_owned(),
             }),
@@ -190,7 +217,7 @@ impl Container<'_> {
                 Ok(chunk) => archive.extend_from_slice(&chunk),
                 Err(e) => {
                     return Err(Error::from(e).context(format!(
-                        "failed to read {container_path} from container {container_name}"
+                        "failed to read {container_path} from container {id}"
                     )));
                 }
             }
@@ -201,18 +228,17 @@ impl Container<'_> {
 }
 
 // by ref in order to clone only what's necessary to build LocalImage.
-impl TryFrom<ContainerInspectResponse> for LocalContainer {
+impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
     type Error = Error;
 
     fn try_from(value: ContainerInspectResponse) -> Result<Self> {
-        let id = value.id.ok_or("container ID should not be nil")?;
-        let image_id = value.image.ok_or("container image ID should not be nil")?;
+        let image = value.image.ok_or("container image ID should not be nil")?;
         let name = value
             .name
             .ok_or("container name should not be nil")?
             .trim_start_matches('/')
             .to_owned();
-        let config = value.config.map(|c| c.into()).unwrap_or_default();
+        let config: ContainerConfig = value.config.map(|c| c.into()).unwrap_or_default();
 
         let created: DateTime = value
             .created
@@ -240,11 +266,11 @@ impl TryFrom<ContainerInspectResponse> for LocalContainer {
         };
 
         Ok(Self {
-            id,
             name,
-            image_id,
+            image,
             config,
             state,
+            __: std::marker::PhantomData::<N>,
         })
     }
 }
@@ -326,19 +352,25 @@ impl From<ContainerConfig> for ContainerCreateBody {
 }
 
 #[derive(Debug, Clone)]
-pub struct LocalContainer {
-    /// The engine id of the container
-    pub id: String,
-
+pub struct LocalContainer<N = LocalNamespace> {
     /// The name of the container
     pub name: String,
 
     /// The content-addressable image id
-    pub image_id: String,
+    pub image: String,
 
     /// User-defined portable configuration
     pub config: ContainerConfig,
 
     /// The container runtime state
     pub state: ContainerState,
+
+    __: std::marker::PhantomData<N>,
+}
+
+impl<N: Namespace> LocalContainer<N> {
+    /// Get the namepace from the local container metadata
+    pub fn namespace(&self, service: &str) -> Option<N> {
+        N::from_identifier(&self.name, service)
+    }
 }

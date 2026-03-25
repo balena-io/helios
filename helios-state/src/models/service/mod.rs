@@ -151,8 +151,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
     }
 }
 
-impl From<LocalContainer> for Service {
-    fn from(mut container: LocalContainer) -> Self {
+impl<N> From<LocalContainer<N>> for Service {
+    fn from(mut container: LocalContainer<N>) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
@@ -162,9 +162,9 @@ impl From<LocalContainer> for Service {
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
-        let image = ImageRef::Id(container.image_id.clone());
+        let image = ImageRef::Id(container.image.clone());
         let container_summary =
-            ServiceContainerSummary::from((container.id.as_str(), container.state.clone()));
+            ServiceContainerSummary::from((container.name.as_str(), container.state.clone()));
 
         // the service is considered started after the engine policy takes over
         // for now this just means that the container status is different than `Created`

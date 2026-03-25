@@ -545,11 +545,10 @@ fn install_service_when_requirements_are_met(
 fn install_service(
     mut svc: View<Service>,
     Target(tgt): Target<Service>,
-    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
-    debug_assert!(tgt.container_name.is_some());
     enforce!(svc.container.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
@@ -563,19 +562,16 @@ fn install_service(
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
-        let container_name = svc
-            .container_name
-            .take()
-            .expect("container name should be available");
-
         svc.installing = true;
         let _ = svc.flush().await;
 
         let container_config =
             std::mem::take(&mut svc.config).into_container_config(svc.id, &svc_name, &app_uuid);
+
+        // create the container namespaced by release uuid
         let container_id = docker
             .container()
-            .create(&container_name, &svc.image, container_config)
+            .create(&svc_name, rel_uuid.as_str(), &svc.image, container_config)
             .await?;
 
         // check that the container was created and generate the Service configuration
@@ -591,7 +587,7 @@ fn install_service(
         // store the image uri that corresponds to the current release service
         local_store
             .put(
-                format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
+                format!("apps/{app_uuid}/releases/{rel_uuid}/services/{svc_name}/image"),
                 &svc.image,
             )
             .await?;
@@ -672,7 +668,7 @@ fn start_service(
             .context("failed to inspect container for service")?;
 
         svc.container.replace(ServiceContainerSummary::from((
-            local_container.id.as_ref(),
+            local_container.name.as_ref(),
             local_container.state,
         )));
 
@@ -784,7 +780,7 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .context("failed to inspect container for service")?;
 
         svc.container.replace(ServiceContainerSummary::from((
-            local_container.id.as_ref(),
+            local_container.name.as_ref(),
             local_container.state,
         )));
 
