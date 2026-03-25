@@ -19,12 +19,12 @@ pub use datetime::DateTime;
 
 mod network;
 pub use network::{
-    LocalNetwork, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
-    NetworkIpamDriver, NetworkIpamPoolConfig,
+    LocalNetwork, Network, NetworkConfig, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver,
+    NetworkIpamPoolConfig,
 };
 
 mod volume;
-pub use volume::{LocalVolume, VolumeClient, VolumeConfig, VolumeDriver};
+pub use volume::{LocalVolume, Volume, VolumeConfig, VolumeDriver};
 
 use helios_util as util;
 
@@ -43,17 +43,35 @@ impl Client {
             .await
             .map_err(Error::with_context("failed to connect to daemon"))?;
 
-        // TODO: determine which engine it is
-        // let version_info = inner
-        //     .version()
-        //     .await
-        //     .map_err(Error::with_context("failed to fetch version info"))?;
-
         Ok(Self(inner))
     }
 
     fn inner(&self) -> &Docker {
         &self.0
+    }
+
+    /// Returns version information about the connected daemon.
+    ///
+    /// The returned components can be used to identify the engine type (e.g. "Podman Engine")
+    /// and its version.
+    pub async fn version(&self) -> Result<Version> {
+        let version = self
+            .0
+            .version()
+            .await
+            .map_err(Error::with_context("failed to get server version"))?;
+
+        let components = version
+            .components
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| Component {
+                name: c.name,
+                version: c.version,
+            })
+            .collect();
+
+        Ok(Version { components })
     }
 
     /// Exposes methods to work with images.
@@ -70,33 +88,46 @@ impl Client {
 
     /// Exposes methods to work with networks
     #[inline]
-    pub fn network(&self) -> NetworkClient<'_> {
-        NetworkClient::new(self)
+    pub fn network(&self) -> Network<'_> {
+        Network::new(self)
     }
 
     /// Exposes methods to work with volumes
     #[inline]
-    pub fn volume(&self) -> VolumeClient<'_> {
-        VolumeClient::new(self)
+    pub fn volume(&self) -> Volume<'_> {
+        Volume::new(self)
     }
+}
+
+/// Version information about the connected daemon.
+#[derive(Debug, Clone)]
+pub struct Version {
+    pub components: Vec<Component>,
+}
+
+/// A component reported by the daemon's version endpoint.
+#[derive(Debug, Clone)]
+pub struct Component {
+    pub name: String,
+    pub version: String,
 }
 
 #[doc(hidden)]
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
-enum ClientError {
+pub enum ErrorKind {
     #[error(transparent)]
     Connection(#[from] ConnectionError),
 
     #[error(transparent)]
-    Unexpected(#[from] BoxError),
+    Other(#[from] BoxError),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
     context: Option<String>,
-    source: ClientError,
+    source: ErrorKind,
 }
 
 impl fmt::Display for Error {
@@ -113,14 +144,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     #[inline]
-    fn new(source: ClientError, context: Option<String>) -> Self {
+    fn new(source: ErrorKind, context: Option<String>) -> Self {
         Self { source, context }
     }
 
-    /// Create an ClientError::Unexpected from an input error
-    pub(crate) fn unexpected<E: Into<BoxError>>(error: E) -> Self {
+    /// Create an ClientError::Other from an input error
+    pub fn other<E: Into<BoxError>>(error: E) -> Self {
         Self {
-            source: ClientError::Unexpected(error.into()),
+            source: ErrorKind::Other(error.into()),
             context: None,
         }
     }
@@ -139,6 +170,11 @@ impl Error {
     pub fn context(mut self, msg: String) -> Self {
         self.context = Some(msg);
         self
+    }
+
+    /// Returns the error kind
+    pub fn kind(&self) -> &ErrorKind {
+        &self.source
     }
 }
 
@@ -159,21 +195,21 @@ impl From<BoxError> for Error {
 impl From<&str> for Error {
     #[inline]
     fn from(value: &str) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 
 impl From<String> for Error {
     #[inline]
     fn from(value: String) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 
 impl From<chrono::ParseError> for Error {
     #[inline]
     fn from(value: chrono::ParseError) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 

@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use bollard::models::{Volume, VolumeCreateRequest};
+use bollard::models::VolumeCreateRequest;
 use bollard::query_parameters::ListVolumesOptions;
 use serde::{Deserialize, Serialize};
 
 use super::{Client, Error, Result, WithContext};
 
 #[derive(Debug, Clone)]
-pub struct VolumeClient<'a>(&'a Client);
+pub struct Volume<'a>(&'a Client);
 
-impl<'a> VolumeClient<'a> {
+impl<'a> Volume<'a> {
     pub fn new(client: &'a Client) -> Self {
         Self(client)
     }
 }
 
-impl VolumeClient<'_> {
+impl Volume<'_> {
     /// Create a volume with the given name and configuration
     pub async fn create(&self, name: &str, config: VolumeConfig) -> Result<()> {
         let mut request: VolumeCreateRequest = config.into();
@@ -130,8 +130,8 @@ pub struct LocalVolume {
     pub labels: HashMap<String, String>,
 }
 
-impl From<Volume> for LocalVolume {
-    fn from(value: Volume) -> Self {
+impl From<bollard::models::Volume> for LocalVolume {
+    fn from(value: bollard::models::Volume) -> Self {
         LocalVolume {
             name: value.name,
             driver: VolumeDriver::from(value.driver),

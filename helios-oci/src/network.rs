@@ -8,15 +8,15 @@ use serde::{Deserialize, Serialize};
 use super::{Client, Error, Result, WithContext};
 
 #[derive(Debug, Clone)]
-pub struct NetworkClient<'a>(&'a Client);
+pub struct Network<'a>(&'a Client);
 
-impl<'a> NetworkClient<'a> {
+impl<'a> Network<'a> {
     pub fn new(client: &'a Client) -> Self {
         Self(client)
     }
 }
 
-impl NetworkClient<'_> {
+impl Network<'_> {
     /// Create a network with the given name and configuration
     pub async fn create(&self, name: &str, config: NetworkConfig) -> Result<()> {
         let mut request: NetworkCreateRequest = config.into();
