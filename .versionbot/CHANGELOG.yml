@@ -1,4 +1,19 @@
 - commits:
+    - subject: Report progress on every stream event
+      hash: ee42702d0ae9385a594611e2a16ef2f5c9346c45
+      body: |
+        This is a bug leftover from a previous implementation. Progress was
+        being reported only on a bucket change, but flush was called for every
+        event.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.1
+  title: ""
+  date: 2026-03-26T18:22:56.617Z
+- commits:
     - subject: Normalize naming of OCI related model properties
       hash: e2dbe5a86236ee0cebf4b5d495f02653da9a76fd
       body: |
