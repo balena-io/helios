@@ -1,4 +1,89 @@
 - commits:
+    - subject: Normalize naming of OCI related model properties
+      hash: e2dbe5a86236ee0cebf4b5d495f02653da9a76fd
+      body: |
+        - `Image::engine_id` is now `Image::oci_id`
+        - `Network::network_name` is now `Network::oci_name`
+        - `Volume::volume_name` is now `Volume::oci_name`
+        - `Service::container` is now `Service::oci`
+
+        This also updates all tests to use the correct naming
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Look for the network/volume before create
+      hash: 3a9e20819a69b510e33df668090a59915b82eca7
+      body: |
+        The docker API doesn't mention a 409 if the network/volume already
+        exists so we do a safety check before creation to avoid duplicated
+        entities.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use helios-oci namepacing to create volumes
+      hash: ad46149959cade21fedbc4a632e245beb1ba2b63
+      body: |
+        This removes the `io.balena.app-uuid` label from volumes and uses the
+        helios-oci LocalNamespace in the same way as containers and networks
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use helios-oci namespace to create networks
+      hash: cd6d7aa934505a1fcb0eb6fd2c3332771ebd74dd
+      body: |
+        This removes `io.balena.app-uuid` from network labels, replacing it with
+        a `io.balena.network-name` in order to use namespacing the same way we
+        do for containers.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove container_name from Service model
+      hash: 0dbba97b557f26e1783a4bf2b6818f85cc9e2da6
+      body: |
+        The value is replaced by `Service::container::name`. The container name
+        is no longer part of the target state as now service migration will also
+        rename the container. This also removes ServiceContainer::id as the
+        `name` is now the id.
+
+        This simplifies the service model
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add namespacing to helios-oci containers
+      hash: a76a3e139dfd6739ee9e2975cf39043ef290f68d
+      body: |
+        Entities can now be namespaced (starting with containers). The namespace
+        is used to construct the container identifier. Containers are now
+        identified by their name, removing any use of OCI container ids from the
+        crate code
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor helios-oci naming
+      hash: abcdee1a99daa10fba902c9581a88cb587a85efd
+      body: |
+        More consistent naming and adds a `version()` function to `Client`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.0
+  title: ""
+  date: 2026-03-26T17:50:36.712Z
+- commits:
     - subject: Update to mahler v0.25.9 to use the new View::commit feature
       hash: c984267a385b04c5cd90f7d9bb3e540b8661bb19
       body: |
