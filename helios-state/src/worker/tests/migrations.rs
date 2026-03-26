@@ -19,7 +19,7 @@ fn it_finds_a_workflow_for_migrating_networks() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -82,7 +82,7 @@ fn it_finds_a_workflow_for_migrating_volumes() {
                             "services": {},
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
+                                    "oci_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -149,7 +149,7 @@ fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -159,7 +159,7 @@ fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
                             },
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
+                                    "oci_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -242,13 +242,13 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                                     // same digest as target, different URI name
                                     "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                                     "started": true,
-                                    "container": running_container("old-release_my-svc"),
+                                    "oci": running_container("old-release_my-svc"),
                                     "config": {},
                                 },
                             },
                             "networks": {
                                 "my-net": {
-                                    "network_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-app-uuid_my-net",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -258,7 +258,7 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                             },
                             "volumes": {
                                 "my-vol": {
-                                    "volume_name": "my-app-uuid_my-vol",
+                                    "oci_name": "my-app-uuid_my-vol",
                                     "config": {
                                         "driver_opts": {
                                             "type": "nfs",
@@ -276,7 +276,7 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                 "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
                     "config": {},
                     "download_progress": 100,
-                    "engine_id": "111"
+                    "oci_id": "111"
                 },
             },
         }),
@@ -367,13 +367,13 @@ fn it_finds_a_workflow_for_migrating_and_recreating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "same-net": {
-                                    "network_name": "my-app-uuid_same-net",
+                                    "oci_name": "my-app-uuid_same-net",
                                     "config": {
                                         "driver_opts": { "foo": "bar" },
                                     },
                                 },
                                 "changed-net": {
-                                    "network_name": "my-app-uuid_changed-net",
+                                    "oci_name": "my-app-uuid_changed-net",
                                     "config": {
                                         "enable_ipv6": false,
                                     },
@@ -381,13 +381,13 @@ fn it_finds_a_workflow_for_migrating_and_recreating_networks_and_volumes() {
                             },
                             "volumes": {
                                 "same-vol": {
-                                    "volume_name": "my-app-uuid_same-vol",
+                                    "oci_name": "my-app-uuid_same-vol",
                                     "config": {
                                         "driver_opts": { "type": "nfs" },
                                     },
                                 },
                                 "changed-vol": {
-                                    "volume_name": "my-app-uuid_changed-vol",
+                                    "oci_name": "my-app-uuid_changed-vol",
                                     "config": {
                                         "driver_opts": { "type": "local" },
                                     },

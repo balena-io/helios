@@ -15,7 +15,7 @@ const LABEL_IPAM_OPTS: &str = "io.balena.private.ipam.options";
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     #[serde(default)]
-    pub network_name: String,
+    pub oci_name: String,
     #[serde(default)]
     pub config: NetworkConfig,
 }
@@ -155,7 +155,7 @@ impl<N> From<LocalNetwork<N>> for Network {
         };
 
         Network {
-            network_name,
+            oci_name: network_name,
             config: NetworkConfig(oci::NetworkConfig {
                 driver: net.driver,
                 driver_opts,
@@ -485,7 +485,7 @@ mod tests {
         let network: Network = local.into();
 
         // network_name comes from LocalNetwork.name
-        assert_eq!(network.network_name, "app1_my-net");
+        assert_eq!(network.oci_name, "app1_my-net");
 
         // Injected labels are stripped
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));

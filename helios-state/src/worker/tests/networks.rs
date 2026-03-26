@@ -165,7 +165,7 @@ fn it_finds_a_workflow_for_updating_networks() {
                             "services": {},
                             "networks": {
                                 "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "bridge",
                                         "enable_ipv6": false,

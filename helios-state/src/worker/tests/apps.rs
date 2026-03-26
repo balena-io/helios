@@ -107,14 +107,14 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
                                     "image": "ubuntu:latest",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("my-release-uuid_service1"),
+                                    "oci": running_container("my-release-uuid_service1"),
                                 },
                                  "service2": {
                                     "id": 2,
                                     "image": "alpine:latest",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("my-release-uuid_service2"),
+                                    "oci": running_container("my-release-uuid_service2"),
                                 }
                             }
                         }
@@ -123,11 +123,11 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
             },
             "images": {
                 "ubuntu:latest": {
-                    "engine_id": "aaa",
+                    "oci_id": "aaa",
                     "download_progress": 100,
                 },
                 "alpine:latest": {
-                    "engine_id": "bbb",
+                    "oci_id": "bbb",
                     "download_progress": 100
                 }
             }

@@ -76,7 +76,7 @@ pub struct Service {
 
     /// Service container state
     #[mahler(internal)]
-    pub container: Option<Container>,
+    pub oci: Option<Container>,
 
     /// Flag to indicate that the service container is being
     /// created
@@ -166,7 +166,7 @@ impl<N> From<LocalContainer<N>> for Service {
 
         Self {
             id,
-            container: Some(container_summary),
+            oci: Some(container_summary),
             image,
             installing: false,
             started,

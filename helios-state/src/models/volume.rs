@@ -10,7 +10,7 @@ use crate::remote_model::Volume as RemoteVolume;
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Volume {
     #[serde(default)]
-    pub volume_name: String,
+    pub oci_name: String,
     #[serde(default)]
     pub config: VolumeConfig,
 }
@@ -76,7 +76,7 @@ impl<N> From<LocalVolume<N>> for Volume {
         labels.remove(LABEL_VOLUME_NAME);
 
         Volume {
-            volume_name,
+            oci_name: volume_name,
             config: VolumeConfig(oci::VolumeConfig {
                 driver: vol.driver,
                 driver_opts: vol.driver_opts,
@@ -201,7 +201,7 @@ mod tests {
 
         let volume: Volume = local.into();
 
-        assert_eq!(volume.volume_name, "app1_my-vol");
+        assert_eq!(volume.oci_name, "app1_my-vol");
         assert!(!volume.config.labels.contains_key(LABEL_SUPERVISED));
         assert_eq!(
             volume.config.labels.get("com.example.label"),

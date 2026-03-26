@@ -79,7 +79,7 @@ impl From<ImageUri> for ImageRef {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Image {
     /// Container engine id
-    pub engine_id: Option<String>,
+    pub oci_id: Option<String>,
 
     /// Image pull progress
     pub download_progress: u8,
@@ -92,7 +92,7 @@ pub struct Image {
 impl From<LocalImage> for Image {
     fn from(img: LocalImage) -> Self {
         Self {
-            engine_id: Some(img.id),
+            oci_id: Some(img.id),
             config: img.config,
             download_progress: 100,
         }

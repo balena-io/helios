@@ -118,7 +118,7 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
                                     "id": 1,
                                     "image": "ubuntu:latest",
                                     "started": true,
-                                    "container": running_container("old_container"),
+                                    "oci": running_container("old_container"),
                                     "config": {
                                         "command": ["sleep", "infinity"]
                                     },
@@ -130,7 +130,7 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
             },
             "images": {
                 "ubuntu:latest" : {
-                    "engine_id": "abcde",
+                    "oci_id": "abcde",
                     "download_progress": 100,
                 }
             }
@@ -192,14 +192,14 @@ fn it_finds_a_workflow_to_uninstall_service() {
                                     "id": 1,
                                     "image": "ubuntu:latest",
                                     "started": true,
-                                    "container": running_container("my-release-uuid_service1"),
+                                    "oci": running_container("my-release-uuid_service1"),
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
                                     "started": true,
-                                    "container": running_container("my-release-uuid_service2"),
+                                    "oci": running_container("my-release-uuid_service2"),
                                     "config": {},
                                 },
                             }
@@ -209,7 +209,7 @@ fn it_finds_a_workflow_to_uninstall_service() {
             },
             "images": {
                 "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080" : {
-                    "engine_id": "abcde",
+                    "oci_id": "abcde",
                     "download_progress": 100,
                 }
             }
@@ -261,20 +261,20 @@ fn it_finds_a_workflow_to_remove_an_app() {
                                     "id": 1,
                                     "image": "ubuntu:latest",
                                     "started": true,
-                                    "container": running_container("my-release-uuid_service1"),
+                                    "oci": running_container("my-release-uuid_service1"),
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
                                     "started": true,
-                                    "container": running_container("my-release-uuid_service2"),
+                                    "oci": running_container("my-release-uuid_service2"),
                                     "config": {},
                                 },
                             },
                             "networks": {
                                 "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},
@@ -295,11 +295,11 @@ fn it_finds_a_workflow_to_remove_an_app() {
             },
             "images": {
                 "ubuntu:latest": {
-                    "engine_id": "dfe123",
+                    "oci_id": "dfe123",
                     "download_progress": 100,
                 },
                 "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080" : {
-                    "engine_id": "abcde",
+                    "oci_id": "abcde",
                     "download_progress": 100,
                 }
             }
@@ -343,13 +343,13 @@ fn it_finds_a_workflow_to_update_services_image_metadata() {
                                     "id": 1,
                                     "image": "sha256:deadbeef",
                                     "started": true,
-                                    "container": running_container("my-release-uuid_one"),
+                                    "oci": running_container("my-release-uuid_one"),
                                     "config": {},
                                 },
                                 "two": {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:b111111111111111111111111111111111111111111111111111111111111111",
-                                    "container": running_container("my-release-uuid_two"),
+                                    "oci": running_container("my-release-uuid_two"),
                                     "started": true,
                                     "config": {},
                                 },
@@ -416,7 +416,7 @@ fn it_finds_a_workflow_for_updating_services() {
                                     "id": 1,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                                     "started": true,
-                                    "container": running_container("old-release_service1"),
+                                    "oci": running_container("old-release_service1"),
                                     "config": {},
                                 },
                                 // so is this service, however is not currently running
@@ -424,7 +424,7 @@ fn it_finds_a_workflow_for_updating_services() {
                                     "id": 2,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222",
                                     "started": true,
-                                    "container": stopped_container("old-release_service2"),
+                                    "oci": stopped_container("old-release_service2"),
                                     "config": {},
                                 },
                                 // this service should be migrated
@@ -432,7 +432,7 @@ fn it_finds_a_workflow_for_updating_services() {
                                     "id": 3,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc2@sha256:a333333333333333333333333333333333333333333333333333333333333333",
                                     "started": true,
-                                    "container": running_container("old-release_service3"),
+                                    "oci": running_container("old-release_service3"),
                                     "config": {},
                                 },
                                 // this service is being removed
@@ -440,7 +440,7 @@ fn it_finds_a_workflow_for_updating_services() {
                                     "id": 3,
                                     "image": "registry2.balena-cloud.com/v2/oldsvc4@sha256:a444444444444444444444444444444444444444444444444444444444444444",
                                     "started": true,
-                                    "container": running_container("old-release_service4a"),
+                                    "oci": running_container("old-release_service4a"),
                                     "config": {},
                                 },
 
@@ -453,17 +453,17 @@ fn it_finds_a_workflow_for_updating_services() {
                 "registry2.balena-cloud.com/v2/oldsvc1@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
                     "config": {},
                     "download_progress": 100,
-                    "engine_id": "111"
+                    "oci_id": "111"
                 },
                 "registry2.balena-cloud.com/v2/oldsvc2@sha256:a222222222222222222222222222222222222222222222222222222222222222": {
                     "config": {},
                     "download_progress": 100,
-                    "engine_id": "222"
+                    "oci_id": "222"
                 },
                 "registry2.balena-cloud.com/v2/oldsvc3@sha256:a333333333333333333333333333333333333333333333333333333333333333": {
                     "config": {},
                     "download_progress": 100,
-                    "engine_id": "333"
+                    "oci_id": "333"
                 }
             },
         }),

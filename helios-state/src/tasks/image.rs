@@ -28,7 +28,7 @@ fn tag_image(
     // because the target is created at planning and is not updated at runtime
     // for this reason, we use the src_img_name if that's the case. It's also the
     // same reason why the image is inspected again at the end of the IO block
-    let image_ref = if let Some(id) = &src_img.engine_id {
+    let image_ref = if let Some(id) = &src_img.oci_id {
         id.clone()
     } else {
         src_img_name
@@ -67,7 +67,7 @@ pub(super) fn pull_image(
 
     // Initialize the image if it doesn't exist
     let image = image.create(Image {
-        engine_id: None,
+        oci_id: None,
         config: Default::default(),
         download_progress: 100,
     });

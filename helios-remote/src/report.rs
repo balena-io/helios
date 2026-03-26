@@ -200,7 +200,7 @@ impl From<LocalState> for DeviceReport {
                     // Get the status of the app as services based on
                     // whether the running release is the current release
                     let (service_status, download_progress) =
-                        match svc.container.as_ref().map(|c| &c.status) {
+                        match svc.oci.as_ref().map(|c| &c.status) {
                             // there is no container yet, the service is either
                             // downloading or installing depending on the download
                             // progress
@@ -416,14 +416,14 @@ mod tests {
             "uuid": "device-123",
             "images": {
                 "ubuntu": {
-                    "engine_id": "sha256:abc",
+                    "oci_id": "sha256:abc",
                     "download_progress": 100,
                 },
                 "alpine": {
                     "download_progress": 50,
                 },
                 "fedora": {
-                    "engine_id": "sha256:def",
+                    "oci_id": "sha256:def",
                     "download_progress": 100,
                 }
             },
@@ -437,7 +437,7 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "container": {
+                                    "oci": {
                                         "name": "new-release_one",
                                         "status": "created",
                                         "created": "2026-02-01T20:39:15+00:00"
@@ -544,7 +544,7 @@ mod tests {
                                 "svc-a": {
                                     "id": 1,
                                     "image": "img-a",
-                                    "container": {
+                                    "oci": {
                                         "name": "rel-1_svc-a",
                                         "status": "running",
                                         "created": "2026-02-01T20:39:15+00:00"
@@ -563,7 +563,7 @@ mod tests {
                                 "svc-b": {
                                     "id": 2,
                                     "image": "img-b",
-                                    "container": {
+                                    "oci": {
                                         "name": "rel-2_svc-b",
                                         "status": "running",
                                         "created": "2026-02-01T20:39:15+00:00"

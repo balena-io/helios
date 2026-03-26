@@ -165,7 +165,7 @@ fn it_finds_a_workflow_for_updating_volumes() {
                             "services": {},
                             "volumes": {
                                 "my-volume": {
-                                    "volume_name": "my-app-uuid_my-volume",
+                                    "oci_name": "my-app-uuid_my-volume",
                                     "config": {
                                         "driver": "local",
                                     },

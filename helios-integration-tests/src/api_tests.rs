@@ -145,7 +145,7 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-one"))
-        .and_then(|s| s.get("container"))
+        .and_then(|s| s.get("oci"))
         .and_then(|c| c.get("name"))
         .unwrap()
         .as_str()
@@ -156,7 +156,7 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-two"))
-        .and_then(|s| s.get("container"))
+        .and_then(|s| s.get("oci"))
         .and_then(|c| c.get("name"))
         .unwrap()
         .as_str()
@@ -167,8 +167,8 @@ async fn test_set_app_target_install_images() {
     let ubuntu_img = images.get("ubuntu:latest").unwrap();
     let alpine_img = images.get("alpine:latest").unwrap();
 
-    let ubuntu_img_id = ubuntu_img.get("engine_id").unwrap();
-    let alpine_img_id = alpine_img.get("engine_id").unwrap();
+    let ubuntu_img_id = ubuntu_img.get("oci_id").unwrap();
+    let alpine_img_id = alpine_img.get("oci_id").unwrap();
 
     let docker = Docker::connect_with_defaults().unwrap();
     let img = docker.inspect_image("ubuntu:latest").await.unwrap();
@@ -206,7 +206,7 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("networks"))
         .and_then(|s| s.get("my-net"))
-        .and_then(|s| s.get("network_name"))
+        .and_then(|s| s.get("oci_name"))
         .unwrap()
         .as_str()
         .unwrap();
@@ -225,7 +225,7 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("volumes"))
         .and_then(|s| s.get("my-vol"))
-        .and_then(|s| s.get("volume_name"))
+        .and_then(|s| s.get("oci_name"))
         .unwrap()
         .as_str()
         .unwrap();
