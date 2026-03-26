@@ -94,7 +94,8 @@ async fn test_set_app_target_install_images() {
                         "id": 1,
                         "image": "ubuntu:latest",
                         "composition": {
-                            "command": "sleep infinity"
+                            "command": "sleep infinity",
+                            "restart": "no",
                         }
                     },
                     "service-two": {
@@ -183,7 +184,15 @@ async fn test_set_app_target_install_images() {
         .await
         .unwrap();
     let config = container.config.unwrap();
+    let host_config = container.host_config.unwrap();
     assert_eq!(config.cmd.unwrap(), vec!["sleep", "infinity"]);
+    assert_eq!(
+        host_config.restart_policy.unwrap(),
+        bollard::config::RestartPolicy {
+            name: Some(bollard::config::RestartPolicyNameEnum::NO),
+            maximum_retry_count: Some(0)
+        }
+    );
     assert_eq!(
         config.labels.unwrap().get("io.balena.app-uuid").unwrap(),
         TEST_APP_UUID
@@ -195,7 +204,15 @@ async fn test_set_app_target_install_images() {
         .unwrap();
 
     let config = container.config.unwrap();
+    let host_config = container.host_config.unwrap();
     assert_eq!(config.cmd.unwrap(), vec!["sleep", "10"]);
+    assert_eq!(
+        host_config.restart_policy.unwrap(),
+        bollard::config::RestartPolicy {
+            name: Some(bollard::config::RestartPolicyNameEnum::ALWAYS),
+            maximum_retry_count: Some(0)
+        }
+    );
     let labels = config.labels.unwrap();
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");

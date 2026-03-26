@@ -4,7 +4,7 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::ContainerConfig;
+use crate::oci::{ContainerConfig, RestartPolicy};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
@@ -15,6 +15,9 @@ const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 pub struct ServiceConfig {
     /// Command to run specified as a list of strings.
     pub command: Option<List<String>>,
+
+    /// Restart policy for the container.
+    pub restart_policy: RestartPolicy,
 
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "Map::is_empty")]
@@ -59,8 +62,12 @@ impl From<ContainerConfig> for ServiceConfig {
             None
         };
 
+        // Read the restart policy from the container host config
+        let restart_policy = config.restart_policy.unwrap_or_default();
+
         Self {
             command,
+            restart_policy,
             labels: labels.into_iter().collect(),
         }
     }
@@ -76,6 +83,7 @@ impl ServiceConfig {
     pub fn into_oci_config(self, svc_id: u32, svc_name: &str, app_uuid: &Uuid) -> ContainerConfig {
         let ServiceConfig {
             command,
+            restart_policy,
             mut labels,
             ..
         } = self;
@@ -122,6 +130,7 @@ impl ServiceConfig {
         ContainerConfig {
             cmd,
             labels: Some(labels.into_iter().collect()),
+            restart_policy: Some(restart_policy),
         }
     }
 }

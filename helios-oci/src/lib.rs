@@ -12,7 +12,9 @@ mod registry;
 pub use registry::RegistryAuth;
 
 mod container;
-pub use container::{Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer};
+pub use container::{
+    Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer, RestartPolicy,
+};
 
 mod datetime;
 pub use datetime::DateTime;

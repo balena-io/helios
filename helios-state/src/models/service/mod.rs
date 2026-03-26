@@ -2,8 +2,8 @@ use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use crate::oci::{self, DateTime, LocalContainer};
-use crate::remote_model::Service as RemoteServiceTarget;
+use crate::oci::{self, DateTime, LocalContainer, RestartPolicy};
+use crate::remote_model::{RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget};
 
 use super::image::ImageRef;
 
@@ -134,11 +134,25 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         // convert the composition command to a List
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
 
+        // convert the restart policy
+        let restart_policy = match composition.restart {
+            RemoteRestartPolicy::No => RestartPolicy::No,
+            RemoteRestartPolicy::Always => RestartPolicy::Always,
+            RemoteRestartPolicy::OnFailure { max_retries } => {
+                RestartPolicy::OnFailure { max_retries }
+            }
+            RemoteRestartPolicy::UnlessStopped => RestartPolicy::UnlessStopped,
+        };
+
         ServiceTarget {
             id,
             image: image.into(),
             started: true,
-            config: ServiceConfig { command, labels },
+            config: ServiceConfig {
+                command,
+                labels,
+                restart_policy,
+            },
         }
     }
 }
