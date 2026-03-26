@@ -3,8 +3,7 @@ use std::ops::{Deref, DerefMut};
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::common_types::Uuid;
-use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
+use crate::labels::{LABEL_NETWORK_NAME, LABEL_SUPERVISED};
 use crate::oci::{
     self, LocalNetwork, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver, NetworkIpamPoolConfig,
 };
@@ -16,13 +15,26 @@ const LABEL_IPAM_OPTS: &str = "io.balena.private.ipam.options";
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     #[serde(default)]
-    pub network_name: String,
+    pub oci_name: String,
+    #[serde(default)]
+    pub config: NetworkConfig,
+}
+
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NetworkTarget {
     #[serde(default)]
     pub config: NetworkConfig,
 }
 
 impl State for Network {
-    type Target = Self;
+    type Target = NetworkTarget;
+}
+
+impl From<Network> for NetworkTarget {
+    fn from(value: Network) -> Self {
+        let Network { config, .. } = value;
+        Self { config }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -87,18 +99,14 @@ impl From<RemoteNetwork> for NetworkConfig {
     }
 }
 
-impl From<RemoteNetwork> for Network {
+impl From<RemoteNetwork> for NetworkTarget {
     fn from(net: RemoteNetwork) -> Self {
-        Network {
-            // Filled in during normalization
-            network_name: String::new(),
-            config: net.into(),
-        }
+        Self { config: net.into() }
     }
 }
 
-impl From<LocalNetwork> for Network {
-    fn from(net: LocalNetwork) -> Self {
+impl<N> From<LocalNetwork<N>> for Network {
+    fn from(net: LocalNetwork<N>) -> Self {
         let network_name = net.name;
         let mut labels = net.labels;
         let mut driver_opts = net.driver_opts;
@@ -107,7 +115,7 @@ impl From<LocalNetwork> for Network {
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
-        labels.remove(LABEL_APP_UUID);
+        labels.remove(LABEL_NETWORK_NAME);
 
         // Always strip engine-injected driver_opts. These keys never appear
         // in the target state, so they should never appear in read-back.
@@ -147,7 +155,7 @@ impl From<LocalNetwork> for Network {
         };
 
         Network {
-            network_name,
+            oci_name: network_name,
             config: NetworkConfig(oci::NetworkConfig {
                 driver: net.driver,
                 driver_opts,
@@ -161,7 +169,7 @@ impl From<LocalNetwork> for Network {
 }
 
 impl NetworkConfig {
-    pub fn into_oci_config(self, app_uuid: &Uuid) -> oci::NetworkConfig {
+    pub fn into_oci_config(self, net_name: &str) -> oci::NetworkConfig {
         let mut inner = self.0;
 
         // Mark the network as supervised and add app metadata
@@ -170,7 +178,7 @@ impl NetworkConfig {
             .insert(LABEL_SUPERVISED.to_string(), "".to_string());
         inner
             .labels
-            .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+            .insert(LABEL_NETWORK_NAME.to_string(), net_name.to_string());
 
         // Serialize user-defined subnets into a label so engine-assigned pools
         // can be filtered out on read-back.
@@ -379,7 +387,7 @@ mod tests {
             },
         });
 
-        let oci_config: oci::NetworkConfig = config.into_oci_config(&Uuid::from("abc123"));
+        let oci_config: oci::NetworkConfig = config.into_oci_config("my-network");
 
         // Basic fields
         assert_eq!(oci_config.driver.to_string(), "overlay");
@@ -397,8 +405,8 @@ mod tests {
         );
         // Labels: app-uuid passes through
         assert_eq!(
-            oci_config.labels.get("io.balena.app-uuid"),
-            Some(&"abc123".to_string())
+            oci_config.labels.get(LABEL_NETWORK_NAME),
+            Some(&"my-network".to_string())
         );
         // Labels: supervised label is injected
         assert_eq!(
@@ -437,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_from_local_network_strips_injected_labels() {
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_my-net".to_string(),
             driver: NetworkDriver::from("overlay".to_string()),
             driver_opts: [("mtu".to_string(), "1450".to_string())]
@@ -471,12 +479,13 @@ mod tests {
                     .into_iter()
                     .collect(),
             },
+            ..Default::default()
         };
 
         let network: Network = local.into();
 
         // network_name comes from LocalNetwork.name
-        assert_eq!(network.network_name, "app1_my-net");
+        assert_eq!(network.oci_name, "app1_my-net");
 
         // Injected labels are stripped
         assert!(!network.config.labels.contains_key(LABEL_SUPERVISED));
@@ -511,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_from_local_network_discards_engine_assigned_ipam() {
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_default".to_string(),
             labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
                 .into_iter()
@@ -539,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_from_local_network_discards_engine_injected_enable_ipv4() {
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_default".to_string(),
             labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
                 .into_iter()
@@ -562,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_from_local_network_preserves_driver_opts_and_filters_engine_enable_ipv4() {
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_my-net".to_string(),
             labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
                 .into_iter()
@@ -626,7 +635,7 @@ mod tests {
     fn test_from_local_network_ipv4_only_strips_engine_ipv6() {
         // User defines IPv4 IPAM, engine appends an IPv6 pool.
         // Only the IPv4 subnet is in the label → IPv6 pool is stripped.
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
@@ -670,7 +679,7 @@ mod tests {
     #[test]
     fn test_from_local_network_both_families_keeps_all() {
         // User defines both IPv4 and IPv6 IPAM -> both subnets in label -> both kept
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
@@ -719,7 +728,7 @@ mod tests {
     fn test_from_local_network_ipv6_only_strips_engine_ipv4() {
         // User defines IPv6 IPAM only, engine prepends an IPv4 pool.
         // Only the IPv6 subnet is in the label → IPv4 pool is stripped.
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_net".to_string(),
             enable_ipv6: true,
             labels: [
@@ -763,7 +772,7 @@ mod tests {
     #[test]
     fn test_from_local_network_no_ipam_labels_discards_all_pools() {
         // No user IPAM -> no labels -> all pool families discarded
-        let local = LocalNetwork {
+        let local: LocalNetwork = LocalNetwork {
             name: "app1_net".to_string(),
             labels: [(LABEL_SUPERVISED.to_string(), "".to_string())]
                 .into_iter()

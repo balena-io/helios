@@ -6,8 +6,7 @@ use tokio::sync::watch::Receiver;
 use tracing::{error, info, instrument, trace};
 
 use crate::state::{
-    LocalState, UpdateStatus as LocalUpdateStatus,
-    models::ServiceContainerStatus as LocalServiceStatus,
+    LocalState, UpdateStatus as LocalUpdateStatus, models::ContainerStatus as LocalServiceStatus,
 };
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
@@ -201,7 +200,7 @@ impl From<LocalState> for DeviceReport {
                     // Get the status of the app as services based on
                     // whether the running release is the current release
                     let (service_status, download_progress) =
-                        match svc.container.as_ref().map(|c| &c.status) {
+                        match svc.oci.as_ref().map(|c| &c.status) {
                             // there is no container yet, the service is either
                             // downloading or installing depending on the download
                             // progress
@@ -417,14 +416,14 @@ mod tests {
             "uuid": "device-123",
             "images": {
                 "ubuntu": {
-                    "engine_id": "sha256:abc",
+                    "oci_id": "sha256:abc",
                     "download_progress": 100,
                 },
                 "alpine": {
                     "download_progress": 50,
                 },
                 "fedora": {
-                    "engine_id": "sha256:def",
+                    "oci_id": "sha256:def",
                     "download_progress": 100,
                 }
             },
@@ -438,9 +437,8 @@ mod tests {
                                 "one": {
                                     "id": 1,
                                     "image": "ubuntu",
-                                    "container_name": "new-release_one",
-                                    "container": {
-                                        "id": "abc",
+                                    "oci": {
+                                        "name": "new-release_one",
                                         "status": "created",
                                         "created": "2026-02-01T20:39:15+00:00"
                                     },
@@ -448,20 +446,17 @@ mod tests {
                                 "two": {
                                     "id": 2,
                                     "image": "alpine",
-                                    "container_name": "new-release_two",
                                 },
                                 "three": {
                                     "id": 3,
                                     "image": "fedora",
                                     "installing": true,
-                                    "container_name": "new-release_three",
                                     "config": {},
                                 },
                                 // the image for this service does not exist yet
                                 "four": {
                                     "id": 4,
                                     "image": "debian",
-                                    "container_name": "new-release_four",
                                 }
                             }
                         }
@@ -549,9 +544,8 @@ mod tests {
                                 "svc-a": {
                                     "id": 1,
                                     "image": "img-a",
-                                    "container_name": "rel-1_svc-a",
-                                    "container": {
-                                        "id": "c1",
+                                    "oci": {
+                                        "name": "rel-1_svc-a",
                                         "status": "running",
                                         "created": "2026-02-01T20:39:15+00:00"
                                     },
@@ -569,9 +563,8 @@ mod tests {
                                 "svc-b": {
                                     "id": 2,
                                     "image": "img-b",
-                                    "container_name": "rel-2_svc-b",
-                                    "container": {
-                                        "id": "c2",
+                                    "oci": {
+                                        "name": "rel-2_svc-b",
                                         "status": "running",
                                         "created": "2026-02-01T20:39:15+00:00"
                                     },

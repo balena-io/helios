@@ -73,12 +73,7 @@ impl ServiceConfig {
     /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
     /// list of composition defined keys and labels. When reading the container state, these fields
     /// are used to determine if the specific field/label should be read back into the state.
-    pub fn into_container_config(
-        self,
-        svc_id: u32,
-        svc_name: &str,
-        app_uuid: &Uuid,
-    ) -> ContainerConfig {
+    pub fn into_oci_config(self, svc_id: u32, svc_name: &str, app_uuid: &Uuid) -> ContainerConfig {
         let ServiceConfig {
             command,
             mut labels,

@@ -102,8 +102,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 // Read the userapp info if it exists and the feature is enabled
                 #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
-                    let app = (&app_uuid, userapp).into();
-                    userapps.insert(app_uuid, app);
+                    userapps.insert(app_uuid, userapp.into());
                 }
                 #[cfg(not(feature = "userapps"))]
                 RemoteAppTarget::User(_) => {}
@@ -145,7 +144,7 @@ mod tests {
             },
             "images": {
                 "ubuntu": {
-                    "engine_id": "ccc",
+                    "oci_id": "ccc",
                     "download_progress": 100,
                 }
 

@@ -105,18 +105,16 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
-                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("badc41f"),
+                                    "oci": running_container("my-release-uuid_service1"),
                                 },
                                  "service2": {
                                     "id": 2,
                                     "image": "alpine:latest",
-                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "config": {},
-                                    "container": running_container("badbeef"),
+                                    "oci": running_container("my-release-uuid_service2"),
                                 }
                             }
                         }
@@ -125,11 +123,11 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
             },
             "images": {
                 "ubuntu:latest": {
-                    "engine_id": "aaa",
+                    "oci_id": "aaa",
                     "download_progress": 100,
                 },
                 "alpine:latest": {
-                    "engine_id": "bbb",
+                    "oci_id": "bbb",
                     "download_progress": 100
                 }
             }
@@ -148,14 +146,12 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
                                 "service1": {
                                     "id": 1,
                                     "image": "ubuntu:latest",
-                                    "container_name": "my-release-uuid_service1",
                                     "started": true,
                                     "config": {},
                                 },
                                 "service2": {
                                     "id": 2,
                                     "image": "alpine:latest",
-                                    "container_name": "my-release-uuid_service2",
                                     "started": true,
                                     "config": {},
                                 },

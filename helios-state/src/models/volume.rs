@@ -3,21 +3,33 @@ use std::ops::{Deref, DerefMut};
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::common_types::Uuid;
-use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED};
+use crate::labels::{LABEL_SUPERVISED, LABEL_VOLUME_NAME};
 use crate::oci::{self, LocalVolume, VolumeDriver};
 use crate::remote_model::Volume as RemoteVolume;
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Volume {
     #[serde(default)]
-    pub volume_name: String,
+    pub oci_name: String,
+    #[serde(default)]
+    pub config: VolumeConfig,
+}
+
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct VolumeTarget {
     #[serde(default)]
     pub config: VolumeConfig,
 }
 
 impl State for Volume {
-    type Target = Self;
+    type Target = VolumeTarget;
+}
+
+impl From<Volume> for VolumeTarget {
+    fn from(value: Volume) -> Self {
+        let Volume { config, .. } = value;
+        Self { config }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -47,28 +59,24 @@ impl From<RemoteVolume> for VolumeConfig {
     }
 }
 
-impl From<RemoteVolume> for Volume {
+impl From<RemoteVolume> for VolumeTarget {
     fn from(vol: RemoteVolume) -> Self {
-        Volume {
-            // Filled in during normalization
-            volume_name: String::new(),
-            config: vol.into(),
-        }
+        Self { config: vol.into() }
     }
 }
 
-impl From<LocalVolume> for Volume {
-    fn from(vol: LocalVolume) -> Self {
+impl<N> From<LocalVolume<N>> for Volume {
+    fn from(vol: LocalVolume<N>) -> Self {
         let volume_name = vol.name;
         let mut labels = vol.labels;
 
         // Remove labels injected during create that are not part of the
         // compose definition
         labels.remove(LABEL_SUPERVISED);
-        labels.remove(LABEL_APP_UUID);
+        labels.remove(LABEL_VOLUME_NAME);
 
         Volume {
-            volume_name,
+            oci_name: volume_name,
             config: VolumeConfig(oci::VolumeConfig {
                 driver: vol.driver,
                 driver_opts: vol.driver_opts,
@@ -79,7 +87,7 @@ impl From<LocalVolume> for Volume {
 }
 
 impl VolumeConfig {
-    pub fn into_oci_config(self, app_uuid: &Uuid) -> oci::VolumeConfig {
+    pub fn into_oci_config(self, vol_name: &str) -> oci::VolumeConfig {
         let mut inner = self.0;
 
         // Mark the volume as supervised
@@ -90,7 +98,7 @@ impl VolumeConfig {
         // Add app metadata
         inner
             .labels
-            .insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+            .insert(LABEL_VOLUME_NAME.to_string(), vol_name.to_string());
 
         inner
     }
@@ -156,7 +164,7 @@ mod tests {
                 .collect(),
         });
 
-        let oci_config: oci::VolumeConfig = config.into_oci_config(&Uuid::from("aaa123"));
+        let oci_config: oci::VolumeConfig = config.into_oci_config("my-vol");
 
         assert_eq!(oci_config.driver.to_string(), "local");
         assert_eq!(oci_config.driver_opts.get("o"), Some(&"bind".to_string()));
@@ -169,14 +177,14 @@ mod tests {
             Some(&"".to_string())
         );
         assert_eq!(
-            oci_config.labels.get("io.balena.app-uuid"),
-            Some(&"aaa123".to_string())
+            oci_config.labels.get(LABEL_VOLUME_NAME),
+            Some(&"my-vol".to_string())
         );
     }
 
     #[test]
     fn test_from_local_volume_strips_injected_labels() {
-        let local = LocalVolume {
+        let local: LocalVolume = LocalVolume {
             name: "app1_my-vol".to_string(),
             driver: VolumeDriver::from("local".to_string()),
             driver_opts: [("o".to_string(), "bind".to_string())]
@@ -188,11 +196,12 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            ..Default::default()
         };
 
         let volume: Volume = local.into();
 
-        assert_eq!(volume.volume_name, "app1_my-vol");
+        assert_eq!(volume.oci_name, "app1_my-vol");
         assert!(!volume.config.labels.contains_key(LABEL_SUPERVISED));
         assert_eq!(
             volume.config.labels.get("com.example.label"),

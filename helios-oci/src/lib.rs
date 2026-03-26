@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self};
 
 use bollard::Docker;
 
@@ -19,12 +19,12 @@ pub use datetime::DateTime;
 
 mod network;
 pub use network::{
-    LocalNetwork, NetworkClient, NetworkConfig, NetworkDriver, NetworkIpamConfig,
-    NetworkIpamDriver, NetworkIpamPoolConfig,
+    LocalNetwork, Network, NetworkConfig, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver,
+    NetworkIpamPoolConfig,
 };
 
 mod volume;
-pub use volume::{LocalVolume, VolumeClient, VolumeConfig, VolumeDriver};
+pub use volume::{LocalVolume, Volume, VolumeConfig, VolumeDriver};
 
 use helios_util as util;
 
@@ -43,17 +43,35 @@ impl Client {
             .await
             .map_err(Error::with_context("failed to connect to daemon"))?;
 
-        // TODO: determine which engine it is
-        // let version_info = inner
-        //     .version()
-        //     .await
-        //     .map_err(Error::with_context("failed to fetch version info"))?;
-
         Ok(Self(inner))
     }
 
     fn inner(&self) -> &Docker {
         &self.0
+    }
+
+    /// Returns version information about the connected daemon.
+    ///
+    /// The returned components can be used to identify the engine type (e.g. "Podman Engine")
+    /// and its version.
+    pub async fn version(&self) -> Result<Version> {
+        let version = self
+            .0
+            .version()
+            .await
+            .map_err(Error::with_context("failed to get server version"))?;
+
+        let components = version
+            .components
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| Component {
+                name: c.name,
+                version: c.version,
+            })
+            .collect();
+
+        Ok(Version { components })
     }
 
     /// Exposes methods to work with images.
@@ -62,41 +80,60 @@ impl Client {
         Image::new(self)
     }
 
+    /// Exposes methods to work with non-namespaced containers
+    #[inline]
+    pub fn non_namepaced_container(&self) -> Container<'_, NoNamespace> {
+        Container::new(self)
+    }
+
     /// Exposes methods to work with container
     #[inline]
-    pub fn container(&self) -> Container<'_> {
+    pub fn container(&self) -> Container<'_, LocalNamespace> {
         Container::new(self)
     }
 
     /// Exposes methods to work with networks
     #[inline]
-    pub fn network(&self) -> NetworkClient<'_> {
-        NetworkClient::new(self)
+    pub fn network(&self) -> Network<'_, LocalNamespace> {
+        Network::new(self)
     }
 
     /// Exposes methods to work with volumes
     #[inline]
-    pub fn volume(&self) -> VolumeClient<'_> {
-        VolumeClient::new(self)
+    pub fn volume(&self) -> Volume<'_, LocalNamespace> {
+        Volume::new(self)
     }
+}
+
+/// Version information about the connected daemon.
+#[derive(Debug, Clone)]
+pub struct Version {
+    pub components: Vec<Component>,
+}
+
+/// A component reported by the daemon's version endpoint.
+#[derive(Debug, Clone)]
+pub struct Component {
+    pub name: String,
+    pub version: String,
 }
 
 #[doc(hidden)]
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
-enum ClientError {
+pub enum ErrorKind {
     #[error(transparent)]
     Connection(#[from] ConnectionError),
 
     #[error(transparent)]
-    Unexpected(#[from] BoxError),
+    Other(#[from] BoxError),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
     context: Option<String>,
-    source: ClientError,
+    source: ErrorKind,
 }
 
 impl fmt::Display for Error {
@@ -113,14 +150,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     #[inline]
-    fn new(source: ClientError, context: Option<String>) -> Self {
+    fn new(source: ErrorKind, context: Option<String>) -> Self {
         Self { source, context }
     }
 
-    /// Create an ClientError::Unexpected from an input error
-    pub(crate) fn unexpected<E: Into<BoxError>>(error: E) -> Self {
+    /// Create an ClientError::Other from an input error
+    pub fn other<E: Into<BoxError>>(error: E) -> Self {
         Self {
-            source: ClientError::Unexpected(error.into()),
+            source: ErrorKind::Other(error.into()),
             context: None,
         }
     }
@@ -139,6 +176,22 @@ impl Error {
     pub fn context(mut self, msg: String) -> Self {
         self.context = Some(msg);
         self
+    }
+
+    /// Returns the error kind
+    pub fn kind(&self) -> &ErrorKind {
+        &self.source
+    }
+
+    /// Return true if the server returns a 404
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self.source,
+            ErrorKind::Connection(ConnectionError::DockerResponseServerError {
+                status_code: 404,
+                ..
+            })
+        )
     }
 }
 
@@ -159,21 +212,21 @@ impl From<BoxError> for Error {
 impl From<&str> for Error {
     #[inline]
     fn from(value: &str) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 
 impl From<String> for Error {
     #[inline]
     fn from(value: String) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 
 impl From<chrono::ParseError> for Error {
     #[inline]
     fn from(value: chrono::ParseError) -> Self {
-        Error::unexpected(value)
+        Error::other(value)
     }
 }
 
@@ -200,5 +253,71 @@ impl<T> WithContext<T> for Result<T> {
         F: FnOnce() -> String,
     {
         self.map_err(|err| err.context(f()))
+    }
+}
+
+pub trait Namespace: Sized {
+    /// Convert the given entity name to the namespaced identifier
+    fn to_identifier(&self, entity: &str) -> String;
+
+    /// Extract the namespace from the identifier and entity name
+    fn from_identifier(id: &str, entity: &str) -> Option<Self>;
+}
+
+pub struct NoNamespace;
+
+impl Namespace for NoNamespace {
+    fn to_identifier(&self, name: &str) -> String {
+        name.to_owned()
+    }
+
+    fn from_identifier(_: &str, _: &str) -> Option<Self> {
+        Some(NoNamespace)
+    }
+}
+
+impl From<()> for NoNamespace {
+    fn from(_: ()) -> Self {
+        NoNamespace
+    }
+}
+
+// The default namespace
+#[derive(Clone, Debug)]
+pub struct LocalNamespace(String);
+
+impl LocalNamespace {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Namespace for LocalNamespace {
+    fn to_identifier(&self, entity: &str) -> String {
+        format!("{entity}_{}", self.0)
+    }
+
+    fn from_identifier(id: &str, entity: &str) -> Option<Self> {
+        let namespace = id
+            .strip_prefix(&format!("{entity}_"))
+            // if the remainder has underscores, assume the last
+            // component to be the namespace
+            .and_then(|suffix| suffix.rsplit('_').next())
+            // ignore the value if empty
+            .filter(|part| !part.is_empty());
+
+        namespace.map(|n| Self(n.to_owned()))
+    }
+}
+
+impl From<String> for LocalNamespace {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for LocalNamespace {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }

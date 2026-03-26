@@ -30,8 +30,14 @@ impl From<Release> for ReleaseTarget {
                 .into_iter()
                 .map(|(svc_name, svc)| (svc_name, svc.into()))
                 .collect(),
-            networks: networks.into_iter().collect(),
-            volumes: volumes.into_iter().collect(),
+            networks: networks
+                .into_iter()
+                .map(|(net_name, net)| (net_name, net.into()))
+                .collect(),
+            volumes: volumes
+                .into_iter()
+                .map(|(vol_name, vol)| (vol_name, vol.into()))
+                .collect(),
         }
     }
 }

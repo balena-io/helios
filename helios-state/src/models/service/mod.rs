@@ -2,7 +2,7 @@ use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use crate::oci::{ContainerState, ContainerStatus, DateTime, LocalContainer};
+use crate::oci::{self, DateTime, LocalContainer};
 use crate::remote_model::Service as RemoteServiceTarget;
 
 use super::image::ImageRef;
@@ -14,7 +14,7 @@ pub use config::*;
 /// The container runtime status. This is a simplified state over what the container engine returns
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
-pub enum ServiceContainerStatus {
+pub enum ContainerStatus {
     #[default]
     Created,
     Running,
@@ -23,9 +23,9 @@ pub enum ServiceContainerStatus {
     Dead,
 }
 
-impl From<ContainerStatus> for ServiceContainerStatus {
-    fn from(value: ContainerStatus) -> Self {
-        use ContainerStatus::*;
+impl From<oci::ContainerStatus> for ContainerStatus {
+    fn from(value: oci::ContainerStatus) -> Self {
+        use oci::ContainerStatus::*;
         match value {
             Created => Self::Created,
             Running => Self::Running,
@@ -36,32 +36,32 @@ impl From<ContainerStatus> for ServiceContainerStatus {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct ServiceContainerSummary {
-    pub id: String,
+pub struct Container {
+    pub name: String,
     pub created: DateTime,
-    pub status: ServiceContainerStatus,
+    pub status: ContainerStatus,
 }
 
-impl ServiceContainerSummary {
+impl Container {
     /// A mock container summary to use as part of planning tasks
     pub fn mock() -> Self {
         Self {
-            id: String::default(),
+            name: String::default(),
             created: DateTime::default(),
-            status: ServiceContainerStatus::Created,
+            status: ContainerStatus::Created,
         }
     }
 }
 
-impl From<(&str, ContainerState)> for ServiceContainerSummary {
-    fn from((container_id, container_state): (&str, ContainerState)) -> Self {
-        let container_id = container_id.to_owned();
-        let ContainerState {
+impl From<(&str, oci::ContainerState)> for Container {
+    fn from((container_name, container_state): (&str, oci::ContainerState)) -> Self {
+        let container_id = container_name.to_owned();
+        let oci::ContainerState {
             status, created, ..
         } = container_state;
 
-        ServiceContainerSummary {
-            id: container_id,
+        Container {
+            name: container_id,
             status: status.into(),
             created,
         }
@@ -74,12 +74,9 @@ pub struct Service {
     /// Service ID on the remote backend
     pub id: u32,
 
-    /// Custom service container name
-    pub container_name: Option<String>,
-
     /// Service container state
     #[mahler(internal)]
-    pub container: Option<ServiceContainerSummary>,
+    pub oci: Option<Container>,
 
     /// Flag to indicate that the service container is being
     /// created
@@ -106,7 +103,6 @@ impl From<Service> for ServiceTarget {
     fn from(svc: Service) -> Self {
         let Service {
             id,
-            container_name,
             image,
             config,
             started,
@@ -114,7 +110,6 @@ impl From<Service> for ServiceTarget {
         } = svc;
         ServiceTarget {
             id,
-            container_name,
             image,
             config,
             started,
@@ -141,9 +136,6 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         ServiceTarget {
             id,
-            // set the name to a random string by default, but a name will be set when transforming
-            // from the target state
-            container_name: None,
             image: image.into(),
             started: true,
             config: ServiceConfig { command, labels },
@@ -151,8 +143,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
     }
 }
 
-impl From<LocalContainer> for Service {
-    fn from(mut container: LocalContainer) -> Self {
+impl<N> From<LocalContainer<N>> for Service {
+    fn from(mut container: LocalContainer<N>) -> Self {
         // Parse the service id from the container labels, assume 0 if no id exists
         let id: u32 = container
             .config
@@ -162,21 +154,19 @@ impl From<LocalContainer> for Service {
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
-        let image = ImageRef::Id(container.image_id.clone());
-        let container_summary =
-            ServiceContainerSummary::from((container.id.as_str(), container.state.clone()));
+        let image = ImageRef::Id(container.image.clone());
+        let container_summary = Container::from((container.name.as_str(), container.state.clone()));
 
         // the service is considered started after the engine policy takes over
         // for now this just means that the container status is different than `Created`
         // FIXME: we probably want to handle the host/network manager race condition
         // like we do in https://github.com/balena-os/balena-supervisor/blob/5aa64126ab059505b6456cd9b170a3d609db4b75/src/compose/app.ts#L763-L776
-        let started = container_summary.status != ServiceContainerStatus::Created;
+        let started = container_summary.status != ContainerStatus::Created;
         let config = ServiceConfig::from(container.config);
 
         Self {
             id,
-            container_name: Some(container.name),
-            container: Some(container_summary),
+            oci: Some(container_summary),
             image,
             installing: false,
             started,

@@ -113,7 +113,7 @@ fn install_hostapp_release(
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
 
-        let container_helper = docker.container();
+        let container_helper = docker.non_namepaced_container();
 
         // remove any existing `balenahup` container
         container_helper.remove(BALENAHUP).await?;

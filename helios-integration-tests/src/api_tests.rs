@@ -107,6 +107,12 @@ async fn test_set_app_target_install_images() {
                             }
                         }
                     }
+                },
+                "networks": {
+                    "my-net": {}
+                },
+                "volumes": {
+                    "my-vol": {}
                 }
             }
         }
@@ -139,8 +145,8 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-one"))
-        .and_then(|s| s.get("container"))
-        .and_then(|c| c.get("id"))
+        .and_then(|s| s.get("oci"))
+        .and_then(|c| c.get("name"))
         .unwrap()
         .as_str()
         .unwrap();
@@ -150,8 +156,8 @@ async fn test_set_app_target_install_images() {
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-two"))
-        .and_then(|s| s.get("container"))
-        .and_then(|c| c.get("id"))
+        .and_then(|s| s.get("oci"))
+        .and_then(|c| c.get("name"))
         .unwrap()
         .as_str()
         .unwrap();
@@ -161,8 +167,8 @@ async fn test_set_app_target_install_images() {
     let ubuntu_img = images.get("ubuntu:latest").unwrap();
     let alpine_img = images.get("alpine:latest").unwrap();
 
-    let ubuntu_img_id = ubuntu_img.get("engine_id").unwrap();
-    let alpine_img_id = alpine_img.get("engine_id").unwrap();
+    let ubuntu_img_id = ubuntu_img.get("oci_id").unwrap();
+    let alpine_img_id = alpine_img.get("oci_id").unwrap();
 
     let docker = Docker::connect_with_defaults().unwrap();
     let img = docker.inspect_image("ubuntu:latest").await.unwrap();
@@ -193,6 +199,41 @@ async fn test_set_app_target_install_images() {
     let labels = config.labels.unwrap();
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
+
+    // Verify volumes and networks have been created
+    let my_net_id = app
+        .get("releases")
+        .and_then(|r| r.get("my-release-uuid"))
+        .and_then(|r| r.get("networks"))
+        .and_then(|s| s.get("my-net"))
+        .and_then(|s| s.get("oci_name"))
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let network = docker.inspect_network(my_net_id, None).await.unwrap();
+    assert_eq!(
+        network
+            .labels
+            .unwrap_or_default()
+            .get("io.balena.network-name")
+            .unwrap(),
+        "my-net"
+    );
+
+    let my_vol_id = app
+        .get("releases")
+        .and_then(|r| r.get("my-release-uuid"))
+        .and_then(|r| r.get("volumes"))
+        .and_then(|s| s.get("my-vol"))
+        .and_then(|s| s.get("oci_name"))
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let volume = docker.inspect_volume(my_vol_id).await.unwrap();
+    assert_eq!(
+        volume.labels.get("io.balena.volume-name").unwrap(),
+        "my-vol"
+    );
 
     // verify state report was sent with correct data
     let release_report = wait_for_report(TEST_APP_UUID, "my-release-uuid", "done", 10).await;

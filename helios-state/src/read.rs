@@ -1,9 +1,11 @@
 use mahler::state::Map;
 use thiserror::Error;
-use tracing::{instrument, trace};
+use tracing::instrument;
 
 use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
-use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
+use crate::labels::{
+    LABEL_APP_UUID, LABEL_NETWORK_NAME, LABEL_SERVICE_NAME, LABEL_SUPERVISED, LABEL_VOLUME_NAME,
+};
 use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
 
@@ -132,13 +134,9 @@ pub async fn read(
                 .unwrap_or(local_container.name.as_str())
                 .into();
             let release_uuid: Uuid = local_container
-                .name
-                .strip_prefix(&format!("{service_name}_"))
-                // if the remainder has underscores, assume the last
-                // component to be the release uuid
-                .and_then(|suffix| suffix.rsplit('_').next())
-                // ignore the value if empty
-                .filter(|r_uuid| !r_uuid.is_empty())
+                .namespace(&service_name)
+                .as_ref()
+                .map(|n| n.as_str())
                 .unwrap_or(UNKNOWN_RELEASE_UUID)
                 .into();
 
@@ -186,22 +184,22 @@ pub async fn read(
         for network_name in networks {
             let local_network = docker.network().inspect(&network_name).await?;
 
-            let app_uuid: Uuid = local_network
+            // get the network name from the label
+            let net_name: String = local_network
                 .labels
-                .get(LABEL_APP_UUID)
+                .get(LABEL_NETWORK_NAME)
+                .map(|name| name.as_str())
+                .unwrap_or(&network_name)
+                .into();
+
+            let app_uuid: Uuid = local_network
+                .namespace(&net_name)
+                .as_ref()
                 .map(|uuid| uuid.as_str())
                 .unwrap_or(UNKNOWN_APP_UUID)
                 .into();
 
-            // Extract the network name by stripping the "{app_uuid}_" prefix
-            let net_name = local_network
-                .name
-                .strip_prefix(&format!("{app_uuid}_"))
-                .unwrap_or(&local_network.name)
-                .to_owned();
-
             let network: Network = local_network.into();
-
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
             // If there are no releases, create an unknown release for cleanup
@@ -230,22 +228,22 @@ pub async fn read(
         for volume_name in volumes {
             let local_volume = docker.volume().inspect(&volume_name).await?;
 
-            let Some(app_uuid_str) = local_volume.labels.get(LABEL_APP_UUID) else {
-                // Skip orphaned volumes with no app-uuid label
-                trace!(volume = %local_volume.name, "skipping orphaned volume");
-                continue;
-            };
-            let app_uuid: Uuid = app_uuid_str.as_str().into();
+            // get the volume name from the label
+            let vol_name: String = local_volume
+                .labels
+                .get(LABEL_VOLUME_NAME)
+                .map(|name| name.as_str())
+                .unwrap_or(&volume_name)
+                .into();
 
-            // Extract the volume name by stripping the "{app_uuid}_" prefix
-            let vol_name = local_volume
-                .name
-                .strip_prefix(&format!("{app_uuid}_"))
-                .unwrap_or(&local_volume.name)
-                .to_owned();
+            let app_uuid: Uuid = local_volume
+                .namespace(&vol_name)
+                .as_ref()
+                .map(|n| n.as_str())
+                .unwrap_or(UNKNOWN_APP_UUID)
+                .into();
 
             let volume: Volume = local_volume.into();
-
             let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
             // If there are no releases, create an unknown release for cleanup

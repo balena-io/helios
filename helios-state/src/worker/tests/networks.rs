@@ -29,15 +29,12 @@ fn it_finds_a_workflow_to_create_networks() {
                                 "service1": {
                                     "id": 1,
                                     "started": true,
-                                    "container_name": "my-release-uuid_service1",
                                     "image": "ubuntu:latest",
                                     "config": {},
                                 },
                             },
                             "networks": {
-                                "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
-                                },
+                                "my-network": {},
                             },
                         }
                     }
@@ -132,9 +129,7 @@ fn it_finds_a_workflow_to_create_and_remove_networks() {
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "network-b": {
-                                    "network_name": "my-app-uuid_network-b",
-                                },
+                                "network-b": {}
                             },
                         }
                     }
@@ -170,7 +165,7 @@ fn it_finds_a_workflow_for_updating_networks() {
                             "services": {},
                             "networks": {
                                 "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "bridge",
                                         "enable_ipv6": false,
@@ -194,7 +189,6 @@ fn it_finds_a_workflow_for_updating_networks() {
                             "services": {},
                             "networks": {
                                 "my-network": {
-                                    "network_name": "my-app-uuid_my-network",
                                     "config": {
                                         "driver": "overlay",
                                         "enable_ipv6": true,
@@ -241,12 +235,8 @@ fn it_finds_a_workflow_to_create_multiple_networks_and_finalizes_release_after_n
                             "installed": true,
                             "services": {},
                             "networks": {
-                                "net-a": {
-                                    "network_name": "my-app-uuid_net-a",
-                                },
-                                "net-b": {
-                                    "network_name": "my-app-uuid_net-b",
-                                },
+                                "net-a": {},
+                                "net-b": {},
                             },
                         }
                     }

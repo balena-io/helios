@@ -52,17 +52,17 @@ pub(super) fn release_update(
     seq!(prepare) + inner + seq!(finish)
 }
 
-pub(super) fn running_container(id: &str) -> Value {
+pub(super) fn running_container(name: &str) -> Value {
     serde_json::json!({
-        "id": id,
+        "name": name,
         "status": "running",
         "created": "2026-02-11T15:03:43Z",
     })
 }
 
-pub(super) fn stopped_container(id: &str) -> Value {
+pub(super) fn stopped_container(name: &str) -> Value {
     serde_json::json!({
-        "id": id,
+        "name": name,
         "status": "stopped",
         "created": "2026-02-11T15:03:43Z",
     })

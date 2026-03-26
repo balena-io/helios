@@ -6,8 +6,8 @@ use mahler::worker::{Uninitialized, Worker};
 
 use crate::common_types::{ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Device, ImageRef, Network, Release, Service, ServiceContainerStatus,
-    ServiceContainerSummary, ServiceTarget, Volume,
+    App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
+    Service, ServiceTarget, Volume,
 };
 use crate::store::{self, DocumentStore};
 
@@ -120,7 +120,7 @@ fn fetch_apps_images(
                             .get(t_app_uuid)
                             .and_then(|app| app.releases.get(t_rel_uuid))
                             .and_then(|rel| rel.services.get(t_svc_name))
-                            .is_none_or(|svc| svc.container.is_some())
+                            .is_none_or(|svc| svc.oci.is_some())
                         {
                             // the service already has a container, ignore
                             // the image
@@ -182,13 +182,13 @@ fn ensure_release_is_finalized(
     }) || tgt_rel.networks.iter().any(|(net_name, tgt_net)| {
         rel.networks
             .get(net_name)
-            .map(|net| tgt_net != net)
+            .map(|net| tgt_net.config != net.config)
             // target network does not exist yet or has a different config
             .unwrap_or(true)
     }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
         rel.volumes
             .get(vol_name)
-            .map(|vol| tgt_vol != vol)
+            .map(|vol| tgt_vol.config != vol.config)
             // target volume does not exist yet or has a different config
             .unwrap_or(true)
     }) {
@@ -226,7 +226,7 @@ fn finish_release(
             release
                 .networks
                 .get(net_name)
-                .map(|net| tgt_net == net)
+                .map(|net| tgt_net.config == net.config)
                 .unwrap_or_default()
         }),
         "all networks should have the correct configuration"
@@ -238,7 +238,7 @@ fn finish_release(
             release
                 .volumes
                 .get(vol_name)
-                .map(|vol| tgt_vol == vol)
+                .map(|vol| tgt_vol.config == vol.config)
                 .unwrap_or_default()
         }),
         "all volumes should have the correct configuration"
@@ -282,10 +282,11 @@ fn create_network(
     net: View<Option<Network>>,
     Target(tgt): Target<Network>,
     docker: Res<Docker>,
-    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, _, net_name)): Args<(Uuid, Uuid, String)>,
 ) -> IO<Network, Error> {
     let net = net.create(Network {
-        network_name: tgt.network_name.clone(),
+        // use a mock name for planning only
+        oci_name: String::default(),
         config: tgt.config,
     });
 
@@ -294,17 +295,17 @@ fn create_network(
             .as_ref()
             .expect("docker resource should be available");
 
-        let network_config = std::mem::take(&mut net.config);
-        let network_name = &net.network_name;
+        let network_config = std::mem::take(&mut net.config).into_oci_config(&net_name);
 
-        docker
+        // create the network namespaced by app-uuid
+        let network_name = docker
             .network()
-            .create(network_name, network_config.into_oci_config(&app_uuid))
+            .create(&net_name, app_uuid.as_str(), network_config)
             .await?;
 
         let local_network = docker
             .network()
-            .inspect(network_name)
+            .inspect(&network_name)
             .await
             .with_context(|| format!("failed to inspect network '{network_name}'"))?;
         *net = Network::from(local_network);
@@ -326,7 +327,7 @@ fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Opti
 
 /// Uninstall a network from Docker and the state tree
 fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Network>, Error> {
-    let docker_name = net.network_name.clone();
+    let docker_name = net.oci_name.clone();
     let net = net.delete();
 
     with_io(net, async move |net| {
@@ -347,11 +348,12 @@ fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Netwo
 fn create_volume(
     vol: View<Option<Volume>>,
     Target(tgt): Target<Volume>,
-    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, _, vol_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
     let vol = vol.create(Volume {
-        volume_name: tgt.volume_name.clone(),
+        // use a mock name for planning only
+        oci_name: String::new(),
         config: tgt.config,
     });
 
@@ -359,12 +361,12 @@ fn create_volume(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let volume_config = std::mem::take(&mut vol.config);
-        let volume_name = vol.volume_name.clone();
+        let volume_config = std::mem::take(&mut vol.config).into_oci_config(&vol_name);
 
-        docker
+        // create the volume namespaced by app_uuid
+        let volume_name = docker
             .volume()
-            .create(&volume_name, volume_config.into_oci_config(&app_uuid))
+            .create(&vol_name, app_uuid.as_str(), volume_config)
             .await?;
 
         let local_volume = docker
@@ -391,7 +393,7 @@ fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<
 
 /// Uninstall a volume from Docker and the state tree
 fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>, Error> {
-    let docker_name = vol.volume_name.clone();
+    let docker_name = vol.oci_name.clone();
     let vol = vol.delete();
 
     with_io(vol, async move |vol| {
@@ -489,10 +491,9 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
     maybe_svc.create(Service {
         id,
         image,
-        container_name: None,
         installing: false,
         started: false,
-        container: None,
+        oci: None,
         config,
     })
 }
@@ -500,9 +501,34 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
 /// Migrate a service to the current release from another location
 fn migrate_service(
     maybe_svc: View<Option<Service>>,
-    RawTarget(tgt): RawTarget<Service>,
-) -> View<Service> {
-    maybe_svc.create(tgt)
+    RawTarget(t_svc): RawTarget<Service>,
+    Args((_, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+    docker: Res<Docker>,
+) -> IO<Service, Error> {
+    enforce!(t_svc.oci.is_some(), "source service must have a container");
+    let svc = maybe_svc.create(t_svc);
+    with_io(svc, async move |mut svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+
+        let container = svc.oci.as_ref().expect("container must be available");
+        let container_id = docker
+            .container()
+            .migrate(&container.name, &svc_name, rel_uuid.as_str())
+            .await?;
+
+        // check that the container was created and generate the Service configuration
+        // from the image config and container info
+        let local_container = docker
+            .container()
+            .inspect(&container_id)
+            .await
+            .context("failed to inspect container for service")?;
+        *svc = Service::from(local_container);
+
+        Ok(svc)
+    })
 }
 
 /// Install the service when requirements are met for this operation
@@ -522,7 +548,7 @@ fn install_service_when_requirements_are_met(
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
     // do not install a container that already exists
-    if svc.container.is_some() {
+    if svc.oci.is_some() {
         return None;
     }
 
@@ -545,37 +571,32 @@ fn install_service_when_requirements_are_met(
 fn install_service(
     mut svc: View<Service>,
     Target(tgt): Target<Service>,
-    Args((app_uuid, commit, svc_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
-    debug_assert!(tgt.container_name.is_some());
-    enforce!(svc.container.is_none(), "service container already exists");
+    enforce!(svc.oci.is_none(), "service container already exists");
 
     // simulate a service install by creating a mock container
     // the mock will never be seen by users
-    svc.container.replace(ServiceContainerSummary::mock());
+    svc.oci.replace(Container::mock());
     svc.started = false;
     svc.config = tgt.config;
-    svc.container_name = tgt.container_name;
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
         let local_store = store.as_ref().expect("store should be available");
-        let container_name = svc
-            .container_name
-            .take()
-            .expect("container name should be available");
-
         svc.installing = true;
         let _ = svc.flush().await;
 
         let container_config =
-            std::mem::take(&mut svc.config).into_container_config(svc.id, &svc_name, &app_uuid);
+            std::mem::take(&mut svc.config).into_oci_config(svc.id, &svc_name, &app_uuid);
+
+        // create the container namespaced by release uuid
         let container_id = docker
             .container()
-            .create(&container_name, &svc.image, container_config)
+            .create(&svc_name, rel_uuid.as_str(), &svc.image, container_config)
             .await?;
 
         // check that the container was created and generate the Service configuration
@@ -591,7 +612,7 @@ fn install_service(
         // store the image uri that corresponds to the current release service
         local_store
             .put(
-                format!("apps/{app_uuid}/releases/{commit}/services/{svc_name}/image"),
+                format!("apps/{app_uuid}/releases/{rel_uuid}/services/{svc_name}/image"),
                 &svc.image,
             )
             .await?;
@@ -628,9 +649,9 @@ fn start_service(
     docker: Res<Docker>,
 ) -> IO<Service, OciError> {
     enforce!(
-        svc.container
+        svc.oci
             .as_ref()
-            .is_some_and(|c| c.status != ServiceContainerStatus::Running),
+            .is_some_and(|c| c.status != ContainerStatus::Running),
         "service container should exist and should not be running"
     );
 
@@ -652,9 +673,9 @@ fn start_service(
 
         // this is guaranteed by the enforce above
         let container_id = svc
-            .container
+            .oci
             .as_ref()
-            .map(|c| &c.id)
+            .map(|c| &c.name)
             .expect("container should be available");
 
         // start the container
@@ -671,50 +692,10 @@ fn start_service(
             .await
             .context("failed to inspect container for service")?;
 
-        svc.container.replace(ServiceContainerSummary::from((
-            local_container.id.as_ref(),
+        svc.oci.replace(Container::from((
+            local_container.name.as_ref(),
             local_container.state,
         )));
-
-        Ok(svc)
-    })
-}
-
-/// Rename the service container
-fn rename_service_container(
-    mut svc: View<Service>,
-    Target(tgt): Target<Service>,
-    docker: Res<Docker>,
-) -> IO<Service, OciError> {
-    debug_assert!(tgt.container_name.is_some());
-    let container_id = if let Some(id) = svc.container.as_ref().map(|c| c.id.clone())
-        && svc.container_name != tgt.container_name
-    {
-        id
-    } else {
-        return IO::abort("service container should exist with a different name");
-    };
-    enforce!(
-        svc.config == tgt.config,
-        "service should already have the correct configuration"
-    );
-
-    // update the name
-    svc.container_name = tgt.container_name;
-    with_io(svc, async move |svc| {
-        let docker = docker
-            .as_ref()
-            .expect("docker resource should be available");
-        let container_name = svc
-            .container_name
-            .as_ref()
-            .expect("target container name should be available");
-
-        docker
-            .container()
-            .rename(&container_id, container_name)
-            .await
-            .context("failed to rename container for service")?;
 
         Ok(svc)
     })
@@ -724,8 +705,8 @@ fn rename_service_container(
 fn reconfigure_service(svc: View<Service>, Target(tgt): Target<Service>) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc.config != tgt.config {
-        if let Some(container) = svc.container.as_ref()
-            && container.status == ServiceContainerStatus::Running
+        if let Some(container) = svc.oci.as_ref()
+            && container.status == ContainerStatus::Running
         {
             tasks.push(stop_service_when_requirements_are_met.with_target(&tgt));
         }
@@ -748,11 +729,11 @@ fn stop_service_when_requirements_are_met() -> Vec<Task> {
 
 /// Stop a running service
 fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
-    let container_id = if let Some(container) = svc.container.as_mut()
-        && container.status == ServiceContainerStatus::Running
+    let container_id = if let Some(container) = svc.oci.as_mut()
+        && container.status == ContainerStatus::Running
     {
-        container.status = ServiceContainerStatus::Stopped;
-        container.id.clone()
+        container.status = ContainerStatus::Stopped;
+        container.name.clone()
     } else {
         return IO::abort("service container should exist and should be running");
     };
@@ -762,9 +743,9 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .as_ref()
             .expect("docker resource should be available");
 
-        if let Some(container) = svc.container.as_mut() {
+        if let Some(container) = svc.oci.as_mut() {
             // set the container status before stopping
-            container.status = ServiceContainerStatus::Stopping;
+            container.status = ContainerStatus::Stopping;
         }
         let _ = svc.flush().await;
 
@@ -783,8 +764,8 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .await
             .context("failed to inspect container for service")?;
 
-        svc.container.replace(ServiceContainerSummary::from((
-            local_container.id.as_ref(),
+        svc.oci.replace(Container::from((
+            local_container.name.as_ref(),
             local_container.state,
         )));
 
@@ -838,9 +819,9 @@ fn uninstall_service_when_requirements_are_met(
         );
     } else {
         if svc
-            .container
+            .oci
             .as_ref()
-            .is_some_and(|c| c.status == ServiceContainerStatus::Running)
+            .is_some_and(|c| c.status == ContainerStatus::Running)
         {
             // stop the service if running
             tasks.push(stop_service_when_requirements_are_met.into_task());
@@ -864,10 +845,10 @@ fn remove_service(svc: View<Service>) -> View<Option<Service>> {
 ///
 /// NOTE: This doesn't remove the service from the current state
 fn remove_service_container(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, Error> {
-    let container_id = if let Some(container) = svc.container.take()
-        && container.status != ServiceContainerStatus::Running
+    let container_id = if let Some(container) = svc.oci.take()
+        && container.status != ContainerStatus::Running
     {
-        container.id
+        container.name
     } else {
         return IO::abort("service container should exist and be stopped");
     };
@@ -891,10 +872,10 @@ fn remove_service_container(mut svc: View<Service>, docker: Res<Docker>) -> IO<S
 
 /// Remove a stopped service and its container
 fn uninstall_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Option<Service>, Error> {
-    let container_id = if let Some(container) = svc.container.take()
-        && container.status != ServiceContainerStatus::Running
+    let container_id = if let Some(container) = svc.oci.take()
+        && container.status != ContainerStatus::Running
     {
-        container.id
+        container.name
     } else {
         return IO::abort("service container should exist and be stopped");
     };
@@ -1089,13 +1070,6 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     },
                 ),
                 job::update(reconfigure_service),
-                job::update(rename_service_container).with_description(
-                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
-                        format!(
-                            "rename container for service '{service_name}' for release '{commit}'"
-                        )
-                    },
-                ),
             ],
         )
         .job(

@@ -5,38 +5,59 @@ use bollard::models::{Ipam, IpamConfig, NetworkCreateRequest, NetworkInspect};
 use bollard::query_parameters::ListNetworksOptions;
 use serde::{Deserialize, Serialize};
 
-use super::{Client, Error, Result, WithContext};
+use super::{Client, Error, LocalNamespace, Namespace, Result, WithContext};
 
 #[derive(Debug, Clone)]
-pub struct NetworkClient<'a>(&'a Client);
+pub struct Network<'a, N> {
+    client: &'a Client,
+    __: std::marker::PhantomData<N>,
+}
 
-impl<'a> NetworkClient<'a> {
+impl<'a, N> Network<'a, N> {
     pub fn new(client: &'a Client) -> Self {
-        Self(client)
+        Self {
+            client,
+            __: std::marker::PhantomData::<N>,
+        }
     }
 }
 
-impl NetworkClient<'_> {
+impl<N: Namespace> Network<'_, N> {
     /// Create a network with the given name and configuration
-    pub async fn create(&self, name: &str, config: NetworkConfig) -> Result<()> {
-        let mut request: NetworkCreateRequest = config.into();
-        request.name = name.to_owned();
+    pub async fn create(
+        &self,
+        network: &str,
+        namespace: impl Into<N>,
+        config: NetworkConfig,
+    ) -> Result<String> {
+        let id = namespace.into().to_identifier(network);
 
-        match self.0.inner().create_network(request).await {
-            Ok(_) => Ok(()),
-            // ignore if the network already exists
+        // look for the network first
+        match self.inspect(&id).await {
+            Ok(_) => return Ok(id),
+            Err(e) if e.is_not_found() => {}
+            Err(e) => Err(e)?,
+        }
+
+        let mut request: NetworkCreateRequest = config.into();
+        request.name = id.clone();
+
+        match self.client.inner().create_network(request).await {
+            Ok(_) => Ok(id),
+            // ignore if the error if the network already exists
+            // (not sure this error can happen according to the docker API)
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 409, ..
-            }) => Ok(()),
+            }) => Ok(id),
             Err(e) => {
-                Err(Error::from(e)).with_context(|| format!("failed to create network {name}"))
+                Err(Error::from(e)).with_context(|| format!("failed to create network {network}"))
             }
         }
     }
 
     /// Remove a network by name
     pub async fn remove(&self, name: &str) -> Result<()> {
-        match self.0.inner().remove_network(name).await {
+        match self.client.inner().remove_network(name).await {
             Ok(_) => Ok(()),
             // do not fail if the network doesn't exist
             Err(bollard::errors::Error::DockerResponseServerError {
@@ -49,9 +70,9 @@ impl NetworkClient<'_> {
     }
 
     /// Returns low-level information about a network.
-    pub async fn inspect(&self, name: &str) -> Result<LocalNetwork> {
+    pub async fn inspect(&self, name: &str) -> Result<LocalNetwork<N>> {
         let network_info = self
-            .0
+            .client
             .inner()
             .inspect_network(
                 name,
@@ -81,7 +102,7 @@ impl NetworkClient<'_> {
         };
 
         let networks = self
-            .0
+            .client
             .inner()
             .list_networks(Some(opts))
             .await
@@ -175,8 +196,8 @@ pub struct NetworkIpamPoolConfig {
 }
 
 /// Information about a network on the local Docker engine
-#[derive(Debug, Clone, Default)]
-pub struct LocalNetwork {
+#[derive(Debug, Clone)]
+pub struct LocalNetwork<N = LocalNamespace> {
     pub name: String,
     pub driver: NetworkDriver,
     pub driver_opts: HashMap<String, String>,
@@ -185,9 +206,37 @@ pub struct LocalNetwork {
     pub internal: bool,
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub __: std::marker::PhantomData<N>,
+    #[cfg(not(any(test, feature = "test-helpers")))]
+    __: std::marker::PhantomData<N>,
 }
 
-impl TryFrom<NetworkInspect> for LocalNetwork {
+#[cfg(any(test, feature = "test-helpers"))]
+impl<N> Default for LocalNetwork<N> {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            driver: NetworkDriver::default(),
+            driver_opts: HashMap::default(),
+            enable_ipv4: false,
+            enable_ipv6: false,
+            internal: false,
+            labels: HashMap::default(),
+            ipam: NetworkIpamConfig::default(),
+            __: std::marker::PhantomData::<N>,
+        }
+    }
+}
+
+impl<N: Namespace> LocalNetwork<N> {
+    /// Get the namepace from the local network metadata
+    pub fn namespace(&self, network: &str) -> Option<N> {
+        N::from_identifier(&self.name, network)
+    }
+}
+
+impl<N> TryFrom<NetworkInspect> for LocalNetwork<N> {
     type Error = Error;
 
     fn try_from(value: NetworkInspect) -> Result<Self> {
@@ -227,6 +276,7 @@ impl TryFrom<NetworkInspect> for LocalNetwork {
             internal,
             labels,
             ipam,
+            __: std::marker::PhantomData::<N>,
         })
     }
 }
