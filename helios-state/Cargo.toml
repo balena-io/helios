@@ -35,5 +35,6 @@ tokio-stream = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+helios-oci = { workspace = true, features = ["test-helpers"] }
 pretty_assertions.workspace = true
 tracing-subscriber.workspace = true

@@ -206,9 +206,13 @@ pub struct LocalNetwork<N = LocalNamespace> {
     pub internal: bool,
     pub labels: HashMap<String, String>,
     pub ipam: NetworkIpamConfig,
+    #[cfg(any(test, feature = "test-helpers"))]
     pub __: std::marker::PhantomData<N>,
+    #[cfg(not(any(test, feature = "test-helpers")))]
+    __: std::marker::PhantomData<N>,
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 impl<N> Default for LocalNetwork<N> {
     fn default() -> Self {
         Self {

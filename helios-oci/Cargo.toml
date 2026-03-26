@@ -12,6 +12,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+default = []
+test-helpers = []
+
 [dependencies]
 helios-util = { path = "../helios-util", version = "0" }
 

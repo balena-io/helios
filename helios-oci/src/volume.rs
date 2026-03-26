@@ -155,9 +155,13 @@ pub struct LocalVolume<N = LocalNamespace> {
     pub driver: VolumeDriver,
     pub driver_opts: HashMap<String, String>,
     pub labels: HashMap<String, String>,
+    #[cfg(any(test, feature = "test-helpers"))]
     pub __: std::marker::PhantomData<N>,
+    #[cfg(not(any(test, feature = "test-helpers")))]
+    __: std::marker::PhantomData<N>,
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 impl<N> Default for LocalVolume<N> {
     fn default() -> Self {
         Self {
