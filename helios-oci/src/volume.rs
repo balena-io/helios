@@ -31,6 +31,14 @@ impl<N: Namespace> Volume<'_, N> {
         config: VolumeConfig,
     ) -> Result<String> {
         let id = namespace.into().to_identifier(name);
+
+        // look for the volume first
+        match self.inspect(&id).await {
+            Ok(_) => return Ok(id),
+            Err(e) if e.is_not_found() => {}
+            Err(e) => Err(e)?,
+        }
+
         let mut request: VolumeCreateRequest = config.into();
         request.name = Some(id.clone());
 

@@ -31,6 +31,14 @@ impl<N: Namespace> Network<'_, N> {
         config: NetworkConfig,
     ) -> Result<String> {
         let id = namespace.into().to_identifier(network);
+
+        // look for the network first
+        match self.inspect(&id).await {
+            Ok(_) => return Ok(id),
+            Err(e) if e.is_not_found() => {}
+            Err(e) => Err(e)?,
+        }
+
         let mut request: NetworkCreateRequest = config.into();
         request.name = id.clone();
 

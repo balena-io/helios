@@ -182,6 +182,17 @@ impl Error {
     pub fn kind(&self) -> &ErrorKind {
         &self.source
     }
+
+    /// Return true if the server returns a 404
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self.source,
+            ErrorKind::Connection(ConnectionError::DockerResponseServerError {
+                status_code: 404,
+                ..
+            })
+        )
+    }
 }
 
 impl From<ConnectionError> for Error {
