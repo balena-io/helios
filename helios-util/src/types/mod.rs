@@ -1,9 +1,11 @@
 mod api_key;
+mod environment;
 mod image_uri;
 mod operating_system;
 mod uuid;
 
 pub use api_key::ApiKey;
+pub use environment::{Environment, Value};
 pub use image_uri::{ImageUri, InvalidImageUriError};
 pub use operating_system::OperatingSystem;
 pub use uuid::Uuid;
