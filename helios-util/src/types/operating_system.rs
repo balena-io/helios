@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,6 +21,16 @@ pub struct OperatingSystem {
     /// In balenaOS, this is the board revision commit hash.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
+}
+
+impl fmt::Display for OperatingSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(version) = &self.version {
+            write!(f, "{} {version}", self.name)
+        } else {
+            self.name.fmt(f)
+        }
+    }
 }
 
 impl FromStr for OperatingSystem {

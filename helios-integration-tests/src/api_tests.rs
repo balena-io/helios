@@ -209,6 +209,11 @@ async fn test_set_app_target_install_images() {
         config.labels.unwrap().get("io.balena.app-uuid").unwrap(),
         TEST_APP_UUID
     );
+    let env = config.env.unwrap();
+    assert!(env.contains(&format!("BALENA_APP_UUID={TEST_APP_UUID}")));
+    assert!(env.contains(&"BALENA_DEVICE_UUID=test-uuid".to_string()));
+    assert!(env.contains(&"BALENA_HOST_OS_VERSION=balenaOS 6.0.39".to_string()));
+    assert!(env.contains(&"BALENA_HOST_OS_BUILD=test-board-rev-000".to_string()));
 
     let container = docker
         .inspect_container(svc_two_container_id, None)

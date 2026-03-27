@@ -495,14 +495,16 @@ pub async fn start_seek(
 
                     Box::pin(async move {
                         let mut update_status = UpdateStatus::ApplyingChanges;
-                        let device_target_opt = match update_req.target {
-                            TargetState::Remote { ref target, .. } => target.as_ref(),
-                            TargetState::Local { ref target } => Some(target),
+                        let (mut maybe_device_target, raw_target) = match update_req.target {
+                            TargetState::Remote { target, raw_target } => {
+                                (target, Some(raw_target))
+                            }
+                            TargetState::Local { target } => (Some(target), None),
                         };
 
                         // If there is a target and the last apply was not an apply to
                         // the legacy state
-                        if let Some(target) = device_target_opt
+                        if let Some(device_target) = maybe_device_target.as_mut()
                             && !matches!(prev_seek_state, SeekState::Legacy)
                         {
                             // Reset the target state so a supervisor poll cannot
@@ -511,11 +513,13 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
+                            device_target.add_environment_from_state(current_state);
+
                             // Look for a plan to the target
                             update_status = seek_target(
                                 worker,
                                 current_state,
-                                target,
+                                device_target,
                                 &interrupt,
                                 state_tx,
                                 retry_interval,
@@ -525,13 +529,13 @@ pub async fn start_seek(
 
                         // If there is a legacy supervisor and the target state is coming from
                         // the remote API
-                        if let (Some(config), TargetState::Remote { raw_target, .. }) =
-                            (legacy_config.clone(), &update_req.target)
+                        if let (Some(config), Some(maybe_raw_target)) =
+                            (legacy_config.clone(), raw_target)
                         {
                             // Set as the target state the raw target accepted by
                             // the fallback
                             if let Some(proxy_state) = &proxy_state {
-                                proxy_state.set(raw_target.clone()).await;
+                                proxy_state.set(maybe_raw_target).await;
                             }
                             return match legacy::trigger_update(
                                 config.api_endpoint,
@@ -569,7 +573,7 @@ pub async fn start_seek(
                         }
 
                         // If the target could not be processed just return the updated status
-                        if device_target_opt.is_none() {
+                        if maybe_device_target.is_none() {
                             // if we get here, then there was no target state from the backend
                             // and there is no legacy config so we just reject
                             error!("cannot process target");
