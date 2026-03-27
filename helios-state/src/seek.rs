@@ -15,6 +15,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
 use crate::util::interrupt::Interrupt;
+use crate::util::logs;
 
 use super::config::Resources;
 use super::models::{Device, DeviceTarget};
@@ -250,7 +251,7 @@ async fn seek_target(
             if !changes.is_empty() {
                 debug!("pending changes:");
                 for change in changes {
-                    debug!("- {change}");
+                    debug!("- {}", logs::mask_sensitive_data(change));
                 }
             }
         }
@@ -261,7 +262,7 @@ async fn seek_target(
             if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
                 warn!("the following operations were ignored during planning");
                 for ignored in workflow.exceptions() {
-                    warn!("- {}", ignored.operation);
+                    warn!("- {}", logs::mask_sensitive_data(ignored.operation.clone()));
                     if let Some(reason) = ignored.reason.as_ref() {
                         warn!("    reason: {reason}");
                     }
