@@ -1,34 +1,40 @@
-use mahler::state::{List, Map, State};
+use std::ops::{Deref, DerefMut};
+
+use mahler::state::State;
 use serde::{Deserialize, Serialize};
 use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::ContainerConfig;
+use crate::oci;
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 
-#[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct ServiceConfig {
-    /// Command to run specified as a list of strings.
-    pub command: Option<List<String>>,
-
-    /// User-defined key/value metadata
-    #[serde(skip_serializing_if = "Map::is_empty")]
-    pub labels: Map<String, String>,
-}
+pub struct ServiceConfig(pub(super) oci::ContainerConfig);
 
 impl State for ServiceConfig {
     type Target = Self;
 }
 
-impl From<ContainerConfig> for ServiceConfig {
+impl Deref for ServiceConfig {
+    type Target = oci::ContainerConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ServiceConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<oci::ContainerConfig> for ServiceConfig {
     /// Convert from an OCI container to a service configuration
-    fn from(config: ContainerConfig) -> Self {
-        let mut labels = config.labels.unwrap_or_default();
+    fn from(mut config: oci::ContainerConfig) -> Self {
+        let labels = &mut config.labels;
 
         // Remove the supervised label to skip it in the state comparison
         labels.remove(LABEL_SUPERVISED);
@@ -51,18 +57,12 @@ impl From<ContainerConfig> for ServiceConfig {
             .unwrap_or_default();
         labels.retain(|k, _| label_config_labels_value.contains(k));
 
-        // Read the command if part of the composition fields
-        let command = if label_config_fields.contains(&"command".to_string()) {
-            // convert the command to List<String>
-            config.cmd.map(|cmd| cmd.into_iter().collect())
-        } else {
-            None
-        };
-
-        Self {
-            command,
-            labels: labels.into_iter().collect(),
+        // Keep the command the command if part of the composition fields
+        if !label_config_fields.contains(&"command".to_string()) {
+            config.command = None;
         }
+
+        Self(config)
     }
 }
 
@@ -73,12 +73,14 @@ impl ServiceConfig {
     /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
     /// list of composition defined keys and labels. When reading the container state, these fields
     /// are used to determine if the specific field/label should be read back into the state.
-    pub fn into_oci_config(self, svc_id: u32, svc_name: &str, app_uuid: &Uuid) -> ContainerConfig {
-        let ServiceConfig {
-            command,
-            mut labels,
-            ..
-        } = self;
+    pub fn into_oci_config(
+        self,
+        svc_id: u32,
+        svc_name: &str,
+        app_uuid: &Uuid,
+    ) -> oci::ContainerConfig {
+        let mut config = self.0;
+        let labels = &mut config.labels;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
         // we will use these when reading the state to remove labels coming from
@@ -97,8 +99,7 @@ impl ServiceConfig {
         // the default unless overriden
         let mut fields = Vec::new();
 
-        let cmd = command.map(|c| c.into_iter().collect());
-        if cmd.is_some() {
+        if config.command.is_some() {
             fields.push("command");
         }
 
@@ -119,9 +120,6 @@ impl ServiceConfig {
         labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
         labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
 
-        ContainerConfig {
-            cmd,
-            labels: Some(labels.into_iter().collect()),
-        }
+        config
     }
 }

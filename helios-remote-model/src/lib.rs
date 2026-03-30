@@ -13,12 +13,14 @@ use std::{
 mod command;
 mod labels;
 mod network;
+mod restart_policy;
 mod service;
 mod volume;
 
 pub use command::*;
 pub use labels::*;
 pub use network::*;
+pub use restart_policy::*;
 pub use service::*;
 pub use volume::*;
 

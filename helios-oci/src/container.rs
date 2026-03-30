@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 
 use bollard::{
+    config::{
+        ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum, RestartPolicyNameEnum,
+    },
     models::ContainerCreateBody,
     query_parameters::{
         CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
         RemoveContainerOptions, RenameContainerOptions,
     },
-    secret::{ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum},
 };
+use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
 use super::datetime::DateTime;
-use super::image::ImageConfig;
 use super::util::types::ImageUri;
 use super::{Client, Error, LocalNamespace, Namespace, NoNamespace, Result, WithContext};
 
@@ -40,7 +42,7 @@ impl Container<'_, NoNamespace> {
             NoNamespace,
             image,
             ContainerConfig {
-                cmd: Some(vec!["/bin/false".to_string()]),
+                command: Some(vec!["/bin/false".to_string()]),
                 ..Default::default()
             },
         )
@@ -238,7 +240,36 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .ok_or("container name should not be nil")?
             .trim_start_matches('/')
             .to_owned();
-        let config: ContainerConfig = value.config.map(|c| c.into()).unwrap_or_default();
+
+        let mut host_config = value.host_config;
+        let restart_policy = host_config
+            .as_mut()
+            .and_then(|hc| hc.restart_policy.take())
+            .and_then(|rp| {
+                use RestartPolicyNameEnum;
+                rp.name.as_ref().map(|name| match name {
+                    RestartPolicyNameEnum::NO | RestartPolicyNameEnum::EMPTY => RestartPolicy::No,
+                    RestartPolicyNameEnum::ALWAYS => RestartPolicy::Always,
+                    RestartPolicyNameEnum::ON_FAILURE => RestartPolicy::OnFailure {
+                        max_retries: rp.maximum_retry_count.map(|n| n as u32),
+                    },
+                    RestartPolicyNameEnum::UNLESS_STOPPED => RestartPolicy::UnlessStopped,
+                })
+            })
+            .unwrap_or_default();
+
+        let mut config = value.config;
+        let labels = config
+            .as_mut()
+            .and_then(|c| c.labels.take())
+            .unwrap_or_default();
+        let cmd = config.and_then(|c| c.cmd);
+
+        let config = ContainerConfig {
+            command: cmd,
+            labels,
+            restart_policy,
+        };
 
         let created: DateTime = value
             .created
@@ -316,36 +347,71 @@ pub struct ContainerState {
     pub error: Option<String>,
 }
 
+/// Docker compose restart policy for a container.
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(tag = "name", rename_all = "snake_case")]
+pub enum RestartPolicy {
+    // this is the OCI default, and should work for both reading and creating containers
+    #[default]
+    No,
+    Always,
+    OnFailure {
+        max_retries: Option<u32>,
+    },
+    UnlessStopped,
+}
+
 /// Container configuration that is portable between hosts
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct ContainerConfig {
     /// Command to run specified as an array of strings
-    pub cmd: Option<Vec<String>>,
+    pub command: Option<Vec<String>>,
 
     /// User-defined key/value metadata
-    pub labels: Option<HashMap<String, String>>,
-}
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
 
-impl From<ImageConfig> for ContainerConfig {
-    fn from(value: ImageConfig) -> Self {
-        let ImageConfig { cmd, labels, .. } = value;
-        ContainerConfig { cmd, labels }
-    }
-}
-
-impl From<bollard::config::ContainerConfig> for ContainerConfig {
-    fn from(value: bollard::config::ContainerConfig) -> Self {
-        let bollard::config::ContainerConfig { cmd, labels, .. } = value;
-        ContainerConfig { cmd, labels }
-    }
+    /// Restart policy for the container
+    pub restart_policy: RestartPolicy,
 }
 
 impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
-        let ContainerConfig { cmd, labels } = value;
+        let ContainerConfig {
+            command: cmd,
+            labels,
+            restart_policy,
+        } = value;
+
+        let restart_policy = {
+            let (name, maximum_retry_count) = match restart_policy {
+                RestartPolicy::No => (RestartPolicyNameEnum::NO, None),
+                RestartPolicy::Always => (RestartPolicyNameEnum::ALWAYS, None),
+                RestartPolicy::OnFailure { max_retries } => (
+                    RestartPolicyNameEnum::ON_FAILURE,
+                    max_retries.map(|n| n as i64),
+                ),
+                RestartPolicy::UnlessStopped => (RestartPolicyNameEnum::UNLESS_STOPPED, None),
+            };
+
+            bollard::config::RestartPolicy {
+                name: Some(name),
+                maximum_retry_count,
+            }
+        };
+
+        let host_config = bollard::config::HostConfig {
+            restart_policy: Some(restart_policy),
+            ..Default::default()
+        };
+
         ContainerCreateBody {
             cmd,
-            labels,
+            labels: Some(labels),
+            host_config: Some(host_config),
             ..Default::default()
         }
     }

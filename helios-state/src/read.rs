@@ -122,14 +122,14 @@ pub async fn read(
 
         for container_id in containers {
             let local_container = docker.container().inspect(&container_id).await?;
-            let labels = local_container.config.labels.as_ref();
+            let labels = &local_container.config.labels;
             let app_uuid: Uuid = labels
-                .and_then(|l| l.get(LABEL_APP_UUID))
+                .get(LABEL_APP_UUID)
                 .map(|uuid| uuid.as_str())
                 .unwrap_or(UNKNOWN_APP_UUID)
                 .into();
             let service_name: String = labels
-                .and_then(|l| l.get(LABEL_SERVICE_NAME))
+                .get(LABEL_SERVICE_NAME)
                 .map(|name| name.as_str())
                 .unwrap_or(local_container.name.as_str())
                 .into();

@@ -1,9 +1,9 @@
-use mahler::state::{Map, State};
+use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use crate::oci::{self, DateTime, LocalContainer};
-use crate::remote_model::Service as RemoteServiceTarget;
+use crate::oci::{self, ContainerConfig, DateTime, LocalContainer, RestartPolicy};
+use crate::remote_model::{RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget};
 
 use super::image::ImageRef;
 
@@ -129,16 +129,30 @@ impl From<RemoteServiceTarget> for ServiceTarget {
 
         // merge the composition labels with the top level service labels
         // giving priority to the latter
-        let labels: Map<String, String> = composition.labels.into_iter().chain(labels).collect();
+        let labels = composition.labels.into_iter().chain(labels).collect();
 
-        // convert the composition command to a List
+        // convert the composition command to a Vec
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
+
+        // convert the restart policy
+        let restart_policy = match composition.restart {
+            RemoteRestartPolicy::No => RestartPolicy::No,
+            RemoteRestartPolicy::Always => RestartPolicy::Always,
+            RemoteRestartPolicy::OnFailure { max_retries } => {
+                RestartPolicy::OnFailure { max_retries }
+            }
+            RemoteRestartPolicy::UnlessStopped => RestartPolicy::UnlessStopped,
+        };
 
         ServiceTarget {
             id,
             image: image.into(),
             started: true,
-            config: ServiceConfig { command, labels },
+            config: ServiceConfig(ContainerConfig {
+                command,
+                labels,
+                restart_policy,
+            }),
         }
     }
 }
@@ -149,8 +163,7 @@ impl<N> From<LocalContainer<N>> for Service {
         let id: u32 = container
             .config
             .labels
-            .as_mut()
-            .and_then(|value| value.remove(LABEL_SERVICE_ID))
+            .remove(LABEL_SERVICE_ID)
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 

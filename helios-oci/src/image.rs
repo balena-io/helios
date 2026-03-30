@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bollard::config::{CreateImageInfo, ImageInspect};
 use bollard::query_parameters::{
     CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
 };
@@ -10,8 +11,6 @@ use tokio_stream::{Stream, StreamExt};
 
 use super::util::types::ImageUri;
 use super::{Client, Credentials, Error, Result, WithContext};
-
-use bollard::secret::{CreateImageInfo, ImageInspect};
 
 #[derive(Debug, Clone)]
 pub struct Image<'a>(&'a Client);
