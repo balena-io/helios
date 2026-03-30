@@ -1,4 +1,28 @@
 - commits:
+    - subject: Use oci::ContainerConfig as the main service config model
+      hash: bed52ee9998c07e7cf94008d81e6426e843bcb5c
+      body: |
+        This mirrors what is done in Network an Volume. ServiceConfig is just a
+        newtype over oci::ContainerConfig
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for service restart policy
+      hash: 25a2e0b3dd1b63268262a48482aba532fab9c0ec
+      body: |
+        This receives the restart policy from the target state and applies it to
+        the local service container configuration
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.2
+  title: ""
+  date: 2026-03-30T19:09:45.756Z
+- commits:
     - subject: Report progress on every stream event
       hash: ee42702d0ae9385a594611e2a16ef2f5c9346c45
       body: |
