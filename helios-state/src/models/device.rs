@@ -59,6 +59,53 @@ impl Device {
     }
 }
 
+impl DeviceTarget {
+    /// Adds system related environment variables to the target state
+    ///
+    /// Because these variables are in the target state, if they are modified externally, they
+    /// will also cause a service restart
+    ///
+    /// These variables will show on the current state returned by the API
+    pub fn add_environment_from_state(&mut self, device: &Device) {
+        #[cfg(feature = "balenahup")]
+        let (os_version, os_build) = if let Some(host) = &device.host {
+            (Some(host.meta.to_string()), host.meta.build.clone())
+        } else {
+            (None, None)
+        };
+
+        for app in self.apps.values_mut() {
+            for rel in app.releases.values_mut() {
+                for svc in rel.services.values_mut() {
+                    svc.config.environment.insert(
+                        "BALENA_DEVICE_UUID".to_string(),
+                        Some(device.uuid.as_str().into()),
+                    );
+
+                    #[cfg(feature = "balenahup")]
+                    if let Some(host_os_version) = &os_version {
+                        svc.config.environment.insert(
+                            "BALENA_HOST_OS_VERSION".to_string(),
+                            Some(host_os_version.as_str().into()),
+                        );
+
+                        if let Some(host_os_build) = &os_build {
+                            // NOTE: this replaces the old `BALENA_HOST_OS_BOARD_REV`, this should
+                            // be updated on next supervisor major as well where we will remove the
+                            // `io.balena.features.host-os.board-rev` and report
+                            // `BALENA_HOST_OS_BUILD` which is a more correct name
+                            svc.config.environment.insert(
+                                "BALENA_HOST_OS_BUILD".to_string(),
+                                Some(host_os_build.as_str().into()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl From<Device> for DeviceTarget {
     fn from(device: Device) -> Self {
         let Device {

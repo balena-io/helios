@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
 use super::datetime::DateTime;
-use super::util::types::ImageUri;
+use super::util::types::{Environment, ImageUri};
 use super::{Client, Error, LocalNamespace, Namespace, NoNamespace, Result, WithContext};
 
 #[derive(Debug, Clone)]
@@ -263,10 +263,16 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|c| c.labels.take())
             .unwrap_or_default();
+        let environment = config
+            .as_mut()
+            .and_then(|c| c.env.take())
+            .map(Environment::from)
+            .unwrap_or_default();
         let cmd = config.and_then(|c| c.cmd);
 
         let config = ContainerConfig {
             command: cmd,
+            environment,
             labels,
             restart_policy,
         };
@@ -370,6 +376,10 @@ pub struct ContainerConfig {
     /// Command to run specified as an array of strings
     pub command: Option<Vec<String>>,
 
+    /// Environment variables
+    #[serde(skip_serializing_if = "Environment::is_empty")]
+    pub environment: Environment,
+
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
@@ -382,9 +392,25 @@ impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
         let ContainerConfig {
             command: cmd,
+            environment,
             labels,
             restart_policy,
         } = value;
+
+        let env = if environment.is_empty() {
+            None
+        } else {
+            Some(
+                environment
+                    .into_iter()
+                    .map(|(k, v)| match v {
+                        Some(val) => format!("{k}={val}"),
+                        // a null value unsets an existing env var
+                        None => k,
+                    })
+                    .collect(),
+            )
+        };
 
         let restart_policy = {
             let (name, maximum_retry_count) = match restart_policy {
@@ -410,6 +436,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
 
         ContainerCreateBody {
             cmd,
+            env,
             labels: Some(labels),
             host_config: Some(host_config),
             ..Default::default()

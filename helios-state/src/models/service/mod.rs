@@ -123,6 +123,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             id,
             image,
             labels,
+            environment,
             composition,
             ..
         } = service;
@@ -130,6 +131,14 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         // merge the composition labels with the top level service labels
         // giving priority to the latter
         let labels = composition.labels.into_iter().chain(labels).collect();
+
+        // merge the composition environment with the top level service environment
+        // giving priority to the latter
+        let environment = composition
+            .environment
+            .into_iter()
+            .chain(environment)
+            .collect();
 
         // convert the composition command to a Vec
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
@@ -150,6 +159,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             started: true,
             config: ServiceConfig(ContainerConfig {
                 command,
+                environment,
                 labels,
                 restart_policy,
             }),

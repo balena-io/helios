@@ -10,6 +10,9 @@ use crate::oci;
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
+const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
+const ENV_APP_UUID: &str = "BALENA_APP_UUID";
+const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct ServiceConfig(pub(super) oci::ContainerConfig);
@@ -47,6 +50,15 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             .remove(LABEL_CONFIG_FIELDS)
             .and_then(|s| json::from_str(&s).ok())
             .unwrap_or_default();
+
+        // Retain only environment variables that were defined in the composition
+        let label_config_env: Vec<String> = labels
+            .remove(LABEL_CONFIG_ENV)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+        config
+            .environment
+            .retain(|k, _| label_config_env.contains(k));
 
         // Remove labels from the container that were not defined in
         // the composition. These are coming from the image and should not be
@@ -93,6 +105,25 @@ impl ServiceConfig {
             LABEL_CONFIG_LABELS.to_string(),
             label_config_labels_value.to_string(),
         );
+
+        // Store composition-defined environment variable keys
+        let label_config_env_value = config
+            .environment
+            .keys()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+        labels.insert(
+            LABEL_CONFIG_ENV.to_string(),
+            label_config_env_value.to_string(),
+        );
+
+        // add BALENA_ env vars that are tied to the container lifetime
+        config
+            .environment
+            .insert(ENV_APP_UUID.to_string(), Some(app_uuid.as_str().into()));
+        config
+            .environment
+            .insert(ENV_SERVICE_NAME.to_string(), Some(svc_name.into()));
 
         // List of config fields coming from the composition. This is only necessary for fields that
         // may be shared between the image and service, since docker will use the image version as

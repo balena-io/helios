@@ -105,7 +105,10 @@ async fn test_set_app_target_install_images() {
                             "command": ["sleep", "10"],
                             "labels": {
                                 "my-label": "true"
-                            }
+                            },
+                            "environment": [
+                                "MY_KEY=123"
+                            ]
                         }
                     }
                 },
@@ -152,16 +155,25 @@ async fn test_set_app_target_install_images() {
         .as_str()
         .unwrap();
 
-    let svc_two_container_id = app
+    let svc_two = app
         .get("releases")
         .and_then(|r| r.get("my-release-uuid"))
         .and_then(|r| r.get("services"))
         .and_then(|s| s.get("service-two"))
-        .and_then(|s| s.get("oci"))
+        .unwrap();
+    let svc_two_container_id = svc_two
+        .get("oci")
         .and_then(|c| c.get("name"))
         .unwrap()
         .as_str()
         .unwrap();
+
+    let my_env = svc_two
+        .get("config")
+        .and_then(|c| c.get("environment"))
+        .and_then(|e| e.get("MY_KEY"))
+        .unwrap();
+    assert_eq!(my_env, &json!(123));
 
     let images = device.get("images").unwrap();
 
@@ -197,6 +209,11 @@ async fn test_set_app_target_install_images() {
         config.labels.unwrap().get("io.balena.app-uuid").unwrap(),
         TEST_APP_UUID
     );
+    let env = config.env.unwrap();
+    assert!(env.contains(&format!("BALENA_APP_UUID={TEST_APP_UUID}")));
+    assert!(env.contains(&"BALENA_DEVICE_UUID=test-uuid".to_string()));
+    assert!(env.contains(&"BALENA_HOST_OS_VERSION=balenaOS 6.0.39".to_string()));
+    assert!(env.contains(&"BALENA_HOST_OS_BUILD=test-board-rev-000".to_string()));
 
     let container = docker
         .inspect_container(svc_two_container_id, None)
@@ -216,6 +233,7 @@ async fn test_set_app_target_install_images() {
     let labels = config.labels.unwrap();
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
+    assert!(config.env.unwrap().contains(&"MY_KEY=123".to_string()));
 
     // Verify volumes and networks have been created
     let my_net_id = app
