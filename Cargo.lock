@@ -1066,13 +1066,14 @@ dependencies = [
 
 [[package]]
 name = "helios-podman"
-version = "0.22.3"
+version = "0.22.5"
 dependencies = [
  "compose_spec",
  "helios-oci",
  "helios-util",
  "ipnet",
  "serde",
+ "serde_json",
  "shlex",
  "smart-default",
  "thiserror 2.0.18",

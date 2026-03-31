@@ -2,10 +2,11 @@
 
 use thiserror::Error;
 
+use crate::LABEL_RESTART_POLICY;
 use crate::oci;
 use crate::podlet::quadlet::{
     self, Container, Downgrade, File, Globals, Install, Network, PodmanVersion, Quadlet, Resource,
-    Service, Unit, Volume,
+    Service, Unit, Volume, service,
 };
 
 mod labels;
@@ -65,12 +66,35 @@ pub fn from_container_config(
         .as_ref()
         .map(crate::podlet::escape::command_join);
 
+    // Map OCI restart policy to systemd restart configuration
+    // add a label to reconstruct the config when inspecting the container
+    label_entries.push(format!(
+        "{LABEL_RESTART_POLICY}={}",
+        serde_json::to_value(&config.restart_policy)
+            .expect("restart policy should serialize to JSON")
+    ));
+    let service = match config.restart_policy {
+        oci::RestartPolicy::No => Service::default(),
+        oci::RestartPolicy::Always | oci::RestartPolicy::UnlessStopped => {
+            Service::from(service::RestartConfig::Always)
+        }
+        oci::RestartPolicy::OnFailure { .. } => Service::from(service::RestartConfig::OnFailure),
+    };
+
+    // Convert environment variables to KEY=VALUE strings
+    let environment: Vec<String> = config
+        .environment
+        .iter()
+        .filter_map(|(k, v)| v.as_ref().map(|val| format!("{k}={val}")))
+        .collect();
+
     let container = Container {
         image: image.to_owned(),
         // use the same name as the unit instead of `systemd-%N`
         container_name: Some("%N".to_string()),
         exec,
         auto_update: None,
+        environment,
         label: label_entries,
         ..Container::default()
     };
@@ -86,7 +110,7 @@ pub fn from_container_config(
         resource: Resource::Container(Box::new(container)),
         globals: Globals::default(),
         quadlet: Quadlet::default(),
-        service: Service::default(),
+        service,
         install,
     };
 
@@ -282,6 +306,76 @@ mod tests {
 
         assert!(!file.unit.binds_to.is_empty());
         assert!(file.unit.binds_to[0].ends_with(".service"));
+    }
+
+    #[test]
+    fn container_with_environment() {
+        let environment =
+            oci::Environment::from(vec!["FOO=bar".to_string(), "PORT=8080".to_string()]);
+
+        let mut config = oci::ContainerConfig {
+            environment,
+            ..Default::default()
+        };
+
+        let file =
+            from_container_config("test", "alpine:latest", &mut config, PodmanVersion::LATEST)
+                .unwrap();
+
+        if let Resource::Container(c) = &file.resource {
+            assert_eq!(c.environment.len(), 2);
+            assert!(c.environment.contains(&"FOO=bar".to_string()));
+            assert!(c.environment.contains(&"PORT=8080".to_string()));
+        } else {
+            panic!("expected Container resource");
+        }
+    }
+
+    #[test]
+    fn container_with_restart_always() {
+        let mut config = oci::ContainerConfig {
+            restart_policy: oci::RestartPolicy::Always,
+            ..Default::default()
+        };
+
+        let file =
+            from_container_config("test", "alpine:latest", &mut config, PodmanVersion::LATEST)
+                .unwrap();
+
+        assert_eq!(file.service.restart, Some(service::RestartConfig::Always));
+    }
+
+    #[test]
+    fn container_with_restart_on_failure() {
+        let mut config = oci::ContainerConfig {
+            restart_policy: oci::RestartPolicy::OnFailure {
+                max_retries: Some(3),
+            },
+            ..Default::default()
+        };
+
+        let file =
+            from_container_config("test", "alpine:latest", &mut config, PodmanVersion::LATEST)
+                .unwrap();
+
+        assert_eq!(
+            file.service.restart,
+            Some(service::RestartConfig::OnFailure)
+        );
+    }
+
+    #[test]
+    fn container_with_restart_no() {
+        let mut config = oci::ContainerConfig {
+            restart_policy: oci::RestartPolicy::No,
+            ..Default::default()
+        };
+
+        let file =
+            from_container_config("test", "alpine:latest", &mut config, PodmanVersion::LATEST)
+                .unwrap();
+
+        assert_eq!(file.service.restart, None);
     }
 
     #[test]

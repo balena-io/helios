@@ -23,6 +23,7 @@ smart-default.workspace = true
 shlex.workspace = true
 umask.workspace = true
 compose_spec.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 helios-oci = { workspace = true, features = ["test-helpers"] }
