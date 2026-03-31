@@ -15,3 +15,14 @@ version.workspace = true
 [dependencies]
 helios-oci.workspace = true
 helios-util.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ipnet.workspace = true
+smart-default.workspace = true
+shlex.workspace = true
+umask.workspace = true
+compose_spec.workspace = true
+
+[dev-dependencies]
+helios-oci = { workspace = true, features = ["test-helpers"] }

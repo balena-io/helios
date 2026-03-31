@@ -1,0 +1,766 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Adapted from https://github.com/containers/podlet/
+//! Provides [`Mount`] for the `mount` field of [`Container`](super::Container).
+
+pub(super) mod idmap;
+mod mode;
+mod tmpfs;
+
+use std::{
+    fmt::{self, Display, Formatter},
+    ops::Not,
+    path::PathBuf,
+    str::FromStr,
+};
+
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{
+        self, MapAccess, Visitor,
+        value::{MapAccessDeserializer, StrDeserializer},
+    },
+};
+use thiserror::Error;
+use umask::Mode;
+
+use crate::podlet::{
+    quadlet::HostPaths,
+    serde::{mount_options, skip_default},
+};
+
+pub use self::{idmap::Idmap, tmpfs::Tmpfs};
+
+/// Filesystem mount types to attach to a [`Container`](super::Container).
+///
+/// See the `Mount=` Quadlet option in the `[Container]` sections of
+/// [**podman-systemd.unit(5)**](https://docs.podman.io/en/stable/markdown/podman-systemd.unit.5.html#mount)
+/// and `podman run --mount` in
+/// [**podman-run(1)**](https://docs.podman.io/en/stable/markdown/podman-run.1.html#mount-type-type-type-specific-option).
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Mount {
+    Artifact(Artifact),
+    Bind(Bind),
+    DevPts(DevPts),
+    Glob(Bind),
+    Image(Image),
+    Ramfs(Tmpfs),
+    Tmpfs(Tmpfs),
+    Volume(Volume),
+}
+
+/// [`Mount`] variants, for deserializing "type" value.
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum MountType {
+    Artifact,
+    Bind,
+    DevPts,
+    Glob,
+    Image,
+    Ramfs,
+    Tmpfs,
+    Volume,
+}
+
+/// Match [`Mount`] variants to types to deserialize.
+macro_rules! match_type_deserialize {
+    ($value:expr, $map:expr, $($variant:ident => $kind:ty,)*) => {
+        match $value {
+            $(
+                Self::$variant => Ok(Mount::$variant(<$kind>::deserialize($map)?)),
+            )*
+        }
+    };
+}
+
+impl MountType {
+    /// Deserialize [`Mount`] variant from a [`MapAccess`] based on the [`MountType`].
+    fn into_mount<'de, A: MapAccess<'de>>(self, map: A) -> Result<Mount, A::Error> {
+        let map = MapAccessDeserializer::new(map);
+        match_type_deserialize! {
+            self, map,
+            Artifact => Artifact,
+            Bind => Bind,
+            DevPts => DevPts,
+            Glob => Bind,
+            Image => Image,
+            Ramfs => Tmpfs,
+            Tmpfs => Tmpfs,
+            Volume => Volume,
+        }
+    }
+}
+
+// Not using #[derive(Deserialize)] because internally tagged enums are deserialized with
+// `Deserializer::deserialize_any()` which doesn't work for `Option<Idmap>`.
+impl<'de> Deserialize<'de> for Mount {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(MountVisitor)
+    }
+}
+
+/// Deserialization [`Visitor`] for [`Mount`].
+struct MountVisitor;
+
+impl<'de> Visitor<'de> for MountVisitor {
+    type Value = Mount;
+
+    fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+        formatter.write_str("a map of mount options")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let (key, value) = map
+            .next_entry::<&str, MountType>()?
+            .ok_or_else(|| de::Error::missing_field("type"))?;
+        if key == "type" {
+            value.into_mount(map)
+        } else {
+            Err(de::Error::custom("\"type\" must be the first mount option"))
+        }
+    }
+}
+
+impl Display for Mount {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mount = mount_options::to_string(self).expect("mount serialization cannot fail");
+        f.write_str(&mount)
+    }
+}
+
+impl FromStr for Mount {
+    type Err = ParseMountError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        mount_options::from_str(s).map_err(Into::into)
+    }
+}
+
+/// Error returned when parsing [`Mount`] from a string.
+// Used to give a better error message when parsing `podman run --mount`.
+#[derive(Error, Debug)]
+#[error("error while deserializing mount options: {0}")]
+pub struct ParseMountError(String);
+
+impl From<mount_options::Error> for ParseMountError {
+    #[allow(clippy::panic)]
+    fn from(value: mount_options::Error) -> Self {
+        match value {
+            mount_options::Error::Custom(error) => Self(error),
+            mount_options::Error::BadType => panic!(
+                "attempted to deserialize a type incompatible with the mount options deserializer"
+            ),
+        }
+    }
+}
+
+impl HostPaths for Mount {
+    fn host_paths(&mut self) -> impl Iterator<Item = &mut PathBuf> {
+        match self {
+            Self::Bind(bind) | Self::Glob(bind) => Some(&mut bind.source),
+            Self::Artifact(_)
+            | Self::DevPts(_)
+            | Self::Image(_)
+            | Self::Ramfs(_)
+            | Self::Tmpfs(_)
+            | Self::Volume(_) => None,
+        }
+        .into_iter()
+    }
+}
+
+/// Artifact type [`Mount`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(into = "ArtifactFlat", try_from = "ArtifactFlat")]
+pub struct Artifact {
+    /// Mount source spec.
+    pub source: String,
+
+    /// Mount destination spec.
+    pub destination: PathBuf,
+
+    /// If the artifact contains multiple blobs, the digest or title of the blob to use.
+    pub digest_or_title: Option<DigestOrTitle>,
+
+    /// Overwrite the filename used inside the container for mounting.
+    pub name: Option<String>,
+}
+
+/// A flattened version of [`Artifact`] for (de)serialization.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ArtifactFlat {
+    /// Mount source spec.
+    #[serde(alias = "src")]
+    source: String,
+
+    /// Mount destination spec.
+    #[serde(alias = "dst", alias = "dest", alias = "target")]
+    destination: PathBuf,
+
+    /// If the artifact contains multiple blobs, the digest to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    digest: Option<String>,
+
+    /// If the artifact contains multiple blobs, the title to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+
+    /// Overwrite the filename used inside the container for mounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl From<Artifact> for ArtifactFlat {
+    fn from(
+        Artifact {
+            source,
+            destination,
+            digest_or_title,
+            name,
+        }: Artifact,
+    ) -> Self {
+        let (digest, title) = match digest_or_title {
+            Some(DigestOrTitle::Digest(digest)) => (Some(digest), None),
+            Some(DigestOrTitle::Title(title)) => (None, Some(title)),
+            None => (None, None),
+        };
+
+        Self {
+            source,
+            destination,
+            digest,
+            title,
+            name,
+        }
+    }
+}
+
+impl TryFrom<ArtifactFlat> for Artifact {
+    type Error = &'static str;
+
+    fn try_from(
+        ArtifactFlat {
+            source,
+            destination,
+            digest,
+            title,
+            name,
+        }: ArtifactFlat,
+    ) -> Result<Self, Self::Error> {
+        let digest_or_title = match (digest, title) {
+            (Some(digest), None) => Some(DigestOrTitle::Digest(digest)),
+            (None, Some(title)) => Some(DigestOrTitle::Title(title)),
+            (None, None) => None,
+            (Some(_), Some(_)) => return Err("cannot set both `digest` and `title`"),
+        };
+
+        Ok(Self {
+            source,
+            destination,
+            digest_or_title,
+            name,
+        })
+    }
+}
+
+/// The `digest` or `title` field of the [`Artifact`] [`Mount`] type.
+///
+/// Used if an artifact contains more than one blob to select the blob to mount.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DigestOrTitle {
+    /// The digest to select the artifact blob with.
+    Digest(String),
+
+    /// The title to select the artifact blob with.
+    Title(String),
+}
+
+/// Bind or glob type [`Mount`].
+#[allow(clippy::struct_field_names, clippy::struct_excessive_bools)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Bind {
+    /// Mount source spec.
+    #[serde(alias = "src")]
+    pub source: PathBuf,
+
+    /// Mount destination spec.
+    #[serde(
+        default,
+        alias = "dst",
+        alias = "dest",
+        alias = "target",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub destination: Option<PathBuf>,
+
+    /// Only read permissions
+    #[serde(
+        default,
+        rename = "readonly",
+        alias = "ro",
+        skip_serializing_if = "Not::not"
+    )]
+    pub read_only: bool,
+
+    /// Bind propagation type.
+    #[serde(default, skip_serializing_if = "skip_default")]
+    pub bind_propagation: BindPropagation,
+
+    /// Do not set up a recursive bind mount.
+    #[serde(default, skip_serializing_if = "Not::not")]
+    pub bind_nonrecursive: bool,
+
+    /// SELinux relabeling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relabel: Option<SELinuxRelabel>,
+
+    /// Create an idmapped mount to the target user namespace in the container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idmap: Option<Idmap>,
+
+    /// Change recursively the owner and group of the source volume based on the UID and GID of the
+    /// container.
+    #[serde(default, alias = "U", skip_serializing_if = "Not::not")]
+    pub chown: bool,
+
+    /// Do not dereference symlinks but copy the link source into the mount destination.
+    #[serde(default, skip_serializing_if = "Not::not")]
+    pub no_dereference: bool,
+}
+
+impl Bind {
+    /// Create a [`Bind`] from a source with defaults.
+    #[cfg(test)]
+    fn new(source: PathBuf) -> Self {
+        Self {
+            source,
+            destination: None,
+            read_only: false,
+            bind_propagation: BindPropagation::default(),
+            bind_nonrecursive: false,
+            relabel: None,
+            idmap: None,
+            chown: false,
+            no_dereference: false,
+        }
+    }
+}
+
+/// Types of bind propagation.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BindPropagation {
+    Shared,
+    Slave,
+    Private,
+    Unbindable,
+    RShared,
+    RSlave,
+    RUnbindable,
+    #[default]
+    RPrivate,
+}
+
+impl FromStr for BindPropagation {
+    type Err = ParseBindPropagationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::deserialize(StrDeserializer::<de::value::Error>::new(s))
+            .map_err(|_| ParseBindPropagationError(s.to_owned()))
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("unknown bind propagation type: {0}")]
+pub struct ParseBindPropagationError(String);
+
+impl Display for BindPropagation {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.serialize(f)
+    }
+}
+
+/// SELinux relabeling.
+#[allow(clippy::doc_markdown)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SELinuxRelabel {
+    Shared,
+    Private,
+}
+
+impl From<SELinuxRelabel> for char {
+    fn from(value: SELinuxRelabel) -> Self {
+        match value {
+            SELinuxRelabel::Shared => 'z',
+            SELinuxRelabel::Private => 'Z',
+        }
+    }
+}
+
+/// devpts type [`Mount`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DevPts {
+    /// Mount destination spec.
+    #[serde(alias = "dst", alias = "dest", alias = "target")]
+    pub destination: PathBuf,
+
+    /// UID of the file owner.
+    #[serde(default, skip_serializing_if = "skip_default")]
+    pub uid: u32,
+
+    /// GID of the file owner.
+    #[serde(default, skip_serializing_if = "skip_default")]
+    pub gid: u32,
+
+    /// Permission mask for the file (default 600).
+    #[serde(
+        default = "mode::default",
+        with = "mode",
+        skip_serializing_if = "mode::skip_default"
+    )]
+    pub mode: Mode,
+
+    /// Maximum number of PTYs (default 1048576).
+    #[serde(default = "ptys::default", skip_serializing_if = "ptys::skip_default")]
+    pub max: u32,
+}
+
+mod ptys {
+    pub const fn default() -> u32 {
+        1_048_576
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub const fn skip_default(ptys: &u32) -> bool {
+        *ptys == default()
+    }
+}
+
+impl DevPts {
+    /// Create a [`DevPts`] from a destination with defaults.
+    #[cfg(test)]
+    fn new(destination: PathBuf) -> Self {
+        Self {
+            destination,
+            uid: 0,
+            gid: 0,
+            mode: mode::default(),
+            max: ptys::default(),
+        }
+    }
+}
+
+/// Image type [`Mount`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Image {
+    /// Mount source spec.
+    #[serde(alias = "src")]
+    pub source: String,
+
+    /// Mount destination spec.
+    #[serde(alias = "dst", alias = "dest", alias = "target")]
+    pub destination: PathBuf,
+
+    /// Read-write permission.
+    #[serde(
+        default,
+        rename = "readwrite",
+        alias = "rw",
+        skip_serializing_if = "Not::not"
+    )]
+    pub read_write: bool,
+
+    /// Mount only a specific path within the image, instead of the whole image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<PathBuf>,
+}
+
+/// Volume type [`Mount`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Volume {
+    /// Mount source spec.
+    #[serde(default, alias = "src", skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Mount destination spec.
+    #[serde(alias = "dst", alias = "dest", alias = "target")]
+    pub destination: PathBuf,
+
+    /// Only read permissions
+    #[serde(
+        default,
+        rename = "readonly",
+        alias = "ro",
+        skip_serializing_if = "Not::not"
+    )]
+    pub read_only: bool,
+
+    /// Change recursively the owner and group of the source volume based on the UID and GID of the
+    /// container.
+    #[serde(default, alias = "U", skip_serializing_if = "Not::not")]
+    pub chown: bool,
+
+    /// Create an idmapped mount to the target user namespace in the container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idmap: Option<Idmap>,
+
+    /// Mount only a specific path within the volume, instead of the whole volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<PathBuf>,
+}
+
+impl Volume {
+    /// Create a new [`Volume`] from a `destination`.
+    #[cfg(test)]
+    fn new(destination: PathBuf) -> Self {
+        Self {
+            source: None,
+            destination,
+            read_only: false,
+            chown: false,
+            idmap: None,
+            subpath: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact() -> Result<(), ParseMountError> {
+        // No digest or title
+        let string = "type=artifact,source=artifact,destination=/dst";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Artifact(Artifact {
+                source: "artifact".to_owned(),
+                destination: "/dst".into(),
+                digest_or_title: None,
+                name: None,
+            })
+        );
+        assert_eq!(mount.to_string(), string);
+
+        // Digest
+        let string = "type=artifact,source=artifact,destination=/dst,digest=digest,name=name";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Artifact(Artifact {
+                source: "artifact".to_owned(),
+                destination: "/dst".into(),
+                digest_or_title: Some(DigestOrTitle::Digest("digest".to_owned())),
+                name: Some("name".to_owned()),
+            })
+        );
+        assert_eq!(mount.to_string(), string);
+
+        // Title
+        let string = "type=artifact,source=artifact,destination=/dst,title=title,name=name";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Artifact(Artifact {
+                source: "artifact".to_owned(),
+                destination: "/dst".into(),
+                digest_or_title: Some(DigestOrTitle::Title("title".to_owned())),
+                name: Some("name".to_owned()),
+            })
+        );
+        assert_eq!(mount.to_string(), string);
+
+        // Digest and title is error
+        assert!(
+            Mount::from_str(
+                "type=artifact,source=artifact,destination=/dst,digest=digest,title=title,name=name"
+            )
+            .is_err()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn bind() -> Result<(), ParseMountError> {
+        let string = "type=bind,source=/src,destination=/dst";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Bind(Bind {
+                destination: Some("/dst".into()),
+                ..Bind::new("/src".into())
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        let string = "type=bind,source=/src,destination=/dst,readonly=true,bind-propagation=shared,\
+            bind-nonrecursive=true,relabel=shared,idmap,chown=true,no-dereference=true";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Bind(Bind {
+                source: "/src".into(),
+                destination: Some("/dst".into()),
+                read_only: true,
+                bind_propagation: BindPropagation::Shared,
+                bind_nonrecursive: true,
+                relabel: Some(SELinuxRelabel::Shared),
+                idmap: Some(Idmap::default()),
+                chown: true,
+                no_dereference: true,
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn devpts() -> Result<(), ParseMountError> {
+        let string = "type=devpts,destination=/dst";
+        let mount: Mount = string.parse()?;
+        assert_eq!(mount, Mount::DevPts(DevPts::new("/dst".into())));
+        assert_eq!(mount.to_string(), string);
+
+        let string = "type=devpts,destination=/dst,uid=100,gid=100,mode=755,max=10";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::DevPts(DevPts {
+                destination: "/dst".into(),
+                uid: 100,
+                gid: 100,
+                mode: Mode::from(0o755),
+                max: 10
+            })
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn glob() -> Result<(), ParseMountError> {
+        let string = "type=glob,source=/usr/lib/libfoo*,destination=/usr/lib,readonly=true";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Glob(Bind {
+                destination: Some("/usr/lib".into()),
+                read_only: true,
+                ..Bind::new("/usr/lib/libfoo*".into())
+            })
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn image() -> Result<(), ParseMountError> {
+        let string =
+            "type=image,source=fedora,destination=/fedora-image,readwrite=true,subpath=path";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Image(Image {
+                source: "fedora".into(),
+                destination: "/fedora-image".into(),
+                read_write: true,
+                subpath: Some("path".into()),
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ramfs() -> Result<(), ParseMountError> {
+        let string = "type=ramfs,destination=/dst,readonly=true,\
+                        tmpfs-size=256m,tmpfs-mode=755,notmpcopyup,chown=true";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Ramfs(Tmpfs {
+                destination: "/dst".into(),
+                read_only: true,
+                size: tmpfs::Size::Mebibytes(256),
+                mode: Mode::from(0o755),
+                tmpcopyup: false,
+                chown: true
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn tmpfs() -> Result<(), ParseMountError> {
+        let string = "type=tmpfs,destination=/dst,readonly=true,\
+                        tmpfs-size=256m,tmpfs-mode=755,notmpcopyup,chown=true";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Tmpfs(Tmpfs {
+                destination: "/dst".into(),
+                read_only: true,
+                size: tmpfs::Size::Mebibytes(256),
+                mode: Mode::from(0o755),
+                tmpcopyup: false,
+                chown: true
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+
+    #[test]
+    fn volume() -> Result<(), ParseMountError> {
+        let string = "type=volume,destination=/dst";
+        let mount: Mount = string.parse()?;
+        assert_eq!(mount, Mount::Volume(Volume::new("/dst".into())),);
+        assert_eq!(mount.to_string(), string);
+
+        let string = "type=volume,source=volume,destination=/dst,readonly=true,chown=true,\
+            idmap=uids=@0-1-2,subpath=/subpath";
+        let mount: Mount = string.parse()?;
+        assert_eq!(
+            mount,
+            Mount::Volume(Volume {
+                source: Some("volume".into()),
+                destination: "/dst".into(),
+                read_only: true,
+                chown: true,
+                idmap: Some(Idmap {
+                    uids: vec![idmap::Mapping {
+                        container_relative: true,
+                        from: 0,
+                        to: 1,
+                        length: 2,
+                    }],
+                    gids: Vec::new(),
+                }),
+                subpath: Some("/subpath".into()),
+            }),
+        );
+        assert_eq!(mount.to_string(), string);
+
+        Ok(())
+    }
+}

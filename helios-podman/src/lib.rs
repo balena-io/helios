@@ -5,8 +5,12 @@
 use std::ops::Deref;
 
 use helios_oci as oci;
+use helios_util as util;
 
-// Re-export everything except the Client and Container
+// FIXME: this is only pub to avoid dead_code warnings
+// remove once feature support is more complete
+pub mod podlet;
+mod quadlet;
 pub use oci::{
     ContainerConfig, ContainerState, ContainerStatus, DateTime, Error, Image, ImageConfig,
     LocalContainer, LocalImage, LocalNamespace, LocalNetwork, LocalVolume, Namespace,
