@@ -11,8 +11,19 @@ pub enum Error {
     StreamEnded,
     #[error("command failed with code: {0}")]
     ExitStatus(i32),
+    #[error("unit not found: {0}")]
+    NoSuchUnit(String),
     #[error("D-Bus error: {0}")]
     DBus(#[from] zbus::Error),
+}
+
+/// Returns true if the error indicates the unit does not exist or is not loaded.
+fn is_no_such_unit(err: &zbus::Error) -> bool {
+    matches!(
+        err,
+        zbus::Error::MethodError(name, _, _)
+            if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit"
+    )
 }
 
 // systemd Manager D-Bus interface
@@ -36,6 +47,15 @@ trait Manager {
 
     /// StopUnit method - stop a unit
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// StartUnit method - start an existing unit
+    fn start_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// RestartUnit method - restart a unit
+    fn restart_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// Reload method - reload the systemd daemon configuration
+    fn reload(&self) -> zbus::Result<()>;
 
     /// ResetFailedUnit method - reset the failed state of a unit
     fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
@@ -225,10 +245,25 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
     Ok(())
 }
 
-/// Stops a systemd unit by name.
-///
-/// This function attempts to stop a systemd unit. If the unit is already stopped
-/// or doesn't exist, it will not fail - it returns Ok(()) in all cases.
+/// Waits for a systemd unit to reach one of the expected `ActiveState` values.
+async fn wait_for_state(
+    connection: &Connection,
+    unit_path: &ObjectPath<'_>,
+    target_states: &[&str],
+) -> Result<(), Error> {
+    use tokio::time::{Duration, interval};
+
+    let mut poll_interval = interval(Duration::from_millis(100));
+    loop {
+        let state: String = get_unit_property(connection, unit_path, "ActiveState").await?;
+        if target_states.iter().any(|&s| s == state) {
+            return Ok(());
+        }
+        poll_interval.tick().await;
+    }
+}
+
+/// Stops a systemd unit by name waiting until the unit reaches the inactive or failed state
 ///
 /// # Example
 ///
@@ -237,7 +272,7 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     systemd::stop("my-script").await?;
+///     systemd::stop("my-service").await?;
 ///     Ok(())
 /// }
 /// ```
@@ -246,8 +281,72 @@ pub async fn stop(unit: &str) -> Result<(), Error> {
     let manager = ManagerProxy::new(&connection).await?;
     let full_unit_name = format!("{unit}.service");
 
-    // Stop the unit with replace mode to cancel any pending jobs
-    let _ = manager.stop_unit(&full_unit_name, "replace").await;
+    // Stop the unit with replace mode to cancel any pending jobs.
+    if let Err(e) = manager.stop_unit(&full_unit_name, "replace").await {
+        if is_no_such_unit(&e) {
+            return Err(Error::NoSuchUnit(full_unit_name));
+        }
+        return Err(e)?;
+    }
+
+    match manager.get_unit(&full_unit_name).await {
+        Ok(unit_path) => wait_for_state(&connection, &unit_path, &["inactive", "failed"]).await?,
+        // the unit got deleted before we could wait for the state
+        Err(e) if is_no_such_unit(&e) => {}
+        Err(e) => return Err(e)?,
+    };
+
+    Ok(())
+}
+
+/// Starts an existing systemd unit by name waiting until it reaches the `active` state
+pub async fn start(unit: &str) -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+    let full_unit_name = format!("{unit}.service");
+
+    if let Err(e) = manager.start_unit(&full_unit_name, "replace").await {
+        if is_no_such_unit(&e) {
+            return Err(Error::NoSuchUnit(full_unit_name));
+        }
+        return Err(e.into());
+    }
+
+    let unit_path = manager.get_unit(&full_unit_name).await?;
+    wait_for_state(&connection, &unit_path, &["active"]).await?;
+
+    Ok(())
+}
+
+/// Restarts a systemd unit by name.
+///
+/// When `wait` is true, blocks until the unit reaches the `active` state.
+pub async fn restart(unit: &str, wait: bool) -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+    let full_unit_name = format!("{unit}.service");
+
+    if let Err(e) = manager.restart_unit(&full_unit_name, "replace").await {
+        if is_no_such_unit(&e) {
+            return Err(Error::NoSuchUnit(full_unit_name));
+        }
+        return Err(e.into());
+    }
+
+    if wait {
+        let unit_path = manager.get_unit(&full_unit_name).await?;
+        wait_for_state(&connection, &unit_path, &["active"]).await?;
+    }
+
+    Ok(())
+}
+
+/// Reloads the systemd daemon configuration (equivalent to `systemctl daemon-reload`).
+pub async fn daemon_reload() -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+
+    manager.reload().await?;
 
     Ok(())
 }
