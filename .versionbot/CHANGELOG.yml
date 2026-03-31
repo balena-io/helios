@@ -1,4 +1,40 @@
 - commits:
+    - subject: Mask sensitive environment variables in logs
+      hash: 41acfa3df28711dfe566ea2abd91f9c998603942
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add system environment variables to services
+      hash: b2868fe6f38837710d4ccc275f63e733dc474d0b
+      body: |
+        Adds
+        - BALENA_DEVICE_UUID
+        - BALENA_APP_UUID
+        - BALENA_SERVICE_NAME
+        - BALENA_HOST_OS_VERSION
+        - BALENA_HOST_OS_BUILD
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add environment variable support
+      hash: 0e773776ba60b8835ba6fa9830da4df579159aaa
+      body: |
+        If environment is defined on the composition received from the
+        target state it is added to the container configuration.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.3
+  title: ""
+  date: 2026-03-31T20:15:56.830Z
+- commits:
     - subject: Use oci::ContainerConfig as the main service config model
       hash: bed52ee9998c07e7cf94008d81e6426e843bcb5c
       body: |
