@@ -102,6 +102,9 @@ enum PollAction {
     },
 }
 
+// Timeout to re-emit the target state. Configured to 24 hours
+const REEMIT_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
+
 #[instrument(name = "poll", skip_all)]
 pub async fn start_poll(
     uuid: Uuid,
@@ -117,6 +120,8 @@ pub async fn start_poll(
     let mut next_poll_time = Instant::now() + next_poll(&remote.request);
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>>;
     let mut interrupt = Interrupt::new();
+
+    let mut daily_reemit_poll = Instant::now() + REEMIT_TIMEOUT;
 
     // Use the client cached target if any as the result of the first poll
     if let Some(target_state) = initial_target {
@@ -146,6 +151,15 @@ pub async fn start_poll(
                 PollAction::Poll(PollRequest {
                     opts: UpdateOpts::default(),
                     reemit: false,
+                })
+            }
+
+            // Wake up every 24 hours and re-emit the target state to re-try expired
+            // abort state
+            _ = tokio::time::sleep_until(daily_reemit_poll) => {
+                PollAction::Poll(PollRequest {
+                    opts: UpdateOpts::default(),
+                    reemit: true,
                 })
             }
 
@@ -211,6 +225,9 @@ pub async fn start_poll(
 
                 // If there is a new target
                 if let Some(target_state) = target {
+                    // re-set the daily poll timer
+                    daily_reemit_poll = Instant::now() + REEMIT_TIMEOUT;
+
                     // put the poll back on the channel
                     match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
                         Ok(RemoteTargetState(mut map)) => {
