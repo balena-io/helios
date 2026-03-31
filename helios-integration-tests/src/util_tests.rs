@@ -88,34 +88,155 @@ async fn test_systemd_run_nonexistent_command() {
 }
 
 #[tokio::test]
+async fn test_systemd_start_nonexistent_unit() {
+    before();
+    // Try to start a unit that doesn't exist
+    let err = systemd::start("test-nonexistent-unit").await.unwrap_err();
+    assert!(
+        matches!(err, systemd::Error::NoSuchUnit(_)),
+        "expected NoSuchUnit, got {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_systemd_start_failing_unit() {
+    before();
+    // Create a unit that will fail and continue returning ActiveState `failed` on
+    // subsequent restarts
+    let cmd = Command::new("/nonexistent/command");
+    let _ = systemd::run("test-start-failing", &cmd).await;
+
+    // Starting a unit that fails to activate must return an error instead of
+    // waiting for the `active` state forever.
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        systemd::start("test-start-failing"),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "start should not hang for a unit that fails to activate"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "start should error for a unit that fails to activate"
+    );
+}
+
+#[tokio::test]
+async fn test_systemd_restart_failing_unit() {
+    before();
+    // Create a unit that will fail and continue returning ActiveState `failed` on
+    // subsequent restarts
+    let cmd = Command::new("/nonexistent/command");
+    let _ = systemd::run("test-restart-failing", &cmd).await;
+
+    // Restarting a unit that fails to activate must return an error instead of
+    // waiting for the `active` state forever.
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        systemd::restart("test-restart-failing"),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "restart should not hang for a unit that fails to activate"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "restart should error for a unit that fails to activate"
+    );
+}
+
+#[tokio::test]
+async fn test_systemd_start_running_unit() {
+    before();
+    // Start a long-running transient unit so a real, active unit exists.
+    let cmd = Command::new("/bin/sh").args(&["-c", "sleep 10"]);
+    let handle = tokio::spawn(async move { systemd::run("test-start-running", &cmd).await });
+
+    // Wait for the unit to be up and running.
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    // Starting an already-active unit enqueues a no-op job that completes with
+    // result "done", so start must succeed (exercises the success path).
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        systemd::start("test-start-running"),
+    )
+    .await;
+
+    assert!(result.is_ok(), "start should not hang for a running unit");
+    assert!(
+        result.unwrap().is_ok(),
+        "start of an active unit should succeed"
+    );
+
+    // Clean up: stopping lets the background run() observe the unit go inactive.
+    systemd::stop("test-start-running").await.unwrap();
+    handle.await.unwrap().ok();
+}
+
+#[tokio::test]
+async fn test_systemd_restart_running_unit() {
+    before();
+    // Start a long-running transient unit so a real, active unit exists.
+    let cmd = Command::new("/bin/sh").args(&["-c", "sleep 10"]);
+    let handle = tokio::spawn(async move { systemd::run("test-restart-running", &cmd).await });
+
+    // Wait for the unit to be up and running.
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    // Restarting a healthy unit re-activates it; the restart job completes with
+    // result "done", so restart must succeed.
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        systemd::restart("test-restart-running"),
+    )
+    .await;
+
+    assert!(result.is_ok(), "restart should not hang for a running unit");
+    assert!(
+        result.unwrap().is_ok(),
+        "restart of an active unit should succeed"
+    );
+
+    // Clean up the (restarted) unit.
+    systemd::stop("test-restart-running").await.unwrap();
+    handle.await.ok();
+}
+
+#[tokio::test]
 async fn test_systemd_stop_nonexistent_unit() {
     before();
     // Try to stop a unit that doesn't exist
-    let result = systemd::stop("test-nonexistent-unit").await;
-
-    // Should succeed (not fail)
-    assert!(result.is_ok(), "stopping nonexistent unit should not fail");
+    let err = systemd::stop("test-nonexistent-unit").await.unwrap_err();
+    assert!(
+        matches!(err, systemd::Error::NoSuchUnit(_)),
+        "expected NoSuchUnit, got {err}"
+    );
 }
 
 #[tokio::test]
 async fn test_systemd_stop_already_stopped_unit() {
     before();
-    // First run a command that completes quickly
-    let cmd = Command::new("/usr/bin/echo").args(&["test"]);
-    let result = systemd::run("test-already-stopped", &cmd).await;
-    assert!(result.is_ok(), "initial run should succeed");
+    // `helios-test-dummy` is a real (non-transient) unit predefined in the mock
+    // via MOCK_SYSTEMD_UNITS. Unlike a transient unit it is not garbage-collected
+    // when it becomes inactive, so it stays known to systemd after being stopped —
+    // modelling a normal service unit.
 
-    // Wait a bit for the unit to become inactive
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Stop it once (it boots active) so it is inactive but still loaded.
+    systemd::stop("helios-test-dummy")
+        .await
+        .expect("stopping a running unit should succeed");
 
-    // Try to stop it again when it's already stopped
-    let result = systemd::stop("test-already-stopped").await;
-
-    // Should succeed (not fail)
-    assert!(
-        result.is_ok(),
-        "stopping already stopped unit should not fail"
-    );
+    // Stopping a unit that is already stopped but still exists must succeed as a
+    // no-op, in contrast to stopping a unit that does not exist at all.
+    systemd::stop("helios-test-dummy")
+        .await
+        .expect("stopping an already-stopped unit should succeed");
 }
 
 #[tokio::test]
@@ -131,8 +252,7 @@ async fn test_systemd_stop_running_unit() {
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // Stop the running unit
-    let stop_result = systemd::stop("test-stop-running").await;
-    assert!(stop_result.is_ok(), "stopping running unit should succeed");
+    systemd::stop("test-stop-running").await.unwrap();
 
     // The original run should complete (possibly with an error since it was stopped)
     handle.await.unwrap().unwrap();
