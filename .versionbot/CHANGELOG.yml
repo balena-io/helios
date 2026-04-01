@@ -1,4 +1,31 @@
 - commits:
+    - subject: Re-emit target state every 24 hours
+      hash: 6f35b837ca9dc8fc8142c06fc4ae0a4d413ee375
+      body: |
+        This allows to re-try any aborted state that may be expired.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make sure to apply local target after legacy apply
+      hash: cd6ebfc0ae5a4a6761dc715cea9a547fd6133a82
+      body: |
+        This queues the update request for the next iteration if it has a valid
+        local target and the seek loop is continuing an apply from the legacy
+        supervisor.
+
+        This will have the effect that on some cases we'll see
+        supervisor/helios/supervisor applies in sequence but that should be ok
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.5
+  title: ""
+  date: 2026-04-01T22:40:53.405Z
+- commits:
     - subject: Fix helios-oci::Volume::create
       hash: d1e516e1ff3b0d418f89c3a5e209019e37b24481
       body: |
