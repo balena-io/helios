@@ -486,9 +486,9 @@ pub async fn start_seek(
                     let worker = &worker;
                     let current_state = &mut current_state;
 
-                    // If this is the case we already know the target won't be processed by the
-                    // apply block so, we just put it back on the pending queue.
-                    if let TargetState::Local { .. } = update_req.target
+                    // If we are continuing a legacy apply we also set the next target
+                    // if it has valid target so any pending steps can be handled by this loop
+                    if update_req.target.value().is_some()
                         && matches!(prev_seek_state, SeekState::Legacy)
                     {
                         next_target.set(update_req.clone());
