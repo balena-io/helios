@@ -1,4 +1,18 @@
 - commits:
+    - subject: Fix helios-oci::Volume::create
+      hash: d1e516e1ff3b0d418f89c3a5e209019e37b24481
+      body: |
+        The function was creating a Volume with the local namespace instead of
+        the generic namespace N
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.4
+  title: ""
+  date: 2026-04-01T18:34:31.407Z
+- commits:
     - subject: Mask sensitive environment variables in logs
       hash: 41acfa3df28711dfe566ea2abd91f9c998603942
       body: ""
