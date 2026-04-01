@@ -27,7 +27,7 @@ impl<N: Namespace> Volume<'_, N> {
     pub async fn create(
         &self,
         name: &str,
-        namespace: impl Into<LocalNamespace>,
+        namespace: impl Into<N>,
         config: VolumeConfig,
     ) -> Result<String> {
         let id = namespace.into().to_identifier(name);
