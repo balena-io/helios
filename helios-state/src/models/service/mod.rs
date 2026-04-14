@@ -2,7 +2,7 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use crate::oci::{self, ContainerConfig, DateTime, LocalContainer, RestartPolicy};
+use crate::oci::{self, ContainerConfig, DateTime, LocalContainer, NetworkSettings, RestartPolicy};
 use crate::remote_model::{RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget};
 
 use super::image::ImageRef;
@@ -153,6 +153,26 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteRestartPolicy::UnlessStopped => RestartPolicy::UnlessStopped,
         };
 
+        // convert the service networks (already priority-sorted from remote model)
+        let networks = composition
+            .networks
+            .into_iter()
+            .map(|(name, config)| {
+                let endpoint = config
+                    .map(|c| NetworkSettings {
+                        aliases: c.aliases,
+                        ipv4_address: c.ipv4_address,
+                        ipv6_address: c.ipv6_address,
+                        link_local_ips: c.link_local_ips,
+                        mac_address: c.mac_address,
+                        driver_opts: c.driver_opts,
+                        gw_priority: c.gw_priority.map(|p| p as i64),
+                    })
+                    .unwrap_or_default();
+                (name, endpoint)
+            })
+            .collect();
+
         ServiceTarget {
             id,
             image: image.into(),
@@ -162,6 +182,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 environment,
                 labels,
                 restart_policy,
+                networks,
             }),
         }
     }

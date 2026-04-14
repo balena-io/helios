@@ -140,6 +140,10 @@ default-features = false
 version = "1.7"
 default-features = false
 
+[workspace.dependencies.indexmap]
+version = "2"
+features = ["serde"]
+
 [workspace.dependencies.globset]
 version = "0.4"
 default-features = false

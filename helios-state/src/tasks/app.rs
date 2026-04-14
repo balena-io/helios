@@ -317,11 +317,54 @@ fn create_network(
 /// Reconfigure a network by uninstalling it when the config has changed
 ///
 /// After uninstall, the planner will re-create the network with the new config.
-fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Option<Task> {
+fn reconfigure_network(
+    net: View<Network>,
+    System(device): System<Device>,
+    Target(tgt): Target<Network>,
+    Args((app_uuid, _, net_name)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
     if net.config != tgt.config {
-        Some(uninstall_network.into_task())
+        let mut tasks = Vec::new();
+        let services_depending_on_network = device
+            .apps
+            .get(&app_uuid)
+            .map(|app| {
+                app.releases
+                    .iter()
+                    .flat_map(|(rel_uuid, rel)| {
+                        rel.services
+                            .iter()
+                            // find any services referencing the network that have a container
+                            .filter(|(_, svc)| {
+                                svc.oci.is_some() && svc.config.networks.contains_key(&net_name)
+                            })
+                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
+                    })
+                    .collect::<Vec<(&Uuid, &String)>>()
+            })
+            .unwrap_or_default();
+
+        // uninstall any services depending on the network first
+        for (rel_uuid, svc_name) in services_depending_on_network {
+            tasks.push(
+                stop_service_when_requirements_are_met
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
+            tasks.push(
+                remove_service_container
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
+        }
+
+        if tasks.is_empty() {
+            tasks.push(uninstall_network.into_task());
+        }
+
+        tasks
     } else {
-        None
+        Vec::new()
     }
 }
 
@@ -435,7 +478,20 @@ fn remove_network_when_requirements_are_met(
         // State-only removal, Docker network preserved for new release to adopt
         Some(remove_network.into_task())
     } else {
-        Some(uninstall_network.into_task())
+        let services_depend_on_network = device.apps.get(&app_uuid).is_some_and(|app| {
+            app.releases.values().any(|rel| {
+                rel.services
+                    .values()
+                    .any(|svc| svc.config.networks.contains_key(&net_name))
+            })
+        });
+
+        // Cannot uninstall a network that has dependent services on any installed release
+        if !services_depend_on_network {
+            Some(uninstall_network.into_task())
+        } else {
+            None
+        }
     }
 }
 
@@ -535,7 +591,8 @@ fn migrate_service(
 ///
 /// A service can be installed after
 /// - the image has been pulled
-/// - any networks and volumes exist with the right configuration (TODO)
+/// - any networks referenced by the service exist in the release and have been created
+/// - any volumes referenced by the service exist in the release and have been created
 /// - if upgrading between releases, and there is an identically named service in
 ///   a previous release, the services are for different images and have different
 ///   configurations, otherwise the old service just requires as migration
@@ -544,6 +601,7 @@ fn migrate_service(
 fn install_service_when_requirements_are_met(
     svc: View<Service>,
     System(device): System<Device>,
+    SystemTarget(tgt_device): SystemTarget<Device>,
     Target(tgt): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
@@ -552,11 +610,43 @@ fn install_service_when_requirements_are_met(
         return None;
     }
 
+    // Check that all required networks have been created in the release
+    let networks_ready = if !tgt.config.networks.is_empty() {
+        let release = device
+            .apps
+            .get(&app_uuid)
+            .and_then(|app| app.releases.get(&rel_uuid));
+
+        let t_release = tgt_device
+            .apps
+            .get(&app_uuid)
+            .and_then(|app| app.releases.get(&rel_uuid));
+
+        release.is_some_and(|release| {
+            // for every configured network
+            tgt.config.networks.keys().all(|net_name| {
+                // the network has been created
+                if release.networks.contains_key(net_name)
+                    && let Some(net) = release.networks.get(net_name)
+                    && let Some(t_net) = t_release.and_then(|t_rel| t_rel.networks.get(net_name))
+                    // and the installed network configuration matches its target
+                    && net.config == t_net.config
+                {
+                    return true;
+                }
+                false
+            })
+        })
+    } else {
+        true
+    };
+
     // Skip the task if the image for the service doesn't exist yet
     // or there is an identically named service with the same image and
     // config. In the last scenario, the service will be created by the `uninstall_service`
     // operation
-    if let ImageRef::Uri(tgt_img) = &tgt.image
+    if networks_ready
+        && let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
         && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name)
             .is_none_or(|svc| svc.image.digest() != tgt.image.digest() || svc.config != tgt.config)
@@ -590,14 +680,33 @@ fn install_service(
         svc.installing = true;
         let _ = svc.flush().await;
 
-        let container_config =
+        let mut container_config =
             std::mem::take(&mut svc.config).into_oci_config(svc.id, &svc_name, &app_uuid);
+
+        // Extract networks to connect later
+        let mut networks = std::mem::take(&mut container_config.networks);
+
+        // remove only the first network so it can be used as the main container network,
+        // the rest of the networks will be configured via connect() to ensure priority order
+        // is preserved
+        if let Some((net_name, net_config)) = networks.shift_remove_index(0) {
+            container_config.networks.insert(net_name, net_config);
+        }
 
         // create the container namespaced by release uuid
         let container_id = docker
             .container()
             .create(&svc_name, rel_uuid.as_str(), &svc.image, container_config)
             .await?;
+
+        // Connect the container to each network in priority order
+        for (net_name, endpoint_config) in networks {
+            let endpoint_settings = endpoint_config.into();
+            docker
+                .network()
+                .connect(&net_name, &container_id, endpoint_settings)
+                .await?;
+        }
 
         // check that the container was created and generate the Service configuration
         // from the image config and container info

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use bollard::{
     config::{
-        ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum, RestartPolicyNameEnum,
+        ContainerInspectResponse, ContainerStateStatusEnum, EndpointIpamConfig, EndpointSettings,
+        HealthStatusEnum, NetworkingConfig, RestartPolicyNameEnum,
     },
     models::ContainerCreateBody,
     query_parameters::{
@@ -10,6 +11,7 @@ use bollard::{
         RemoveContainerOptions, RenameContainerOptions,
     },
 };
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
@@ -270,11 +272,33 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .unwrap_or_default();
         let cmd = config.and_then(|c| c.cmd);
 
+        // Read network endpoint configurations from the container's network settings
+        let networks = value
+            .network_settings
+            .and_then(|ns| ns.networks)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, endpoint)| {
+                let ipam = endpoint.ipam_config.unwrap_or_default();
+                let config = NetworkSettings {
+                    aliases: endpoint.aliases.unwrap_or_default(),
+                    ipv4_address: ipam.ipv4_address,
+                    ipv6_address: ipam.ipv6_address,
+                    link_local_ips: ipam.link_local_ips.unwrap_or_default(),
+                    mac_address: endpoint.mac_address.filter(|a| !a.is_empty()),
+                    driver_opts: endpoint.driver_opts.unwrap_or_default(),
+                    gw_priority: endpoint.gw_priority.filter(|a| a != &0),
+                };
+                (name, config)
+            })
+            .collect();
+
         let config = ContainerConfig {
             command: cmd,
             environment,
             labels,
             restart_policy,
+            networks,
         };
 
         let created: DateTime = value
@@ -368,9 +392,77 @@ pub enum RestartPolicy {
     UnlessStopped,
 }
 
-/// Container configuration that is portable between hosts
+/// Per-network endpoint configuration for a container
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct NetworkSettings {
+    /// Alternative hostnames for the container on this network
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+
+    /// Static IPv4 address for the container on this network
+    pub ipv4_address: Option<String>,
+
+    /// Static IPv6 address for the container on this network
+    pub ipv6_address: Option<String>,
+
+    /// Link-local IP addresses
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub link_local_ips: Vec<String>,
+
+    /// MAC address for the container on this network
+    pub mac_address: Option<String>,
+
+    /// Driver-specific options
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub driver_opts: HashMap<String, String>,
+
+    /// Gateway priority (highest wins default gateway)
+    pub gw_priority: Option<i64>,
+}
+
+impl From<NetworkSettings> for EndpointSettings {
+    fn from(config: NetworkSettings) -> Self {
+        let ipam_config = if config.ipv4_address.is_some()
+            || config.ipv6_address.is_some()
+            || !config.link_local_ips.is_empty()
+        {
+            Some(EndpointIpamConfig {
+                ipv4_address: config.ipv4_address,
+                ipv6_address: config.ipv6_address,
+                link_local_ips: if config.link_local_ips.is_empty() {
+                    None
+                } else {
+                    Some(config.link_local_ips)
+                },
+            })
+        } else {
+            None
+        };
+
+        EndpointSettings {
+            ipam_config,
+            aliases: if config.aliases.is_empty() {
+                None
+            } else {
+                Some(config.aliases)
+            },
+            mac_address: config.mac_address,
+            driver_opts: if config.driver_opts.is_empty() {
+                None
+            } else {
+                Some(config.driver_opts)
+            },
+            gw_priority: config.gw_priority,
+            ..Default::default()
+        }
+    }
+}
+
+/// Container configuration that is portable between hosts
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(default)]
 pub struct ContainerConfig {
     /// Command to run specified as an array of strings
@@ -386,6 +478,25 @@ pub struct ContainerConfig {
 
     /// Restart policy for the container
     pub restart_policy: RestartPolicy,
+
+    /// Network endpoint configurations, ordered by connection priority
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub networks: IndexMap<String, NetworkSettings>,
+}
+
+/// Compare configs treating networks as unordered (Docker inspect doesn't preserve priority order)
+impl PartialEq for ContainerConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.command == other.command
+            && self.environment == other.environment
+            && self.labels == other.labels
+            && self.restart_policy == other.restart_policy
+            && self.networks.len() == other.networks.len()
+            && self
+                .networks
+                .iter()
+                .all(|(k, v)| other.networks.get(k) == Some(v))
+    }
 }
 
 impl From<ContainerConfig> for ContainerCreateBody {
@@ -395,6 +506,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             environment,
             labels,
             restart_policy,
+            networks,
         } = value;
 
         let env = if environment.is_empty() {
@@ -429,7 +541,21 @@ impl From<ContainerConfig> for ContainerCreateBody {
             }
         };
 
+        let network_mode = networks.first().map(|(net_name, _)| net_name.clone());
+        let endpoints_config = networks
+            .into_iter()
+            .map(|(net_name, net)| {
+                let config: EndpointSettings = net.into();
+                (net_name, config)
+            })
+            .collect();
+
+        let networking_config = NetworkingConfig {
+            endpoints_config: Some(endpoints_config),
+        };
+
         let host_config = bollard::config::HostConfig {
+            network_mode,
             restart_policy: Some(restart_policy),
             ..Default::default()
         };
@@ -438,6 +564,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cmd,
             env,
             labels: Some(labels),
+            networking_config: Some(networking_config),
             host_config: Some(host_config),
             ..Default::default()
         }

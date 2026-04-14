@@ -1028,6 +1028,7 @@ dependencies = [
  "bollard",
  "chrono",
  "helios-util",
+ "indexmap",
  "serde",
  "serde_json",
  "serde_with",
@@ -1057,6 +1058,7 @@ name = "helios-remote-model"
 version = "0.22.7"
 dependencies = [
  "helios-util",
+ "indexmap",
  "serde",
  "serde_json",
  "serde_path_to_error",

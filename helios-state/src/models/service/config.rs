@@ -6,11 +6,12 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci;
+use crate::oci::{self, LocalNamespace, Namespace};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
+const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 
@@ -39,10 +40,8 @@ impl From<oci::ContainerConfig> for ServiceConfig {
     fn from(mut config: oci::ContainerConfig) -> Self {
         let labels = &mut config.labels;
 
-        // Remove the supervised label to skip it in the state comparison
-        labels.remove(LABEL_SUPERVISED);
-        labels.remove(LABEL_APP_UUID);
-        labels.remove(LABEL_SERVICE_NAME);
+        // Get the app_uuid for use in later operations
+        let maybe_app_uuid = labels.remove(LABEL_APP_UUID);
 
         // Read the list of fields defined in the composition used to create
         // this container
@@ -59,6 +58,31 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         config
             .environment
             .retain(|k, _| label_config_env.contains(k));
+
+        // De-namespace network names by stripping the app_uuid suffix
+        if let Some(app_uuid) = maybe_app_uuid {
+            let namespace = LocalNamespace::from(app_uuid);
+            let networks = std::mem::take(&mut config.networks);
+            config.networks = networks
+                .into_iter()
+                .map(|(net_id, mut net_config)| {
+                    let net_name = namespace.to_entity(&net_id);
+
+                    // get the list of target aliases from labels
+                    let target_aliases: Vec<String> = labels
+                        .remove(&format!("{LABEL_CONFIG_NETWORKS}.{net_name}.aliases"))
+                        .and_then(|s| json::from_str(&s).ok())
+                        .unwrap_or_default();
+
+                    // keep only aliases that are in the target state
+                    net_config
+                        .aliases
+                        .retain(|alias| target_aliases.contains(alias));
+
+                    (net_name, net_config)
+                })
+                .collect();
+        }
 
         // Remove labels from the container that were not defined in
         // the composition. These are coming from the image and should not be
@@ -150,6 +174,30 @@ impl ServiceConfig {
         labels.insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
         labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
         labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
+
+        let networks = std::mem::take(&mut config.networks);
+        let namespace = LocalNamespace::from(app_uuid.as_str());
+        for (net_name, mut net_config) in networks {
+            // store the target aliases into a label as the engine may insert new aliases
+            // that we want to remove when reading the container state
+            labels.insert(
+                format!("{LABEL_CONFIG_NETWORKS}.{net_name}.aliases"),
+                net_config
+                    .aliases
+                    .iter()
+                    .map(|s| json::Value::String(s.to_owned()))
+                    .collect::<json::Value>()
+                    .to_string(),
+            );
+
+            let net_id = namespace.to_identifier(&net_name);
+
+            // insert the current service name as an alias on the network
+            // so it can be referenced by name from other containers
+            net_config.aliases.push(svc_name.to_string());
+
+            config.networks.insert(net_id, net_config);
+        }
 
         config
     }

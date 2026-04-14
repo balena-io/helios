@@ -10,17 +10,13 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-mod command;
 mod labels;
 mod network;
-mod restart_policy;
 mod service;
 mod volume;
 
-pub use command::*;
 pub use labels::*;
 pub use network::*;
-pub use restart_policy::*;
 pub use service::*;
 pub use volume::*;
 
@@ -258,11 +254,31 @@ impl<'de> Deserialize<'de> for Release {
         }
 
         let mut raw: ReleaseRaw = ReleaseRaw::deserialize(deserializer)?;
+        let mut needs_default_net = false;
+
+        for (svc_name, svc) in raw.services.iter_mut() {
+            for net_name in svc.composition.networks.keys() {
+                if !raw.networks.contains_key(net_name) {
+                    return Err(serde::de::Error::custom(format!(
+                        "service '{svc_name}' refers to undefined network {net_name}"
+                    )));
+                }
+            }
+
+            // FIXME: this also needs to check if the network has host networking once that feature is added
+            if svc.composition.networks.is_empty() {
+                needs_default_net = true;
+                svc.composition
+                    .networks
+                    .entry("default".to_string())
+                    .or_insert(None);
+            }
+        }
 
         // Add a default network to isolate app services
-        // FIXME: the network only needs to exist if there are services do not define a network
-        // and are not configured for host networking
-        raw.networks.entry("default".to_string()).or_default();
+        if needs_default_net {
+            raw.networks.entry("default".to_string()).or_default();
+        }
 
         Ok(Release {
             services: raw.services,
@@ -384,6 +400,49 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_target_service_with_invalid_networks() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "networks": {
+                                            "my-net": {
+                                                "aliases": "my-alias"
+                                            }
+
+                                        },
+                                    }
+                                }
+                            },
+                            "networks": {
+                                "my-net": {}
+                            }
+                        }
+                    }
+                },
+            }
+
+        });
+
+        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "apps.?.releases.?.services.main.composition.networks.my-net.aliases: invalid type: string \"my-alias\", expected a sequence"
+        )
+    }
+
+    #[test]
     fn test_accepts_single_release_with_volumes_and_networks() {
         let json = json!({
             "release-one": {
@@ -467,15 +526,41 @@ mod tests {
     }
 
     #[test]
-    fn test_release_injects_default_network_when_missing() {
+    fn test_release_injects_default_network_for_services_without_net_config() {
         let release: Release = serde_json::from_value(json!({
-            "services": {},
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                },
+                "my-other-service": {
+                    "id": 2,
+                    "image": "ubuntu:latest",
+                    "composition": {
+                        "networks": {"my-net": {}}
+                    }
+                }
+            },
             "volumes": {},
-            "networks": {}
+            "networks": {
+                "my-net": {}
+            }
         }))
         .unwrap();
 
         assert!(release.networks.contains_key("default"));
+        assert!(
+            release
+                .services
+                .get("my-service")
+                .is_some_and(|svc| svc.composition.networks.contains_key("default"))
+        );
+        assert!(
+            release
+                .services
+                .get("my-other-service")
+                .is_some_and(|svc| !svc.composition.networks.contains_key("default"))
+        );
         let default_net = &release.networks["default"];
         assert_eq!(default_net.driver, None);
         assert!(default_net.ipam.is_none());
@@ -484,7 +569,12 @@ mod tests {
     #[test]
     fn test_release_preserves_explicit_default_network() {
         let release: Release = serde_json::from_value(json!({
-            "services": {},
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                },
+            },
             "volumes": {},
             "networks": {
                 "default": {
@@ -498,27 +588,5 @@ mod tests {
         let default_net = &release.networks["default"];
         assert_eq!(default_net.driver, Some("overlay".to_string()));
         assert!(default_net.internal);
-    }
-
-    #[test]
-    fn test_release_preserves_other_networks_alongside_injected_default() {
-        let release: Release = serde_json::from_value(json!({
-            "services": {},
-            "volumes": {},
-            "networks": {
-                "custom-net": {
-                    "driver": "overlay"
-                }
-            }
-        }))
-        .unwrap();
-
-        assert_eq!(release.networks.len(), 2);
-        assert!(release.networks.contains_key("default"));
-        assert!(release.networks.contains_key("custom-net"));
-        assert_eq!(
-            release.networks["custom-net"].driver,
-            Some("overlay".to_string())
-        );
     }
 }

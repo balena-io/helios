@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use bollard::config::{EndpointSettings, NetworkConnectRequest, NetworkDisconnectRequest};
 use bollard::models::{Ipam, IpamConfig, NetworkCreateRequest, NetworkInspect};
 use bollard::query_parameters::ListNetworksOptions;
 use serde::{Deserialize, Serialize};
@@ -112,6 +113,54 @@ impl<N: Namespace> Network<'_, N> {
             .into_iter()
             .flat_map(|n| n.name.into_iter())
             .collect())
+    }
+
+    /// Connect a container to a network with the given endpoint configuration
+    pub async fn connect(
+        &self,
+        name: &str,
+        container: &str,
+        endpoint_config: EndpointSettings,
+    ) -> Result<()> {
+        let config = NetworkConnectRequest {
+            container: container.to_string(),
+            endpoint_config: Some(endpoint_config),
+        };
+
+        self.client
+            .inner()
+            .connect_network(name, config)
+            .await
+            .map_err(|e| {
+                Error::from(e).context(format!(
+                    "failed to connect container '{container}' to network '{name}'"
+                ))
+            })
+    }
+
+    /// Disconnect a container from a network
+    pub async fn disconnect(
+        &self,
+        network: &str,
+        namespace: impl Into<N>,
+        container: &str,
+    ) -> Result<()> {
+        let id = namespace.into().to_identifier(network);
+        let config = NetworkDisconnectRequest {
+            container: container.to_string(),
+            force: Some(false),
+        };
+
+        match self.client.inner().disconnect_network(&id, config).await {
+            Ok(_) => Ok(()),
+            // do not fail if the container is not connected
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(e) => Err(Error::from(e).context(format!(
+                "failed to disconnect container '{container}' from network '{network}'"
+            ))),
+        }
     }
 }
 
