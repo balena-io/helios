@@ -1141,10 +1141,11 @@ mod tests {
         );
 
         // list_at with a pattern scoped to the base
-        let paths = store
+        let mut paths = store
             .list_at(Some(Path::new("a")), Some("*.json"))
             .await
             .unwrap();
+        paths.sort();
         assert_eq!(
             paths,
             vec![PathBuf::from("1.json"), PathBuf::from("2.json")]
