@@ -2,8 +2,13 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use crate::oci::{self, ContainerConfig, DateTime, LocalContainer, NetworkSettings, RestartPolicy};
-use crate::remote_model::{RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget};
+use crate::oci::{
+    self, ContainerConfig, DateTime, LocalContainer, NetworkMode, NetworkSettings, RestartPolicy,
+};
+use crate::remote_model::{
+    NetworkMode as RemoteNetworkMode, RestartPolicy as RemoteRestartPolicy,
+    Service as RemoteServiceTarget,
+};
 
 use super::image::ImageRef;
 
@@ -173,6 +178,12 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             })
             .collect();
 
+        let network_mode = composition.network_mode.map(|m| match m {
+            RemoteNetworkMode::None => NetworkMode::None,
+            RemoteNetworkMode::Host => NetworkMode::Host,
+            RemoteNetworkMode::Bridge => NetworkMode::Other("bridge".to_string()),
+        });
+
         ServiceTarget {
             id,
             image: image.into(),
@@ -183,6 +194,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 labels,
                 restart_policy,
                 networks,
+                network_mode,
             }),
         }
     }

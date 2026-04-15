@@ -5,10 +5,12 @@ use serde::Deserialize;
 use crate::common_types::{Environment, ImageUri, Value};
 
 mod command;
+mod network_mode;
 mod networks;
 mod restart_policy;
 
 pub use command::*;
+pub use network_mode::*;
 pub use networks::*;
 pub use restart_policy::*;
 
@@ -47,6 +49,9 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub networks: NetworkingConfig,
+
+    #[serde(default)]
+    pub network_mode: Option<NetworkMode>,
 }
 
 #[cfg(test)]

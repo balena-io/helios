@@ -259,6 +259,17 @@ async fn test_set_app_target_install_images() {
                     }
                 }),
             ),
+            (
+                "service-three",
+                json!({
+                    "id": 3,
+                    "image": "alpine:latest",
+                    "composition": {
+                        "command": ["sleep", "infinity"],
+                        "network_mode": "host",
+                    }
+                }),
+            ),
         ],
         &[("net-a", json!({})), ("net-b", json!({}))],
         &[("my-vol", json!({}))],
@@ -406,6 +417,22 @@ async fn test_set_app_target_install_images() {
         .unwrap();
     assert_container_networks(&svc_two_container, &[&default_net_id]);
 
+    // service-three uses network_mode: host, so it is attached to the `host` network
+    // and not to the auto-injected `default`.
+    let svc_three_container_id = get_service_container_id(app, release_uuid, "service-three");
+    let svc_three_container = docker
+        .inspect_container(svc_three_container_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        svc_three_container
+            .host_config
+            .as_ref()
+            .and_then(|hc| hc.network_mode.as_deref()),
+        Some("host")
+    );
+    assert_container_networks(&svc_three_container, &["host"]);
+
     let my_vol_id = get_resource_oci_name(app, release_uuid, "volumes", "my-vol");
     let volume = docker.inspect_volume(my_vol_id).await.unwrap();
     assert_eq!(
@@ -421,6 +448,10 @@ async fn test_set_app_target_install_images() {
     );
     assert_eq!(
         release_report["services"]["service-two"]["status"],
+        "Running"
+    );
+    assert_eq!(
+        release_report["services"]["service-three"]["status"],
         "Running"
     );
 

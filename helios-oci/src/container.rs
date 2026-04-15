@@ -244,6 +244,18 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .to_owned();
 
         let mut host_config = value.host_config;
+        // Only recognize `none`/`host` from host_config: for user networks Docker also
+        // populates `network_mode` with the first network name, which would otherwise
+        // be misread as a NetworkMode::Other passthrough. `Other(..)` target-state modes
+        // won't round-trip through inspect — the container will be recreated on mismatch.
+        let network_mode = host_config
+            .as_mut()
+            .and_then(|hc| hc.network_mode.take())
+            .and_then(|m| match m.as_str() {
+                "none" => Some(NetworkMode::None),
+                "host" => Some(NetworkMode::Host),
+                _ => None,
+            });
         let restart_policy = host_config
             .as_mut()
             .and_then(|hc| hc.restart_policy.take())
@@ -272,26 +284,31 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .unwrap_or_default();
         let cmd = config.and_then(|c| c.cmd);
 
-        // Read network endpoint configurations from the container's network settings
-        let networks = value
-            .network_settings
-            .and_then(|ns| ns.networks)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(name, endpoint)| {
-                let ipam = endpoint.ipam_config.unwrap_or_default();
-                let config = NetworkSettings {
-                    aliases: endpoint.aliases.unwrap_or_default(),
-                    ipv4_address: ipam.ipv4_address,
-                    ipv6_address: ipam.ipv6_address,
-                    link_local_ips: ipam.link_local_ips.unwrap_or_default(),
-                    mac_address: endpoint.mac_address.filter(|a| !a.is_empty()),
-                    driver_opts: endpoint.driver_opts.unwrap_or_default(),
-                    gw_priority: endpoint.gw_priority.filter(|a| a != &0),
-                };
-                (name, config)
-            })
-            .collect();
+        // Read network endpoint configurations from the container's network settings.
+        // When network_mode is `host` or `none`, networks are not user-managed — leave empty.
+        let networks = if network_mode.is_some() {
+            IndexMap::new()
+        } else {
+            value
+                .network_settings
+                .and_then(|ns| ns.networks)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, endpoint)| {
+                    let ipam = endpoint.ipam_config.unwrap_or_default();
+                    let config = NetworkSettings {
+                        aliases: endpoint.aliases.unwrap_or_default(),
+                        ipv4_address: ipam.ipv4_address,
+                        ipv6_address: ipam.ipv6_address,
+                        link_local_ips: ipam.link_local_ips.unwrap_or_default(),
+                        mac_address: endpoint.mac_address.filter(|a| !a.is_empty()),
+                        driver_opts: endpoint.driver_opts.unwrap_or_default(),
+                        gw_priority: endpoint.gw_priority.filter(|a| a != &0),
+                    };
+                    (name, config)
+                })
+                .collect()
+        };
 
         let config = ContainerConfig {
             command: cmd,
@@ -299,6 +316,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             labels,
             restart_policy,
             networks,
+            network_mode,
         };
 
         let created: DateTime = value
@@ -460,6 +478,30 @@ impl From<NetworkSettings> for EndpointSettings {
     }
 }
 
+/// Container-level network mode. Mirrors the compose `network_mode` setting.
+///
+/// `None` and `Host` are recognized explicitly; `Other(..)` passes platform-specific
+/// modes through to the engine.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    None,
+    Host,
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl std::fmt::Display for NetworkMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkMode::None => "none",
+            NetworkMode::Host => "host",
+            NetworkMode::Other(s) => s,
+        }
+        .fmt(f)
+    }
+}
+
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
@@ -479,9 +521,14 @@ pub struct ContainerConfig {
     /// Restart policy for the container
     pub restart_policy: RestartPolicy,
 
-    /// Network endpoint configurations, ordered by connection priority
+    /// Network endpoint configurations, ordered by connection priority.
+    ///
+    /// Mutually exclusive with `network_mode`.
     #[serde(skip_serializing_if = "IndexMap::is_empty")]
     pub networks: IndexMap<String, NetworkSettings>,
+
+    /// Container network mode. When set, `networks` must be empty.
+    pub network_mode: Option<NetworkMode>,
 }
 
 /// Compare configs treating networks as unordered (Docker inspect doesn't preserve priority order)
@@ -491,6 +538,7 @@ impl PartialEq for ContainerConfig {
             && self.environment == other.environment
             && self.labels == other.labels
             && self.restart_policy == other.restart_policy
+            && self.network_mode == other.network_mode
             && self.networks.len() == other.networks.len()
             && self
                 .networks
@@ -507,6 +555,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             labels,
             restart_policy,
             networks,
+            network_mode,
         } = value;
 
         let env = if environment.is_empty() {
@@ -541,21 +590,28 @@ impl From<ContainerConfig> for ContainerCreateBody {
             }
         };
 
-        let network_mode = networks.first().map(|(net_name, _)| net_name.clone());
-        let endpoints_config = networks
-            .into_iter()
-            .map(|(net_name, net)| {
-                let config: EndpointSettings = net.into();
-                (net_name, config)
-            })
-            .collect();
-
-        let networking_config = NetworkingConfig {
-            endpoints_config: Some(endpoints_config),
+        // When network_mode is set, `networks` must be empty (enforced upstream by the
+        // remote-model validation). Use the explicit mode directly and skip endpoint
+        // configuration.
+        let (host_network_mode, networking_config) = if let Some(mode) = network_mode {
+            (Some(mode.to_string()), None)
+        } else {
+            let host_network_mode = networks.first().map(|(net_name, _)| net_name.clone());
+            let endpoints_config = networks
+                .into_iter()
+                .map(|(net_name, net)| {
+                    let config: EndpointSettings = net.into();
+                    (net_name, config)
+                })
+                .collect();
+            let networking_config = NetworkingConfig {
+                endpoints_config: Some(endpoints_config),
+            };
+            (host_network_mode, Some(networking_config))
         };
 
         let host_config = bollard::config::HostConfig {
-            network_mode,
+            network_mode: host_network_mode,
             restart_policy: Some(restart_policy),
             ..Default::default()
         };
@@ -564,7 +620,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cmd,
             env,
             labels: Some(labels),
-            networking_config: Some(networking_config),
+            networking_config,
             host_config: Some(host_config),
             ..Default::default()
         }

@@ -257,6 +257,13 @@ impl<'de> Deserialize<'de> for Release {
         let mut needs_default_net = false;
 
         for (svc_name, svc) in raw.services.iter_mut() {
+            // network_mode and networks are mutually exclusive per the Compose spec
+            if svc.composition.network_mode.is_some() && !svc.composition.networks.is_empty() {
+                return Err(serde::de::Error::custom(format!(
+                    "service {svc_name} declares mutually exclusive `network_mode` and `networks`"
+                )));
+            }
+
             for net_name in svc.composition.networks.keys() {
                 if !raw.networks.contains_key(net_name) {
                     return Err(serde::de::Error::custom(format!(
@@ -265,8 +272,9 @@ impl<'de> Deserialize<'de> for Release {
                 }
             }
 
-            // FIXME: this also needs to check if the network has host networking once that feature is added
-            if svc.composition.networks.is_empty() {
+            // Skip default-network injection when network_mode is set (host/none don't
+            // participate in user-defined networks).
+            if svc.composition.networks.is_empty() && svc.composition.network_mode.is_none() {
                 needs_default_net = true;
                 svc.composition
                     .networks
@@ -564,6 +572,50 @@ mod tests {
         let default_net = &release.networks["default"];
         assert_eq!(default_net.driver, None);
         assert!(default_net.ipam.is_none());
+    }
+
+    #[test]
+    fn test_release_rejects_network_mode_and_networks_together() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                    "composition": {
+                        "network_mode": "host",
+                        "networks": {"my-net": {}}
+                    }
+                }
+            },
+            "volumes": {},
+            "networks": {"my-net": {}}
+        }))
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "service my-service declares mutually exclusive `network_mode` and `networks`"
+        );
+    }
+
+    #[test]
+    fn test_release_network_mode_skips_default_network() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "host-svc": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                    "composition": {"network_mode": "host"}
+                }
+            },
+            "volumes": {},
+            "networks": {}
+        }))
+        .unwrap();
+
+        assert!(!release.networks.contains_key("default"));
+        let svc = release.services.get("host-svc").unwrap();
+        assert!(svc.composition.networks.is_empty());
+        assert_eq!(svc.composition.network_mode, Some(NetworkMode::Host));
     }
 
     #[test]
