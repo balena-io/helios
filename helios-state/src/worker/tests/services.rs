@@ -40,24 +40,32 @@ fn it_finds_a_workflow_to_fetch_and_install_services() {
                                 },
                                 "service3": {
                                     "id": 3,
+                                    // repeated image should only generate one pull
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                "service4": {
+                                    "id": 4,
                                     // different image same digest
                                     "image": "registry2.balena-cloud.com/v2/deafc41f@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
                                     "started": true,
                                     "config": {},
                                 },
                                 // additional images to test download batching
-                                "service4": {
-                                    "id": 4,
+                                "service5": {
+                                    "id": 5,
                                     "image": "alpine:latest",
                                     "started": true,
                                     "config": {},
                                 },
-                                "service5": {
-                                    "id": 5,
+                                "service6": {
+                                    "id": 6,
                                     "image": "alpine:3.20",
                                     "started": true,
                                     "config": {},
                                 },
+
                             }
                         }
                     }
@@ -71,6 +79,7 @@ fn it_finds_a_workflow_to_fetch_and_install_services() {
                 "initialize service 'service3' for release 'my-release-uuid'",
                 "initialize service 'service4' for release 'my-release-uuid'",
                 "initialize service 'service5' for release 'my-release-uuid'",
+                "initialize service 'service6' for release 'my-release-uuid'",
             )
             + par!(
                 "pull image 'ubuntu:latest'",
@@ -88,6 +97,7 @@ fn it_finds_a_workflow_to_fetch_and_install_services() {
                 "install service 'service3' for release 'my-release-uuid'",
                 "install service 'service4' for release 'my-release-uuid'",
                 "install service 'service5' for release 'my-release-uuid'",
+                "install service 'service6' for release 'my-release-uuid'",
             )
             + par!(
                 "start service 'service1' for release 'my-release-uuid'",
@@ -95,6 +105,7 @@ fn it_finds_a_workflow_to_fetch_and_install_services() {
                 "start service 'service3' for release 'my-release-uuid'",
                 "start service 'service4' for release 'my-release-uuid'",
                 "start service 'service5' for release 'my-release-uuid'",
+                "start service 'service6' for release 'my-release-uuid'",
             )
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );

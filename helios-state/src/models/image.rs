@@ -39,6 +39,25 @@ impl ImageRef {
             Self::Id(id) => id.as_str(),
         }
     }
+
+    /// Compare that both images refer to the same artifact regardless
+    /// of the name
+    ///
+    /// Note that compares either by name or digest, it doesn't cover cases where `ubuntu:latest`
+    /// is the same image as `ubuntu:24.04` unless they have digests. It also returns false if one
+    /// image is an Id and the other an Uri, even though the Uri might have the content addressable
+    /// id locally.
+    pub fn is_same_artifact(&self, other: &ImageRef) -> bool {
+        use ImageRef::*;
+        match (self, other) {
+            // if the image uris are not the same, they are the same artifact if they have the same digest
+            (Uri(s_uri), Uri(o_uri)) => {
+                s_uri == o_uri || (s_uri.digest().is_some() && s_uri.digest() == o_uri.digest())
+            }
+            (Id(s_id), Id(o_id)) => s_id == o_id,
+            _ => false,
+        }
+    }
 }
 
 impl std::ops::Deref for ImageRef {

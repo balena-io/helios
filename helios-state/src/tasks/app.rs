@@ -138,12 +138,11 @@ fn fetch_apps_images(
                     })
             })
         })
-        // remove duplicate digests
+        // remove duplicate digests and tags
         .fold(Vec::<&ImageUri>::new(), |mut acc, svc_img| {
-            if acc
-                .iter()
-                .all(|img| img.digest().is_none() || img.digest() != svc_img.digest())
-            {
+            if acc.iter().all(|img| {
+                img != &svc_img && (img.digest().is_none() || img.digest() != svc_img.digest())
+            }) {
                 acc.push(svc_img);
             }
             acc
@@ -649,7 +648,7 @@ fn install_service_when_requirements_are_met(
         && let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
         && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name)
-            .is_none_or(|svc| svc.image.digest() != tgt.image.digest() || svc.config != tgt.config)
+            .is_none_or(|svc| !svc.image.is_same_artifact(&tgt.image) || svc.config != tgt.config)
     {
         return Some(install_service.with_target(tgt));
     }
@@ -917,7 +916,7 @@ fn uninstall_service_when_requirements_are_met(
     // config and image, then do a migration
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
-        && tgt_svc.image.digest() == svc.image.digest()
+        && svc.image.is_same_artifact(&tgt_svc.image)
         && svc.config == tgt_svc.config
     {
         tasks.push(remove_service.into_task());
