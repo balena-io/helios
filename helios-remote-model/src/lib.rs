@@ -272,6 +272,18 @@ impl<'de> Deserialize<'de> for Release {
                 }
             }
 
+            // Verify each volume-type mount references a volume declared at the release level.
+            for mount in svc.composition.volumes.iter() {
+                if let Mount::Volume(v) = mount
+                    && !raw.volumes.contains_key(&v.source)
+                {
+                    return Err(serde::de::Error::custom(format!(
+                        "service '{svc_name}' refers to undefined volume {}",
+                        v.source
+                    )));
+                }
+            }
+
             // Skip default-network injection when network_mode is set (host/none don't
             // participate in user-defined networks).
             if svc.composition.networks.is_empty() && svc.composition.network_mode.is_none() {
@@ -447,6 +459,50 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "apps.?.releases.?.services.main.composition.networks.my-net.aliases: invalid type: string \"my-alias\", expected a sequence"
+        )
+    }
+
+    #[test]
+    fn test_rejects_target_service_with_invalid_volumes() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "data",
+                                                "target": "/data",
+                                                "read_only": "yes"
+                                            }
+                                        ]
+                                    }
+                                }
+                            },
+                            "volumes": {
+                                "data": {}
+                            }
+                        }
+                    }
+                },
+            }
+        });
+
+        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "apps.?.releases.?.services.main.composition.volumes[0].read_only: invalid type: string \"yes\", expected a boolean"
         )
     }
 
@@ -640,5 +696,72 @@ mod tests {
         let default_net = &release.networks["default"];
         assert_eq!(default_net.driver, Some("overlay".to_string()));
         assert!(default_net.internal);
+    }
+
+    #[test]
+    fn test_release_accepts_service_with_volume_mount() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                    "composition": {
+                        "volumes": ["data:/var/data"]
+                    }
+                }
+            },
+            "volumes": {"data": {}},
+            "networks": {}
+        }))
+        .unwrap();
+
+        let svc = release.services.get("my-service").unwrap();
+        assert_eq!(svc.composition.volumes.iter().count(), 1);
+    }
+
+    #[test]
+    fn test_release_rejects_undefined_volume_reference() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                    "composition": {
+                        "volumes": ["missing:/data"]
+                    }
+                }
+            },
+            "volumes": {},
+            "networks": {}
+        }))
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "service 'my-service' refers to undefined volume missing"
+        );
+    }
+
+    #[test]
+    fn test_release_accepts_service_with_bind_and_tmpfs_mounts() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "ubuntu:latest",
+                    "composition": {
+                        "volumes": [
+                            "/etc/machine-id:/etc/machine-id",
+                            {"type": "tmpfs", "target": "/tmp"}
+                        ]
+                    }
+                }
+            },
+            "volumes": {},
+            "networks": {}
+        }))
+        .unwrap();
+
+        let svc = release.services.get("my-service").unwrap();
+        assert_eq!(svc.composition.volumes.iter().count(), 2);
     }
 }

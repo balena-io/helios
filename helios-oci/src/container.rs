@@ -5,7 +5,10 @@ use bollard::{
         ContainerInspectResponse, ContainerStateStatusEnum, EndpointIpamConfig, EndpointSettings,
         HealthStatusEnum, NetworkingConfig, RestartPolicyNameEnum,
     },
-    models::ContainerCreateBody,
+    models::{
+        ContainerCreateBody, MountBindOptions, MountBindOptionsPropagationEnum, MountTmpfsOptions,
+        MountTypeEnum, MountVolumeOptions,
+    },
     query_parameters::{
         CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
         RemoveContainerOptions, RenameContainerOptions,
@@ -256,6 +259,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 "host" => Some(NetworkMode::Host),
                 _ => None,
             });
+
         let restart_policy = host_config
             .as_mut()
             .and_then(|hc| hc.restart_policy.take())
@@ -271,6 +275,19 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 })
             })
             .unwrap_or_default();
+
+        let mut volumes = host_config
+            .as_mut()
+            .and_then(|hc| hc.mounts.take())
+            .unwrap_or_default()
+            .into_iter()
+            .map(Mount::try_from)
+            .collect::<Result<Vec<_>>>()?;
+
+        // Sort by target so the serialized form is stable regardless of the
+        // order the engine reports the mounts in — Mahler compares state via
+        // serialized JSON, so reordering must not trigger reconfiguration.
+        volumes.sort_by(|a, b| a.target().cmp(b.target()));
 
         let mut config = value.config;
         let labels = config
@@ -317,6 +334,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             restart_policy,
             networks,
             network_mode,
+            volumes,
         };
 
         let created: DateTime = value
@@ -502,6 +520,238 @@ impl std::fmt::Display for NetworkMode {
     }
 }
 
+/// Bind mount propagation mode. Mirrors the compose `bind.propagation` setting.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BindPropagation {
+    Private,
+    Rprivate,
+    Shared,
+    Rshared,
+    Slave,
+    Rslave,
+}
+
+impl From<BindPropagation> for MountBindOptionsPropagationEnum {
+    fn from(value: BindPropagation) -> Self {
+        match value {
+            BindPropagation::Private => Self::PRIVATE,
+            BindPropagation::Rprivate => Self::RPRIVATE,
+            BindPropagation::Shared => Self::SHARED,
+            BindPropagation::Rshared => Self::RSHARED,
+            BindPropagation::Slave => Self::SLAVE,
+            BindPropagation::Rslave => Self::RSLAVE,
+        }
+    }
+}
+
+impl TryFrom<MountBindOptionsPropagationEnum> for BindPropagation {
+    type Error = ();
+    fn try_from(value: MountBindOptionsPropagationEnum) -> std::result::Result<Self, Self::Error> {
+        Ok(match value {
+            MountBindOptionsPropagationEnum::PRIVATE => Self::Private,
+            MountBindOptionsPropagationEnum::RPRIVATE => Self::Rprivate,
+            MountBindOptionsPropagationEnum::SHARED => Self::Shared,
+            MountBindOptionsPropagationEnum::RSHARED => Self::Rshared,
+            MountBindOptionsPropagationEnum::SLAVE => Self::Slave,
+            MountBindOptionsPropagationEnum::RSLAVE => Self::Rslave,
+            MountBindOptionsPropagationEnum::EMPTY => return Err(()),
+        })
+    }
+}
+
+/// A container mount declared by the composition.
+///
+/// Three mount types are supported at the composition level: named volumes,
+/// host bind mounts, and tmpfs. A fourth variant, [`Mount::Other`], exists
+/// only for round-tripping container state: if the engine reports a mount
+/// type helios doesn't support (e.g. `image`, `npipe`, `cluster`), we
+/// preserve the target so that inspecting the container doesn't fail.
+/// Target-state flows never produce `Other`.
+///
+/// The `target` path inside the container is the unique identity of each
+/// mount within a `ContainerConfig`.
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Mount {
+    Volume {
+        /// Path inside the container where the volume is mounted
+        target: String,
+        /// Name of the volume (may be namespaced by the caller)
+        source: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        read_only: bool,
+        /// Disable copying of data from the target path when the volume is created
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        nocopy: bool,
+        /// Subpath inside the volume to mount
+        subpath: Option<String>,
+    },
+    Bind {
+        target: String,
+        /// Host path to mount into the container
+        source: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        read_only: bool,
+        propagation: Option<BindPropagation>,
+    },
+    Tmpfs {
+        target: String,
+        /// Size of the tmpfs in bytes
+        size: Option<i64>,
+        /// File mode for the tmpfs mount, encoded as Unix permission bits
+        mode: Option<u32>,
+    },
+    /// Placeholder for a mount type helios doesn't model (image, npipe, cluster).
+    /// Only produced when reading existing container state back from the engine.
+    Other {
+        target: String,
+        /// Raw mount type string as reported by the engine, retained for
+        /// diagnostics and so round-tripped state is stable.
+        kind: String,
+    },
+}
+
+impl Mount {
+    /// Container path this mount is bound to. Unique within a `ContainerConfig`.
+    pub fn target(&self) -> &str {
+        match self {
+            Self::Volume { target, .. } => target,
+            Self::Bind { target, .. } => target,
+            Self::Tmpfs { target, .. } => target,
+            Self::Other { target, .. } => target,
+        }
+    }
+}
+
+impl From<Mount> for bollard::models::Mount {
+    fn from(value: Mount) -> Self {
+        match value {
+            Mount::Volume {
+                target,
+                source,
+                read_only,
+                nocopy,
+                subpath,
+            } => {
+                let volume_options = if nocopy || subpath.is_some() {
+                    Some(MountVolumeOptions {
+                        no_copy: nocopy.then_some(true),
+                        subpath,
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                };
+                bollard::models::Mount {
+                    typ: Some(MountTypeEnum::VOLUME),
+                    target: Some(target),
+                    source: Some(source),
+                    read_only: Some(read_only),
+                    volume_options,
+                    ..Default::default()
+                }
+            }
+            Mount::Bind {
+                target,
+                source,
+                read_only,
+                propagation,
+            } => {
+                let bind_options = propagation.map(|p| MountBindOptions {
+                    propagation: Some(p.into()),
+                    ..Default::default()
+                });
+                bollard::models::Mount {
+                    typ: Some(MountTypeEnum::BIND),
+                    target: Some(target),
+                    source: Some(source),
+                    read_only: Some(read_only),
+                    bind_options,
+                    ..Default::default()
+                }
+            }
+            Mount::Tmpfs { target, size, mode } => {
+                let tmpfs_options = if size.is_some() || mode.is_some() {
+                    Some(MountTmpfsOptions {
+                        size_bytes: size,
+                        mode: mode.map(|m| m as i64),
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                };
+                bollard::models::Mount {
+                    typ: Some(MountTypeEnum::TMPFS),
+                    target: Some(target),
+                    tmpfs_options,
+                    ..Default::default()
+                }
+            }
+            // `Other` only comes from reading an existing container; it must
+            // never reach a create request. Panic to surface the programmer
+            // bug rather than silently sending a malformed Mount to the engine.
+            Mount::Other { target, kind } => {
+                unreachable!(
+                    "Mount::Other (kind='{kind}', target='{target}') cannot be written to the engine"
+                )
+            }
+        }
+    }
+}
+
+impl TryFrom<bollard::models::Mount> for Mount {
+    type Error = Error;
+
+    fn try_from(value: bollard::models::Mount) -> Result<Self> {
+        let target = value.target.ok_or("mount target is required")?;
+        let read_only = value.read_only.unwrap_or_default();
+        match value.typ {
+            Some(MountTypeEnum::VOLUME) => {
+                let source = value.source.unwrap_or_default();
+                let (nocopy, subpath) = value
+                    .volume_options
+                    .map(|o| (o.no_copy.unwrap_or_default(), o.subpath))
+                    .unwrap_or((false, None));
+                Ok(Mount::Volume {
+                    target,
+                    source,
+                    read_only,
+                    nocopy,
+                    subpath,
+                })
+            }
+            Some(MountTypeEnum::BIND) => {
+                let source = value.source.unwrap_or_default();
+                let propagation = value
+                    .bind_options
+                    .and_then(|o| o.propagation)
+                    .and_then(|p| BindPropagation::try_from(p).ok());
+                Ok(Mount::Bind {
+                    target,
+                    source,
+                    read_only,
+                    propagation,
+                })
+            }
+            Some(MountTypeEnum::TMPFS) => {
+                let (size, mode) = value
+                    .tmpfs_options
+                    .map(|o| (o.size_bytes, o.mode.map(|m| m as u32)))
+                    .unwrap_or((None, None));
+                Ok(Mount::Tmpfs { target, size, mode })
+            }
+            // Preserve unsupported mount types so that inspecting an existing
+            // container doesn't fail. Target-state flows never produce these.
+            other => Ok(Mount::Other {
+                target,
+                kind: other.map(|t| t.to_string()).unwrap_or_default(),
+            }),
+        }
+    }
+}
+
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
@@ -529,9 +779,16 @@ pub struct ContainerConfig {
 
     /// Container network mode. When set, `networks` must be empty.
     pub network_mode: Option<NetworkMode>,
+
+    /// Filesystem mounts (volume, bind, tmpfs) indexed by target path.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<Mount>,
 }
 
-/// Compare configs treating networks as unordered (Docker inspect doesn't preserve priority order)
+/// Compare configs treating networks as unordered (Docker inspect doesn't
+/// preserve the network priority order). The volumes field is canonicalized
+/// (sorted by target path) on both deserialization paths so a straight Vec
+/// comparison is stable across target-state reorderings.
 impl PartialEq for ContainerConfig {
     fn eq(&self, other: &Self) -> bool {
         self.command == other.command
@@ -544,6 +801,7 @@ impl PartialEq for ContainerConfig {
                 .networks
                 .iter()
                 .all(|(k, v)| other.networks.get(k) == Some(v))
+            && self.volumes == other.volumes
     }
 }
 
@@ -556,6 +814,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             restart_policy,
             networks,
             network_mode,
+            volumes,
         } = value;
 
         let env = if environment.is_empty() {
@@ -610,9 +869,16 @@ impl From<ContainerConfig> for ContainerCreateBody {
             (host_network_mode, Some(networking_config))
         };
 
+        let engine_mounts = if volumes.is_empty() {
+            None
+        } else {
+            Some(volumes.into_iter().map(Into::into).collect())
+        };
+
         let host_config = bollard::config::HostConfig {
             network_mode: host_network_mode,
             restart_policy: Some(restart_policy),
+            mounts: engine_mounts,
             ..Default::default()
         };
 
@@ -648,5 +914,85 @@ impl<N: Namespace> LocalContainer<N> {
     /// Get the namepace from the local container metadata
     pub fn namespace(&self, service: &str) -> Option<N> {
         N::from_identifier(&self.name, service)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bollard::models::{HostConfig, Mount as EngineMount};
+
+    fn vol_mount(target: &str, source: &str) -> EngineMount {
+        EngineMount {
+            typ: Some(MountTypeEnum::VOLUME),
+            target: Some(target.to_string()),
+            source: Some(source.to_string()),
+            read_only: Some(false),
+            ..Default::default()
+        }
+    }
+
+    fn inspect_with_mounts(mounts: Vec<EngineMount>) -> ContainerInspectResponse {
+        ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                mounts: Some(mounts),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn inspect_sorts_volumes_by_target() {
+        let c: LocalContainer = inspect_with_mounts(vec![
+            vol_mount("/c", "vol-c"),
+            vol_mount("/a", "vol-a"),
+            vol_mount("/b", "vol-b"),
+        ])
+        .try_into()
+        .unwrap();
+        let targets: Vec<&str> = c.config.volumes.iter().map(|m| m.target()).collect();
+        assert_eq!(targets, vec!["/a", "/b", "/c"]);
+    }
+
+    #[test]
+    fn inspect_preserves_unsupported_mount_types_as_other() {
+        // An `image` mount on an existing container must not cause the inspect
+        // conversion to fail — it round-trips as `Mount::Other`.
+        let image_mount = EngineMount {
+            typ: Some(MountTypeEnum::IMAGE),
+            target: Some("/data".to_string()),
+            source: Some("some/image".to_string()),
+            ..Default::default()
+        };
+        let c: LocalContainer = inspect_with_mounts(vec![image_mount]).try_into().unwrap();
+        assert_eq!(c.config.volumes.len(), 1);
+        match &c.config.volumes[0] {
+            Mount::Other { target, kind } => {
+                assert_eq!(target, "/data");
+                assert_eq!(kind, "image");
+            }
+            other => panic!("expected Mount::Other, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inspect_fails_on_missing_mount_target() {
+        let no_target = EngineMount {
+            typ: Some(MountTypeEnum::VOLUME),
+            target: None,
+            source: Some("vol".to_string()),
+            ..Default::default()
+        };
+        let result: Result<LocalContainer> = inspect_with_mounts(vec![no_target]).try_into();
+        assert!(result.is_err());
     }
 }

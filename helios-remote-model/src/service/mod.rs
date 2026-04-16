@@ -8,11 +8,13 @@ mod command;
 mod network_mode;
 mod networks;
 mod restart_policy;
+mod volumes;
 
 pub use command::*;
 pub use network_mode::*;
 pub use networks::*;
 pub use restart_policy::*;
+pub use volumes::*;
 
 use super::labels::Labels;
 
@@ -52,6 +54,9 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub network_mode: Option<NetworkMode>,
+
+    #[serde(default)]
+    pub volumes: VolumesConfig,
 }
 
 #[cfg(test)]

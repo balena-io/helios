@@ -6,7 +6,7 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::{self, LocalNamespace, Namespace};
+use crate::oci::{self, LocalNamespace, Mount, Namespace};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
@@ -82,6 +82,13 @@ impl From<oci::ContainerConfig> for ServiceConfig {
                     (net_name, net_config)
                 })
                 .collect();
+
+            // De-namespace volume mount sources by stripping the app_uuid suffix
+            for mount in config.volumes.iter_mut() {
+                if let Mount::Volume { source, .. } = mount {
+                    *source = namespace.to_entity(source);
+                }
+            }
         }
 
         // Remove labels from the container that were not defined in
@@ -175,8 +182,16 @@ impl ServiceConfig {
         labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
         labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
 
-        let networks = std::mem::take(&mut config.networks);
         let namespace = LocalNamespace::from(app_uuid.as_str());
+
+        // Namespace volume mount sources so they match the volumes created under the app
+        for mount in config.volumes.iter_mut() {
+            if let Mount::Volume { source, .. } = mount {
+                *source = namespace.to_identifier(source);
+            }
+        }
+
+        let networks = std::mem::take(&mut config.networks);
         for (net_name, mut net_config) in networks {
             // store the target aliases into a label as the engine may insert new aliases
             // that we want to remove when reading the container state
