@@ -42,7 +42,8 @@ wait_for_port_release() {
 }
 
 find_docker_image() {
-  docker inspect "$1" 2>/dev/null | jq -r '.[].Image'
+  img=$(docker inspect "$1" 2>/dev/null | jq -r '.[].Image')
+  [ -n "$img" ] && echo "$img"
 }
 
 find_db_dir() {
