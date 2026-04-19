@@ -1,4 +1,19 @@
 - commits:
+    - subject: Fix supervisor takeover script
+      hash: cf22f22f21f3cebeeba47f29cead43de0c3282a6
+      body: |
+        It was failing with older OS versions that still use resin_supervisor as
+        a container. The script was not falling back to `resin_supervisor` when
+        inspecting the container
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.6
+  title: ""
+  date: 2026-04-19T14:09:49.260Z
+- commits:
     - subject: Re-emit target state every 24 hours
       hash: 6f35b837ca9dc8fc8142c06fc4ae0a4d413ee375
       body: |
