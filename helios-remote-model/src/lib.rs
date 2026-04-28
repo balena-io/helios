@@ -507,6 +507,43 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_target_service_with_invalid_environment() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "environment": {
+                                            "MY_VAR": ["value"]
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+
+        });
+
+        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "apps.?.releases.?.services.main.composition.environment.MY_VAR: invalid type: sequence, expected a boolean, number, or string"
+        )
+    }
+
+    #[test]
     fn test_accepts_single_release_with_volumes_and_networks() {
         let json = json!({
             "release-one": {
