@@ -42,7 +42,7 @@ fn initialize_tracing() {
             // RUST_LOG
             EnvFilter::try_from_default_env().unwrap_or(
                 EnvFilter::default()
-                    .add_directive("trace".parse().unwrap())
+                    .add_directive("debug".parse().unwrap())
                     .add_directive("helios_store=warn".parse().unwrap())
                     .add_directive("mahler=debug".parse().unwrap())
                     .add_directive("hyper=error".parse().unwrap())
