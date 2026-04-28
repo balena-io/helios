@@ -1,4 +1,17 @@
 - commits:
+    - subject: Set default log level to debug
+      hash: 82de75ffee83c66b88e568973e7a4ee28965322f
+      body: |
+        Log level can be configured at runtime with RUST_LOG
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.22.7
+  title: ""
+  date: 2026-04-28T16:29:24.861Z
+- commits:
     - subject: Fix supervisor takeover script
       hash: cf22f22f21f3cebeeba47f29cead43de0c3282a6
       body: |
