@@ -25,29 +25,42 @@ impl<'de> Deserialize<'de> for Labels {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Labels {
-            List(Vec<String>),
-            Map(HashMap<String, String>),
-        }
+        use serde::de;
 
-        let labels = match Labels::deserialize(deserializer)? {
-            Labels::List(labels) => labels
-                .into_iter()
-                .map(|label| {
+        struct LabelsVisitor;
+
+        impl<'de> de::Visitor<'de> for LabelsVisitor {
+            type Value = Labels;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of \"key=value\" strings or a map of names to string values")
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut labels = HashMap::new();
+                while let Some(label) = seq.next_element::<String>()? {
                     // look for the first `=`, assume the value is an empty string
                     // if none
-                    let parts: Vec<&str> = label.splitn(2, '=').collect();
-                    let key = parts[0].to_string();
-                    let value = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-                    (key, value)
-                })
-                .collect(),
-            Labels::Map(labels) => labels,
-        };
+                    let (key, value) = match label.split_once('=') {
+                        Some((k, v)) => (k.to_string(), v.to_string()),
+                        None => (label, String::new()),
+                    };
+                    labels.insert(key, value);
+                }
+                Ok(Labels(labels))
+            }
 
-        Ok(Self(labels))
+            fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut labels = HashMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    let value: String = map.next_value()?;
+                    labels.insert(key, value);
+                }
+                Ok(Labels(labels))
+            }
+        }
+
+        deserializer.deserialize_any(LabelsVisitor)
     }
 }
 
