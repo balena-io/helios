@@ -1,4 +1,42 @@
 - commits:
+    - subject: Fix bug when pulling multiple services with same image
+      hash: f02c9c4548e91fa645f43c47101048389aa8af6c
+      body: |
+        Pulling multiple images with same name would result in a workflow not
+        found. This because it would tell the planner to create an image that
+        doesn't exist causing the plan operation to fail.
+
+        This also makes sure that image comparison is standard accross tags.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for service network_mode
+      hash: 4b28c40daaad7d38b34bdbf8c6ce44a718094529
+      body: |
+        Only network_mode: `service:` is not supported as that requires
+        depends_on
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for Service networks
+      hash: eb2092929800bbb5fd7ed6bd1f84b9a5bbfc09ff
+      body: |
+        When services define a network configuration the planner will wait
+        until the networks have been created first before creating the container
+        and connecting to the network.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+  version: 0.23.0
+  title: ""
+  date: 2026-04-29T20:55:34.413Z
+- commits:
     - subject: Set default log level to debug
       hash: 82de75ffee83c66b88e568973e7a4ee28965322f
       body: |
