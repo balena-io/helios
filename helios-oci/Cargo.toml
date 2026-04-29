@@ -20,6 +20,7 @@ test-helpers = []
 helios-util = { path = "../helios-util", version = "0" }
 
 bollard.workspace = true
+indexmap.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

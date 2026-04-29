@@ -4,9 +4,17 @@ use serde::Deserialize;
 
 use crate::common_types::{Environment, ImageUri, Value};
 
-use super::command::Command;
+mod command;
+mod network_mode;
+mod networks;
+mod restart_policy;
+
+pub use command::*;
+pub use network_mode::*;
+pub use networks::*;
+pub use restart_policy::*;
+
 use super::labels::Labels;
-use super::restart_policy::RestartPolicy;
 
 /// Target service as defined by the remote backend
 #[derive(Deserialize, Clone, Debug)]
@@ -38,6 +46,12 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub environment: Environment,
+
+    #[serde(default)]
+    pub networks: NetworkingConfig,
+
+    #[serde(default)]
+    pub network_mode: Option<NetworkMode>,
 }
 
 #[cfg(test)]

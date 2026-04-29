@@ -30,7 +30,11 @@ fn it_finds_a_workflow_to_create_networks() {
                                     "id": 1,
                                     "started": true,
                                     "image": "ubuntu:latest",
-                                    "config": {},
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
                                 },
                             },
                             "networks": {
@@ -41,6 +45,8 @@ fn it_finds_a_workflow_to_create_networks() {
                 }
             },
         }),
+        // The service references 'my-network', so 'setup network' must complete
+        // before 'install service' can run.
         seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + par!(
                 "setup network 'my-network' for app 'my-app-uuid'",
@@ -162,7 +168,19 @@ fn it_finds_a_workflow_for_updating_networks() {
                     "releases": {
                         "my-release-uuid": {
                             "installed": true,
-                            "services": {},
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "oci": running_container("my-release-uuid_my-service"),
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
                             "networks": {
                                 "my-network": {
                                     "oci_name": "my-app-uuid_my-network",
@@ -176,6 +194,12 @@ fn it_finds_a_workflow_for_updating_networks() {
                     }
                 }
             },
+            "images": {
+                "ubuntu:latest" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
         }),
         json!({
             "uuid": "my-device-uuid",
@@ -186,7 +210,18 @@ fn it_finds_a_workflow_for_updating_networks() {
                     "releases": {
                         "my-release-uuid": {
                             "installed": true,
-                            "services": {},
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
                             "networks": {
                                 "my-network": {
                                     "config": {
@@ -204,8 +239,12 @@ fn it_finds_a_workflow_for_updating_networks() {
             "my-release-uuid",
             "my-app-uuid",
             seq!(
+                "stop service 'my-service' for release 'my-release-uuid'",
+                "remove container for service 'my-service' for release 'my-release-uuid'",
                 "remove network 'my-network' for app 'my-app-uuid'",
                 "setup network 'my-network' for app 'my-app-uuid'",
+                "install service 'my-service' for release 'my-release-uuid'",
+                "start service 'my-service' for release 'my-release-uuid'",
             ),
         ),
     );

@@ -13,7 +13,8 @@ pub use registry::RegistryAuth;
 
 mod container;
 pub use container::{
-    Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer, RestartPolicy,
+    Container, ContainerConfig, ContainerState, ContainerStatus, LocalContainer, NetworkMode,
+    NetworkSettings, RestartPolicy,
 };
 
 mod datetime;
@@ -259,6 +260,10 @@ impl<T> WithContext<T> for Result<T> {
 }
 
 pub trait Namespace: Sized {
+    /// Get the entity name from the namespaced identifier, it may return
+    /// None if the entity name cannot be extracted
+    fn to_entity(&self, id: &str) -> String;
+
     /// Convert the given entity name to the namespaced identifier
     fn to_identifier(&self, entity: &str) -> String;
 
@@ -269,6 +274,10 @@ pub trait Namespace: Sized {
 pub struct NoNamespace;
 
 impl Namespace for NoNamespace {
+    fn to_entity(&self, id: &str) -> String {
+        id.to_owned()
+    }
+
     fn to_identifier(&self, name: &str) -> String {
         name.to_owned()
     }
@@ -295,6 +304,11 @@ impl LocalNamespace {
 }
 
 impl Namespace for LocalNamespace {
+    fn to_entity(&self, id: &str) -> String {
+        let suffix = format!("_{}", self.0);
+        id.strip_suffix(&suffix).unwrap_or(id).to_owned()
+    }
+
     fn to_identifier(&self, entity: &str) -> String {
         format!("{entity}_{}", self.0)
     }
