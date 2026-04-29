@@ -146,6 +146,20 @@ async fn assert_network_created(docker: &Docker, oci_name: &str, logical_name: &
     );
 }
 
+/// Locate a mount entry on an inspected container by its `Destination` (target path).
+fn container_mount<'a>(
+    container: &'a bollard::models::ContainerInspectResponse,
+    target: &str,
+) -> &'a bollard::models::MountPoint {
+    container
+        .mounts
+        .as_ref()
+        .expect("container has no mounts")
+        .iter()
+        .find(|m| m.destination.as_deref() == Some(target))
+        .unwrap_or_else(|| panic!("no mount at target '{target}'"))
+}
+
 // --- Teardown ---
 
 async fn delete_app_and_wait(client: &reqwest::Client, app_uuid: &str) {
@@ -244,6 +258,9 @@ async fn test_set_app_target_install_images() {
                             "net-a": { "aliases": ["svc-one-alias"] },
                             "net-b": null,
                         },
+                        "volumes": [
+                            "my-vol:/backup:ro",
+                        ],
                     }
                 }),
             ),
@@ -256,6 +273,24 @@ async fn test_set_app_target_install_images() {
                         "command": ["sleep", "10"],
                         "labels": { "my-label": "true" },
                         "environment": ["MY_KEY=123"],
+                        "volumes": [
+                            {
+                                "type": "volume",
+                                "source": "my-vol",
+                                "target": "/data",
+                                "read_only": true
+                            },
+                            {
+                                "type": "bind",
+                                "source": "/proc",
+                                "target": "/host/proc"
+                            },
+                            {
+                                "type": "tmpfs",
+                                "target": "/run/tmp",
+                                "tmpfs": { "size": 65536, "mode": 448 }
+                            }
+                        ],
                     }
                 }),
             ),
@@ -433,12 +468,52 @@ async fn test_set_app_target_install_images() {
     );
     assert_container_networks(&svc_three_container, &["host"]);
 
-    let my_vol_id = get_resource_oci_name(app, release_uuid, "volumes", "my-vol");
-    let volume = docker.inspect_volume(my_vol_id).await.unwrap();
+    let my_vol_id = get_resource_oci_name(app, release_uuid, "volumes", "my-vol").to_string();
+    let volume = docker.inspect_volume(&my_vol_id).await.unwrap();
     assert_eq!(
         volume.labels.get("io.balena.volume-name").unwrap(),
         "my-vol"
     );
+
+    // service-one received the short-form volume mount `my-vol:/backup:ro`.
+    // Docker reports the mount source as the namespaced volume name.
+    let svc_one_backup = container_mount(&svc_one_container, "/backup");
+    assert_eq!(svc_one_backup.typ.unwrap().as_ref(), "volume");
+    assert_eq!(svc_one_backup.name.as_deref(), Some(my_vol_id.as_str()));
+    assert_eq!(svc_one_backup.rw, Some(false));
+
+    // service-two declares a volume mount, a bind mount, and a tmpfs mount
+    // via the long-form syntax.
+    let svc_two_data = container_mount(&svc_two_container, "/data");
+    assert_eq!(svc_two_data.typ.unwrap().as_ref(), "volume");
+    assert_eq!(svc_two_data.name.as_deref(), Some(my_vol_id.as_str()));
+    assert_eq!(svc_two_data.rw, Some(false));
+
+    let svc_two_machine_id = container_mount(&svc_two_container, "/host/proc");
+    assert_eq!(svc_two_machine_id.typ.unwrap().as_ref(), "bind");
+    assert_eq!(svc_two_machine_id.source.as_deref(), Some("/proc"));
+    assert_eq!(svc_two_machine_id.rw, Some(true));
+
+    let svc_two_tmp = container_mount(&svc_two_container, "/run/tmp");
+    assert_eq!(svc_two_tmp.typ.unwrap().as_ref(), "tmpfs");
+
+    // The host-level tmpfs options that were sent to the engine should round-trip
+    // through the `HostConfig.Mounts` spec.
+    let svc_two_host_mounts = svc_two_container
+        .host_config
+        .as_ref()
+        .and_then(|hc| hc.mounts.as_ref())
+        .expect("host_config.mounts not set");
+    let tmpfs_spec = svc_two_host_mounts
+        .iter()
+        .find(|m| m.target.as_deref() == Some("/run/tmp"))
+        .expect("tmpfs mount not found in host_config.mounts");
+    let tmpfs_opts = tmpfs_spec
+        .tmpfs_options
+        .as_ref()
+        .expect("tmpfs options missing");
+    assert_eq!(tmpfs_opts.size_bytes, Some(65536));
+    assert_eq!(tmpfs_opts.mode, Some(448));
 
     // State report was sent with correct service statuses
     let release_report = wait_for_report(TEST_APP_UUID, release_uuid, "done", 10).await;
@@ -460,4 +535,50 @@ async fn test_set_app_target_install_images() {
     delete_app_and_wait(&client, TEST_APP_UUID).await;
     assert!(docker.inspect_image("ubuntu:latest").await.is_err());
     assert!(docker.inspect_image("alpine:latest").await.is_err());
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_bind_mount_not_in_allowlist() {
+    let release_uuid = "reject-release";
+    let release = release_json(
+        &[(
+            "bad-svc",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "volumes": [
+                        {"type": "bind", "source": "/root", "target": "/root"}
+                    ]
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("reject-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+
+    // Axum returns a 4xx when the JSON body fails to deserialize; the
+    // remote-model allowlist check fires during deserialization.
+    assert!(
+        res.status().is_client_error(),
+        "expected 4xx, got {}",
+        res.status()
+    );
+
+    // Confirm no app was created.
+    let res = client
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }

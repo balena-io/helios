@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
-    self, ContainerConfig, DateTime, LocalContainer, NetworkMode, NetworkSettings, RestartPolicy,
+    self, BindPropagation, ContainerConfig, DateTime, LocalContainer, Mount, NetworkMode,
+    NetworkSettings, RestartPolicy,
 };
 use crate::remote_model::{
+    BindPropagation as RemoteBindPropagation, Mount as RemoteMount,
     NetworkMode as RemoteNetworkMode, RestartPolicy as RemoteRestartPolicy,
     Service as RemoteServiceTarget,
 };
@@ -184,6 +186,41 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteNetworkMode::Bridge => NetworkMode::Other("bridge".to_string()),
         });
 
+        // Convert the service mounts. The composition `volumes` arrive already
+        // canonicalized (sorted by target) from the remote-model deserializer,
+        // so no further sorting is required here.
+        let volumes: Vec<Mount> = composition
+            .volumes
+            .into_iter()
+            .map(|m| match m {
+                RemoteMount::Volume(v) => Mount::Volume {
+                    target: v.target,
+                    source: v.source,
+                    read_only: v.read_only,
+                    nocopy: v.nocopy,
+                    subpath: v.subpath,
+                },
+                RemoteMount::Bind(b) => Mount::Bind {
+                    target: b.target,
+                    source: b.source,
+                    read_only: b.read_only,
+                    propagation: b.propagation.map(|p| match p {
+                        RemoteBindPropagation::Private => BindPropagation::Private,
+                        RemoteBindPropagation::Rprivate => BindPropagation::Rprivate,
+                        RemoteBindPropagation::Shared => BindPropagation::Shared,
+                        RemoteBindPropagation::Rshared => BindPropagation::Rshared,
+                        RemoteBindPropagation::Slave => BindPropagation::Slave,
+                        RemoteBindPropagation::Rslave => BindPropagation::Rslave,
+                    }),
+                },
+                RemoteMount::Tmpfs(t) => Mount::Tmpfs {
+                    target: t.target,
+                    size: t.size,
+                    mode: t.mode,
+                },
+            })
+            .collect();
+
         ServiceTarget {
             id,
             image: image.into(),
@@ -195,6 +232,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 restart_policy,
                 networks,
                 network_mode,
+                volumes,
             }),
         }
     }
