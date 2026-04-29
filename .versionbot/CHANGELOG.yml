@@ -1,4 +1,18 @@
 - commits:
+    - subject: Add service volumes support
+      hash: 36fe7fa37d5761402ea7e895a9fe353e794354d8
+      body: ""
+      footer:
+        Depends-on: "#104"
+        depends-on: "#104"
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.23.1
+  title: ""
+  date: 2026-04-29T23:14:42.938Z
+- commits:
     - subject: Fix bug when pulling multiple services with same image
       hash: f02c9c4548e91fa645f43c47101048389aa8af6c
       body: |
