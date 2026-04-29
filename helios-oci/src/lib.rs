@@ -30,6 +30,7 @@ mod volume;
 pub use volume::{LocalVolume, Volume, VolumeConfig, VolumeDriver};
 
 use helios_util as util;
+pub use helios_util::types::Environment;
 
 #[derive(Debug, Clone)]
 pub struct Client(Docker);

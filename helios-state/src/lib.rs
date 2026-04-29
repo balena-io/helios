@@ -9,8 +9,12 @@ pub mod models;
 pub use config::{StateConfig, prepare};
 pub use seek::{LocalState, SeekRequest, TargetState, UpdateOpts, UpdateStatus, start_seek};
 
-use helios_legacy as legacy;
+#[cfg(not(feature = "podman"))]
 use helios_oci as oci;
+#[cfg(feature = "podman")]
+use helios_podman as oci;
+
+use helios_legacy as legacy;
 use helios_remote_model as remote_model;
 use helios_store as store;
 use helios_util as util;

@@ -88,13 +88,25 @@ async fn test_systemd_run_nonexistent_command() {
 }
 
 #[tokio::test]
+async fn test_systemd_start_nonexistent_unit() {
+    before();
+    // Try to start a unit that doesn't exist
+    let err = systemd::start("test-nonexistent-unit").await.unwrap_err();
+    assert!(
+        matches!(err, systemd::Error::NoSuchUnit(_)),
+        "expected NoSuchUnit, got {err}"
+    );
+}
+
+#[tokio::test]
 async fn test_systemd_stop_nonexistent_unit() {
     before();
     // Try to stop a unit that doesn't exist
-    let result = systemd::stop("test-nonexistent-unit").await;
-
-    // Should succeed (not fail)
-    assert!(result.is_ok(), "stopping nonexistent unit should not fail");
+    let err = systemd::stop("test-nonexistent-unit").await.unwrap_err();
+    assert!(
+        matches!(err, systemd::Error::NoSuchUnit(_)),
+        "expected NoSuchUnit, got {err}"
+    );
 }
 
 #[tokio::test]
@@ -109,12 +121,10 @@ async fn test_systemd_stop_already_stopped_unit() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Try to stop it again when it's already stopped
-    let result = systemd::stop("test-already-stopped").await;
-
-    // Should succeed (not fail)
+    let err = systemd::stop("test-already-stopped").await.unwrap_err();
     assert!(
-        result.is_ok(),
-        "stopping already stopped unit should not fail"
+        matches!(err, systemd::Error::NoSuchUnit(_)),
+        "expected NoSuchUnit, got {err}"
     );
 }
 
@@ -131,8 +141,7 @@ async fn test_systemd_stop_running_unit() {
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // Stop the running unit
-    let stop_result = systemd::stop("test-stop-running").await;
-    assert!(stop_result.is_ok(), "stopping running unit should succeed");
+    systemd::stop("test-stop-running").await.unwrap();
 
     // The original run should complete (possibly with an error since it was stopped)
     handle.await.unwrap().unwrap();

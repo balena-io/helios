@@ -11,7 +11,7 @@ use crate::models::{
 };
 use crate::store::{self, DocumentStore};
 
-use crate::oci::{Client as Docker, Error as OciError, WithContext};
+use crate::oci::{self, Client as Docker, WithContext};
 
 use super::image::create_image;
 use super::utils::{
@@ -23,7 +23,7 @@ enum Error {
     #[error(transparent)]
     Store(#[from] store::Error),
     #[error(transparent)]
-    Oci(#[from] OciError),
+    Oci(#[from] oci::Error),
 }
 
 /// Initialize the app and store its local data
@@ -206,7 +206,7 @@ fn finish_release(
     Target(target): Target<Release>,
     Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
     store: Res<DocumentStore>,
-) -> IO<Release, store::Error> {
+) -> IO<Release, Error> {
     // all target services have been installed
     enforce!(
         target.services.iter().all(|(svc_name, tgt_svc)| {
@@ -245,8 +245,9 @@ fn finish_release(
 
     release.installed = true;
     with_io(release, async move |release| {
-        // mark the release as installed on the local store
         let local_store = store.as_ref().expect("store should be available");
+
+        // mark the release as installed on the local store
         local_store
             .put(
                 format!("apps/{app_uuid}/releases/{commit}/installed"),
@@ -755,7 +756,7 @@ fn start_service(
     mut svc: View<Service>,
     Target(tgt_svc): Target<Service>,
     docker: Res<Docker>,
-) -> IO<Service, OciError> {
+) -> IO<Service, oci::Error> {
     enforce!(
         svc.oci
             .as_ref()
@@ -780,7 +781,7 @@ fn start_service(
             .expect("docker resource should be available");
 
         // this is guaranteed by the enforce above
-        let container_id = svc
+        let container_name = svc
             .oci
             .as_ref()
             .map(|c| &c.name)
@@ -789,14 +790,14 @@ fn start_service(
         // start the container
         docker
             .container()
-            .start(container_id)
+            .start(container_name)
             .await
             .context("failed to start container for service")?;
 
         // re-read container state
         let local_container = docker
             .container()
-            .inspect(container_id)
+            .inspect(container_name)
             .await
             .context("failed to inspect container for service")?;
 
@@ -836,7 +837,7 @@ fn stop_service_when_requirements_are_met() -> Vec<Task> {
 }
 
 /// Stop a running service
-fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, oci::Error> {
     let container_id = if let Some(container) = svc.oci.as_mut()
         && container.status == ContainerStatus::Running
     {
@@ -864,18 +865,6 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .stop(&container_id)
             .await
             .context("failed to stop container for service")?;
-
-        // re-read container state
-        let local_container = docker
-            .container()
-            .inspect(&container_id)
-            .await
-            .context("failed to inspect container for service")?;
-
-        svc.oci.replace(Container::from((
-            local_container.name.as_ref(),
-            local_container.state,
-        )));
 
         Ok(svc)
     })

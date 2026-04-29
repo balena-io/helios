@@ -27,6 +27,7 @@ COPY helios-remote-model ./helios-remote-model
 COPY helios-state ./helios-state
 COPY helios-util ./helios-util
 COPY helios-store ./helios-store
+COPY helios-podman ./helios-podman
 
 # Build release
 # Unit tests are run separately by CI

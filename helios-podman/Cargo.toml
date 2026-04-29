@@ -1,6 +1,6 @@
 [package]
-name = "helios-balenahup"
-description = "Helios HostOS update (balenahup) support"
+name = "helios-podman"
+description = "Helios support and tools to work with Podman"
 readme = "README.md"
 
 authors.workspace = true
@@ -12,19 +12,18 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
-[features]
-default = []
-podman = ["helios-podman"]
-
 [dependencies]
 helios-oci.workspace = true
-helios-podman = { workspace = true, optional = true }
-helios-store.workspace = true
 helios-util.workspace = true
-helios-remote-model.workspace = true
-
-mahler.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 tracing.workspace = true
+ipnet.workspace = true
+smart-default.workspace = true
+shlex.workspace = true
+umask.workspace = true
+compose_spec.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+helios-oci = { workspace = true, features = ["test-helpers"] }

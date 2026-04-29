@@ -1,0 +1,84 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Adapted from https://github.com/containers/podlet/
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use super::{Downgrade, DowngradeError, HostPaths, PodmanVersion};
+
+/// Global Quadlet options that apply to all resource types.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct Globals {
+    /// Load the specified containers.conf module.
+    pub containers_conf_module: Vec<PathBuf>,
+
+    /// A list of arguments passed directly after `podman`.
+    pub global_args: Option<String>,
+
+    /// Change the name of the systemd service that Quadlet generates.
+    ///
+    /// The name should **not** include the `.service` extension.
+    pub service_name: Option<String>,
+}
+
+impl Downgrade for Globals {
+    fn downgrade(&mut self, version: PodmanVersion) -> Result<(), DowngradeError> {
+        if version < PodmanVersion::V5_3
+            && let Some(service_name) = self.service_name.take()
+        {
+            return Err(DowngradeError::Option {
+                quadlet_option: "ServiceName",
+                value: service_name,
+                supported_version: PodmanVersion::V5_3,
+            });
+        }
+
+        if version < PodmanVersion::V4_8
+            && let Some(containers_conf_module) =
+                std::mem::take(&mut self.containers_conf_module).first()
+        {
+            return Err(DowngradeError::Option {
+                quadlet_option: "ContainersConfModule",
+                value: containers_conf_module.display().to_string(),
+                supported_version: PodmanVersion::V4_8,
+            });
+        }
+
+        if version < PodmanVersion::V4_8
+            && let Some(global_args) = self.global_args.take()
+        {
+            return Err(DowngradeError::Option {
+                quadlet_option: "GlobalArgs",
+                value: global_args,
+                supported_version: PodmanVersion::V4_8,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+impl HostPaths for Globals {
+    fn host_paths(&mut self) -> impl Iterator<Item = &mut PathBuf> {
+        self.containers_conf_module.iter_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_empty() -> Result<(), crate::podlet::serde::quadlet::Error> {
+        let globals = Globals::default();
+        assert_eq!(
+            crate::podlet::serde::quadlet::to_string_join_all(globals)?,
+            "[Globals]\n"
+        );
+        Ok(())
+    }
+}
