@@ -192,17 +192,38 @@ impl<'de> Deserialize<'de> for Environment {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Env {
-            List(Vec<String>),
-            Map(HashMap<String, Option<Value>>),
+        use serde::de;
+
+        struct EnvVisitor;
+
+        impl<'de> de::Visitor<'de> for EnvVisitor {
+            type Value = Environment;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(
+                    "a list of \"KEY=value\" strings or a map of names to boolean, number, string, or null values",
+                )
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut env_vars: Vec<String> = Vec::new();
+                while let Some(s) = seq.next_element::<String>()? {
+                    env_vars.push(s);
+                }
+                Ok(Environment::from(env_vars))
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut env = HashMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    let value: Option<Value> = map.next_value()?;
+                    env.insert(key, value);
+                }
+                Ok(Environment(env))
+            }
         }
 
-        match Env::deserialize(deserializer)? {
-            Env::List(env_vars) => Ok(Environment::from(env_vars)),
-            Env::Map(env) => Ok(Self(env)),
-        }
+        deserializer.deserialize_any(EnvVisitor)
     }
 }
 
