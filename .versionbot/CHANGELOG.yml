@@ -1,4 +1,28 @@
 - commits:
+    - subject: Improve error messaging for labels validation
+      hash: 14ad38a5506364a316882694afbbd6277aff9dd7
+      body: |
+        The error now clearly communicates the offending label and what was the
+        error when deserializing
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Improve error messaging for env var validation
+      hash: f54c53d0ca1acea7ee0e5869043879c695405eb0
+      body: |
+        Adds a custom deserializer that provides better information about the
+        variable that is failing to deserialize.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.23.2
+  title: ""
+  date: 2026-04-30T20:47:31.512Z
+- commits:
     - subject: Add service volumes support
       hash: 36fe7fa37d5761402ea7e895a9fe353e794354d8
       body: ""
