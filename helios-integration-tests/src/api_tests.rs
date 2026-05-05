@@ -478,24 +478,24 @@ async fn test_set_app_target_install_images() {
     // service-one received the short-form volume mount `my-vol:/backup:ro`.
     // Docker reports the mount source as the namespaced volume name.
     let svc_one_backup = container_mount(&svc_one_container, "/backup");
-    assert_eq!(svc_one_backup.typ.unwrap().as_ref(), "volume");
+    assert_eq!(svc_one_backup.typ.as_ref().unwrap(), "volume");
     assert_eq!(svc_one_backup.name.as_deref(), Some(my_vol_id.as_str()));
     assert_eq!(svc_one_backup.rw, Some(false));
 
     // service-two declares a volume mount, a bind mount, and a tmpfs mount
     // via the long-form syntax.
     let svc_two_data = container_mount(&svc_two_container, "/data");
-    assert_eq!(svc_two_data.typ.unwrap().as_ref(), "volume");
+    assert_eq!(svc_two_data.typ.as_ref().unwrap(), "volume");
     assert_eq!(svc_two_data.name.as_deref(), Some(my_vol_id.as_str()));
     assert_eq!(svc_two_data.rw, Some(false));
 
     let svc_two_machine_id = container_mount(&svc_two_container, "/host/proc");
-    assert_eq!(svc_two_machine_id.typ.unwrap().as_ref(), "bind");
+    assert_eq!(svc_two_machine_id.typ.as_ref().unwrap(), "bind");
     assert_eq!(svc_two_machine_id.source.as_deref(), Some("/proc"));
     assert_eq!(svc_two_machine_id.rw, Some(true));
 
     let svc_two_tmp = container_mount(&svc_two_container, "/run/tmp");
-    assert_eq!(svc_two_tmp.typ.unwrap().as_ref(), "tmpfs");
+    assert_eq!(svc_two_tmp.typ.as_ref().unwrap(), "tmpfs");
 
     // The host-level tmpfs options that were sent to the engine should round-trip
     // through the `HostConfig.Mounts` spec.
