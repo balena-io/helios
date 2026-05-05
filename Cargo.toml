@@ -27,6 +27,7 @@ fastrand = "2.4.1"
 regex = "1.12"
 pretty_assertions = "1.4.1"
 tar = "0.4"
+nix = { version = "0.31", default-features = false, features = ["fs"] }
 
 [workspace.dependencies.helios-balenahup]
 path = "./helios-balenahup"
