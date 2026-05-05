@@ -247,6 +247,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .to_owned();
 
         let mut host_config = value.host_config;
+        let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
         // be misread as a NetworkMode::Other passthrough. `Other(..)` target-state modes
@@ -259,7 +260,14 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 "host" => Some(NetworkMode::Host),
                 _ => None,
             });
-
+        let privileged = host_config
+            .as_mut()
+            .and_then(|hc| hc.privileged.take())
+            .unwrap_or_default();
+        let read_only = host_config
+            .as_mut()
+            .and_then(|hc| hc.readonly_rootfs.take())
+            .unwrap_or_default();
         let restart_policy = host_config
             .as_mut()
             .and_then(|hc| hc.restart_policy.take())
@@ -299,6 +307,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|c| c.env.take())
             .map(Environment::from)
             .unwrap_or_default();
+        let tty = config
+            .as_mut()
+            .and_then(|c| c.tty.take())
+            .unwrap_or_default();
         let cmd = config.and_then(|c| c.cmd);
 
         // Read network endpoint configurations from the container's network settings.
@@ -330,8 +342,12 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let config = ContainerConfig {
             command: cmd,
             environment,
+            init,
             labels,
+            privileged,
+            read_only,
             restart_policy,
+            tty,
             networks,
             network_mode,
             volumes,
@@ -765,9 +781,25 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Environment::is_empty")]
     pub environment: Environment,
 
+    /// Run an init process inside the container. `None` defers to the daemon
+    /// default, `Some(_)` overrides it.
+    pub init: Option<bool>,
+
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
+
+    /// Run container with extended privileges.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub privileged: bool,
+
+    /// Mount container's root filesystem as read-only.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+
+    /// Allocate a pseudo-TTY for the container
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
 
     /// Restart policy for the container
     pub restart_policy: RestartPolicy,
@@ -794,8 +826,12 @@ impl PartialEq for ContainerConfig {
     fn eq(&self, other: &Self) -> bool {
         self.command == other.command
             && self.environment == other.environment
+            && self.init == other.init
             && self.labels == other.labels
+            && self.privileged == other.privileged
+            && self.read_only == other.read_only
             && self.restart_policy == other.restart_policy
+            && self.tty == other.tty
             && self.network_mode == other.network_mode
             && self.networks.len() == other.networks.len()
             && self
@@ -811,8 +847,12 @@ impl From<ContainerConfig> for ContainerCreateBody {
         let ContainerConfig {
             command: cmd,
             environment,
+            init,
             labels,
+            privileged,
+            read_only,
             restart_policy,
+            tty,
             networks,
             network_mode,
             volumes,
@@ -877,9 +917,12 @@ impl From<ContainerConfig> for ContainerCreateBody {
         };
 
         let host_config = bollard::config::HostConfig {
-            network_mode: host_network_mode,
-            restart_policy: Some(restart_policy),
+            init,
             mounts: engine_mounts,
+            network_mode: host_network_mode,
+            privileged: Some(privileged),
+            readonly_rootfs: Some(read_only),
+            restart_policy: Some(restart_policy),
             ..Default::default()
         };
 
@@ -889,6 +932,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             labels: Some(labels),
             networking_config,
             host_config: Some(host_config),
+            tty: Some(tty),
             ..Default::default()
         }
     }
@@ -983,6 +1027,73 @@ mod tests {
             }
             other => panic!("expected Mount::Other, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn inspect_reads_bool_host_flags() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                init: Some(true),
+                privileged: Some(true),
+                readonly_rootfs: Some(true),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                tty: Some(true),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.init, Some(true));
+        assert!(c.config.privileged);
+        assert!(c.config.read_only);
+        assert!(c.config.tty);
+    }
+
+    #[test]
+    fn inspect_defaults_missing_bool_flags_to_false_and_init_to_none() {
+        let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
+        assert_eq!(c.config.init, None);
+        assert!(!c.config.privileged);
+        assert!(!c.config.read_only);
+        assert!(!c.config.tty);
+    }
+
+    #[test]
+    fn container_create_body_emits_bool_host_flags() {
+        let cfg = ContainerConfig {
+            init: Some(false),
+            privileged: true,
+            read_only: true,
+            tty: true,
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.tty, Some(true));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.init, Some(false));
+        assert_eq!(hc.privileged, Some(true));
+        assert_eq!(hc.readonly_rootfs, Some(true));
+    }
+
+    #[test]
+    fn container_create_body_preserves_init_none() {
+        let cfg = ContainerConfig::default();
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.tty, Some(false));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.init, None);
+        assert_eq!(hc.privileged, Some(false));
+        assert_eq!(hc.readonly_rootfs, Some(false));
     }
 
     #[test]

@@ -228,8 +228,12 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             config: ServiceConfig(ContainerConfig {
                 command,
                 environment,
+                init: composition.init,
                 labels,
+                privileged: composition.privileged,
+                read_only: composition.read_only,
                 restart_policy,
+                tty: composition.tty,
                 networks,
                 network_mode,
                 volumes,

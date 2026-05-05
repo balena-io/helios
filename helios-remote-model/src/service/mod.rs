@@ -38,16 +38,30 @@ pub struct Service {
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ServiceComposition {
     #[serde(default)]
-    pub restart: RestartPolicy,
+    pub command: Option<Command>,
 
     #[serde(default)]
-    pub command: Option<Command>,
+    pub environment: Environment,
+
+    /// `None`: daemon default applies
+    /// `Some(_)`: container-level setting
+    #[serde(default)]
+    pub init: Option<bool>,
 
     #[serde(default)]
     pub labels: Labels,
 
     #[serde(default)]
-    pub environment: Environment,
+    pub privileged: bool,
+
+    #[serde(default)]
+    pub read_only: bool,
+
+    #[serde(default)]
+    pub restart: RestartPolicy,
+
+    #[serde(default)]
+    pub tty: bool,
 
     #[serde(default)]
     pub networks: NetworkingConfig,
@@ -132,6 +146,37 @@ mod tests {
             svc.environment.get("RATIO"),
             Some(&Some(Value::Float(5.14)))
         );
+    }
+
+    #[test]
+    fn composition_bool_fields_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!comp.privileged);
+        assert!(!comp.read_only);
+        assert!(!comp.tty);
+        assert_eq!(comp.init, None);
+    }
+
+    #[test]
+    fn composition_bool_fields_parse_explicit_values() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "privileged": true,
+            "read_only": true,
+            "tty": true,
+            "init": true,
+        }))
+        .unwrap();
+        assert!(comp.privileged);
+        assert!(comp.read_only);
+        assert!(comp.tty);
+        assert_eq!(comp.init, Some(true));
+    }
+
+    #[test]
+    fn composition_init_preserves_explicit_false() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"init": false})).unwrap();
+        assert_eq!(comp.init, Some(false));
     }
 
     #[test]

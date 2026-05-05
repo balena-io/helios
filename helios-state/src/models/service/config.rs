@@ -104,6 +104,10 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         if !label_config_fields.contains(&"command".to_string()) {
             config.command = None;
         }
+        // The daemon / Podman can set a default value for init
+        if !label_config_fields.contains(&"init".to_string()) {
+            config.init = None;
+        }
 
         Self(config)
     }
@@ -163,6 +167,9 @@ impl ServiceConfig {
 
         if config.command.is_some() {
             fields.push("command");
+        }
+        if config.init.is_some() {
+            fields.push("init");
         }
 
         // Create a label LABEL_CONFIG_FIELDS label with all the custom fields
