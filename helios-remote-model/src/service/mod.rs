@@ -37,11 +37,27 @@ pub struct Service {
 // FIXME: add remaining fields
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ServiceComposition {
+    /// Cgroup namespace mode (`host` or `private`)
+    #[serde(default)]
+    pub cgroup: Option<String>,
+
+    #[serde(default)]
+    pub cgroup_parent: Option<String>,
+
     #[serde(default)]
     pub command: Option<Command>,
 
     #[serde(default)]
+    pub cpuset: Option<String>,
+
+    #[serde(default)]
+    pub domainname: Option<String>,
+
+    #[serde(default)]
     pub environment: Environment,
+
+    #[serde(default)]
+    pub hostname: Option<String>,
 
     /// `None`: daemon default applies
     /// `Some(_)`: container-level setting
@@ -61,7 +77,26 @@ pub struct ServiceComposition {
     pub restart: RestartPolicy,
 
     #[serde(default)]
+    pub runtime: Option<String>,
+
+    #[serde(default)]
+    pub stop_signal: Option<String>,
+
+    #[serde(default)]
     pub tty: bool,
+
+    #[serde(default)]
+    pub user: Option<String>,
+
+    #[serde(default)]
+    pub userns_mode: Option<String>,
+
+    /// UTS namespace mode (`host` or empty)
+    #[serde(default)]
+    pub uts: Option<String>,
+
+    #[serde(default)]
+    pub working_dir: Option<String>,
 
     #[serde(default)]
     pub networks: NetworkingConfig,
@@ -170,6 +205,51 @@ mod tests {
         assert!(comp.read_only);
         assert!(comp.tty);
         assert_eq!(comp.init, Some(true));
+    }
+
+    #[test]
+    fn composition_string_fields_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.cgroup, None);
+        assert_eq!(comp.cgroup_parent, None);
+        assert_eq!(comp.cpuset, None);
+        assert_eq!(comp.domainname, None);
+        assert_eq!(comp.hostname, None);
+        assert_eq!(comp.runtime, None);
+        assert_eq!(comp.stop_signal, None);
+        assert_eq!(comp.user, None);
+        assert_eq!(comp.userns_mode, None);
+        assert_eq!(comp.uts, None);
+        assert_eq!(comp.working_dir, None);
+    }
+
+    #[test]
+    fn composition_string_fields_parse_explicit_values() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cgroup": "host",
+            "cgroup_parent": "/custom",
+            "cpuset": "0-3",
+            "domainname": "example.com",
+            "hostname": "my-host",
+            "runtime": "runc",
+            "stop_signal": "SIGTERM",
+            "user": "1000:1000",
+            "userns_mode": "host",
+            "uts": "host",
+            "working_dir": "/app",
+        }))
+        .unwrap();
+        assert_eq!(comp.cgroup.as_deref(), Some("host"));
+        assert_eq!(comp.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(comp.cpuset.as_deref(), Some("0-3"));
+        assert_eq!(comp.domainname.as_deref(), Some("example.com"));
+        assert_eq!(comp.hostname.as_deref(), Some("my-host"));
+        assert_eq!(comp.runtime.as_deref(), Some("runc"));
+        assert_eq!(comp.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(comp.user.as_deref(), Some("1000:1000"));
+        assert_eq!(comp.userns_mode.as_deref(), Some("host"));
+        assert_eq!(comp.uts.as_deref(), Some("host"));
+        assert_eq!(comp.working_dir.as_deref(), Some("/app"));
     }
 
     #[test]

@@ -100,13 +100,47 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             .unwrap_or_default();
         labels.retain(|k, _| label_config_labels_value.contains(k));
 
-        // Keep the command the command if part of the composition fields
+        // Drop fields not in the composition as the engine fills these in
+        // with default values.
+        if !label_config_fields.contains(&"cgroup".to_string()) {
+            config.cgroup = None;
+        }
+        if !label_config_fields.contains(&"cgroup_parent".to_string()) {
+            config.cgroup_parent = None;
+        }
         if !label_config_fields.contains(&"command".to_string()) {
             config.command = None;
+        }
+        if !label_config_fields.contains(&"cpuset".to_string()) {
+            config.cpuset = None;
+        }
+        if !label_config_fields.contains(&"domainname".to_string()) {
+            config.domainname = None;
+        }
+        if !label_config_fields.contains(&"hostname".to_string()) {
+            config.hostname = None;
         }
         // The daemon / Podman can set a default value for init
         if !label_config_fields.contains(&"init".to_string()) {
             config.init = None;
+        }
+        if !label_config_fields.contains(&"runtime".to_string()) {
+            config.runtime = None;
+        }
+        if !label_config_fields.contains(&"stop_signal".to_string()) {
+            config.stop_signal = None;
+        }
+        if !label_config_fields.contains(&"user".to_string()) {
+            config.user = None;
+        }
+        if !label_config_fields.contains(&"userns_mode".to_string()) {
+            config.userns_mode = None;
+        }
+        if !label_config_fields.contains(&"uts".to_string()) {
+            config.uts = None;
+        }
+        if !label_config_fields.contains(&"working_dir".to_string()) {
+            config.working_dir = None;
         }
 
         Self(config)
@@ -165,11 +199,44 @@ impl ServiceConfig {
         // the default unless overriden
         let mut fields = Vec::new();
 
+        if config.cgroup.is_some() {
+            fields.push("cgroup");
+        }
+        if config.cgroup_parent.is_some() {
+            fields.push("cgroup_parent");
+        }
         if config.command.is_some() {
             fields.push("command");
         }
+        if config.cpuset.is_some() {
+            fields.push("cpuset");
+        }
+        if config.domainname.is_some() {
+            fields.push("domainname");
+        }
+        if config.hostname.is_some() {
+            fields.push("hostname");
+        }
         if config.init.is_some() {
             fields.push("init");
+        }
+        if config.runtime.is_some() {
+            fields.push("runtime");
+        }
+        if config.stop_signal.is_some() {
+            fields.push("stop_signal");
+        }
+        if config.user.is_some() {
+            fields.push("user");
+        }
+        if config.userns_mode.is_some() {
+            fields.push("userns_mode");
+        }
+        if config.uts.is_some() {
+            fields.push("uts");
+        }
+        if config.working_dir.is_some() {
+            fields.push("working_dir");
         }
 
         // Create a label LABEL_CONFIG_FIELDS label with all the custom fields
@@ -222,5 +289,90 @@ impl ServiceConfig {
         }
 
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn make_uuid() -> Uuid {
+        Uuid::from("test-app-uuid")
+    }
+
+    #[test]
+    fn preserves_explicit_config_fields_using_label_config_fields() {
+        let original = oci::ContainerConfig {
+            command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
+            cgroup: Some("host".to_string()),
+            cgroup_parent: Some("/custom".to_string()),
+            cpuset: Some("0-3".to_string()),
+            domainname: Some("example.com".to_string()),
+            hostname: Some("my-host".to_string()),
+            init: Some(true),
+            runtime: Some("runc".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            user: Some("1000:1000".to_string()),
+            userns_mode: Some("host".to_string()),
+            uts: Some("host".to_string()),
+            working_dir: Some("/app".to_string()),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.command, original.command);
+        assert_eq!(back.cgroup, original.cgroup);
+        assert_eq!(back.cgroup_parent, original.cgroup_parent);
+        assert_eq!(back.cpuset, original.cpuset);
+        assert_eq!(back.domainname, original.domainname);
+        assert_eq!(back.hostname, original.hostname);
+        assert_eq!(back.init, original.init);
+        assert_eq!(back.runtime, original.runtime);
+        assert_eq!(back.stop_signal, original.stop_signal);
+        assert_eq!(back.user, original.user);
+        assert_eq!(back.userns_mode, original.userns_mode);
+        assert_eq!(back.uts, original.uts);
+        assert_eq!(back.working_dir, original.working_dir);
+    }
+
+    #[test]
+    fn drops_config_fields_when_not_in_label_config_fields() {
+        // Simulate an inspect where the engine/image filled in values the
+        // composition never requested.
+        let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
+        let inspected = oci::ContainerConfig {
+            command: Some(vec!["/bin/sh".to_string()]),
+            cgroup: Some("host".to_string()),
+            cgroup_parent: Some("/docker".to_string()),
+            cpuset: Some("0-3".to_string()),
+            domainname: Some("auto.local".to_string()),
+            hostname: Some("a1b2c3d4e5f6".to_string()),
+            init: Some(true),
+            runtime: Some("runc".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            user: Some("root".to_string()),
+            userns_mode: Some("host".to_string()),
+            uts: Some("host".to_string()),
+            working_dir: Some("/".to_string()),
+            labels,
+            ..Default::default()
+        };
+        let svc = ServiceConfig::from(inspected);
+        assert_eq!(svc.command, None);
+        assert_eq!(svc.cgroup, None);
+        assert_eq!(svc.cgroup_parent, None);
+        assert_eq!(svc.cpuset, None);
+        assert_eq!(svc.domainname, None);
+        assert_eq!(svc.hostname, None);
+        assert_eq!(svc.init, None);
+        assert_eq!(svc.runtime, None);
+        assert_eq!(svc.stop_signal, None);
+        assert_eq!(svc.user, None);
+        assert_eq!(svc.userns_mode, None);
+        assert_eq!(svc.uts, None);
+        assert_eq!(svc.working_dir, None);
     }
 }

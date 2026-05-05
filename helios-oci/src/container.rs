@@ -247,6 +247,12 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .to_owned();
 
         let mut host_config = value.host_config;
+        let cgroup = host_config
+            .as_mut()
+            .and_then(|hc| hc.cgroupns_mode.take())
+            .map(|m| m.to_string());
+        let cgroup_parent = host_config.as_mut().and_then(|hc| hc.cgroup_parent.take());
+        let cpuset = host_config.as_mut().and_then(|hc| hc.cpuset_cpus.take());
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -283,7 +289,6 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 })
             })
             .unwrap_or_default();
-
         let mut volumes = host_config
             .as_mut()
             .and_then(|hc| hc.mounts.take())
@@ -291,6 +296,9 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .into_iter()
             .map(Mount::try_from)
             .collect::<Result<Vec<_>>>()?;
+        let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
+        let userns_mode = host_config.as_mut().and_then(|hc| hc.userns_mode.take());
+        let uts = host_config.as_mut().and_then(|hc| hc.uts_mode.take());
 
         // Sort by target so the serialized form is stable regardless of the
         // order the engine reports the mounts in — Mahler compares state via
@@ -307,11 +315,16 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|c| c.env.take())
             .map(Environment::from)
             .unwrap_or_default();
+        let cmd = config.as_mut().and_then(|c| c.cmd.take());
+        let domainname = config.as_mut().and_then(|c| c.domainname.take());
+        let hostname = config.as_mut().and_then(|c| c.hostname.take());
+        let stop_signal = config.as_mut().and_then(|c| c.stop_signal.take());
         let tty = config
             .as_mut()
             .and_then(|c| c.tty.take())
             .unwrap_or_default();
-        let cmd = config.and_then(|c| c.cmd);
+        let user = config.as_mut().and_then(|c| c.user.take());
+        let working_dir = config.as_mut().and_then(|c| c.working_dir.take());
 
         // Read network endpoint configurations from the container's network settings.
         // When network_mode is `host` or `none`, networks are not user-managed — leave empty.
@@ -340,14 +353,25 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         };
 
         let config = ContainerConfig {
+            cgroup,
+            cgroup_parent,
             command: cmd,
+            cpuset,
+            domainname,
             environment,
+            hostname,
             init,
             labels,
             privileged,
             read_only,
             restart_policy,
+            runtime,
+            stop_signal,
             tty,
+            user,
+            userns_mode,
+            uts,
+            working_dir,
             networks,
             network_mode,
             volumes,
@@ -774,12 +798,27 @@ impl TryFrom<bollard::models::Mount> for Mount {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(default)]
 pub struct ContainerConfig {
+    /// Cgroup namespace mode (`host` or `private`)
+    pub cgroup: Option<String>,
+
+    /// Path to cgroups under which the container's cgroup is created
+    pub cgroup_parent: Option<String>,
+
     /// Command to run specified as an array of strings
     pub command: Option<Vec<String>>,
+
+    /// CPUs the container is allowed to run on (`0-3`, `1,3`, etc)
+    pub cpuset: Option<String>,
+
+    /// NIS domain name to use for the container.
+    pub domainname: Option<String>,
 
     /// Environment variables
     #[serde(skip_serializing_if = "Environment::is_empty")]
     pub environment: Environment,
+
+    /// Hostname to use for the container, as a valid RFC 1123 hostname
+    pub hostname: Option<String>,
 
     /// Run an init process inside the container. `None` defers to the daemon
     /// default, `Some(_)` overrides it.
@@ -804,6 +843,24 @@ pub struct ContainerConfig {
     /// Restart policy for the container
     pub restart_policy: RestartPolicy,
 
+    /// Runtime to use with this container, such as `runc` or `nvidia`
+    pub runtime: Option<String>,
+
+    /// Signal sent to stop the container
+    pub stop_signal: Option<String>,
+
+    /// User the container runs commands as, format `<name|uid>[:<group|gid>]`
+    pub user: Option<String>,
+
+    /// User namespace mode, only `host` is supported
+    pub userns_mode: Option<String>,
+
+    /// UTS namespace mode (`host` or empty)
+    pub uts: Option<String>,
+
+    /// Working directory for commands run inside the container
+    pub working_dir: Option<String>,
+
     /// Network endpoint configurations, ordered by connection priority.
     ///
     /// Mutually exclusive with `network_mode`.
@@ -824,14 +881,25 @@ pub struct ContainerConfig {
 /// comparison is stable across target-state reorderings.
 impl PartialEq for ContainerConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.command == other.command
+        self.cgroup == other.cgroup
+            && self.cgroup_parent == other.cgroup_parent
+            && self.command == other.command
+            && self.cpuset == other.cpuset
+            && self.domainname == other.domainname
             && self.environment == other.environment
+            && self.hostname == other.hostname
             && self.init == other.init
             && self.labels == other.labels
             && self.privileged == other.privileged
             && self.read_only == other.read_only
             && self.restart_policy == other.restart_policy
+            && self.runtime == other.runtime
+            && self.stop_signal == other.stop_signal
             && self.tty == other.tty
+            && self.user == other.user
+            && self.userns_mode == other.userns_mode
+            && self.uts == other.uts
+            && self.working_dir == other.working_dir
             && self.network_mode == other.network_mode
             && self.networks.len() == other.networks.len()
             && self
@@ -845,14 +913,25 @@ impl PartialEq for ContainerConfig {
 impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
         let ContainerConfig {
+            cgroup,
+            cgroup_parent,
             command: cmd,
+            cpuset,
+            domainname,
             environment,
+            hostname,
             init,
             labels,
             privileged,
             read_only,
             restart_policy,
+            runtime,
+            stop_signal,
             tty,
+            user,
+            userns_mode,
+            uts,
+            working_dir,
             networks,
             network_mode,
             volumes,
@@ -916,23 +995,38 @@ impl From<ContainerConfig> for ContainerCreateBody {
             Some(volumes.into_iter().map(Into::into).collect())
         };
 
+        // Compose's `cgroup` maps to bollard's typed `cgroupns_mode`. Invalid
+        // values fall through as None
+        let cgroupns_mode = cgroup.and_then(|s| s.parse().ok());
+
         let host_config = bollard::config::HostConfig {
+            cgroup_parent,
+            cgroupns_mode,
+            cpuset_cpus: cpuset,
             init,
             mounts: engine_mounts,
             network_mode: host_network_mode,
             privileged: Some(privileged),
             readonly_rootfs: Some(read_only),
             restart_policy: Some(restart_policy),
+            runtime,
+            userns_mode,
+            uts_mode: uts,
             ..Default::default()
         };
 
         ContainerCreateBody {
             cmd,
+            domainname,
             env,
+            hostname,
             labels: Some(labels),
             networking_config,
             host_config: Some(host_config),
+            stop_signal,
             tty: Some(tty),
+            user,
+            working_dir,
             ..Default::default()
         }
     }
@@ -1094,6 +1188,84 @@ mod tests {
         assert_eq!(hc.init, None);
         assert_eq!(hc.privileged, Some(false));
         assert_eq!(hc.readonly_rootfs, Some(false));
+    }
+
+    #[test]
+    fn inspect_reads_string_fields() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cgroup_parent: Some("/custom".to_string()),
+                cgroupns_mode: Some(bollard::models::HostConfigCgroupnsModeEnum::HOST),
+                cpuset_cpus: Some("0-3".to_string()),
+                runtime: Some("runc".to_string()),
+                userns_mode: Some("host".to_string()),
+                uts_mode: Some("host".to_string()),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                hostname: Some("my-host".to_string()),
+                domainname: Some("example.com".to_string()),
+                user: Some("1000:1000".to_string()),
+                stop_signal: Some("SIGTERM".to_string()),
+                working_dir: Some("/app".to_string()),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cgroup.as_deref(), Some("host"));
+        assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
+        assert_eq!(c.config.runtime.as_deref(), Some("runc"));
+        assert_eq!(c.config.userns_mode.as_deref(), Some("host"));
+        assert_eq!(c.config.uts.as_deref(), Some("host"));
+        assert_eq!(c.config.hostname.as_deref(), Some("my-host"));
+        assert_eq!(c.config.domainname.as_deref(), Some("example.com"));
+        assert_eq!(c.config.user.as_deref(), Some("1000:1000"));
+        assert_eq!(c.config.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(c.config.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn container_create_body_emits_string_fields() {
+        let cfg = ContainerConfig {
+            cgroup: Some("host".to_string()),
+            cgroup_parent: Some("/custom".to_string()),
+            cpuset: Some("0-3".to_string()),
+            domainname: Some("example.com".to_string()),
+            hostname: Some("my-host".to_string()),
+            runtime: Some("runc".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            user: Some("1000:1000".to_string()),
+            userns_mode: Some("host".to_string()),
+            uts: Some("host".to_string()),
+            working_dir: Some("/app".to_string()),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.hostname.as_deref(), Some("my-host"));
+        assert_eq!(body.domainname.as_deref(), Some("example.com"));
+        assert_eq!(body.user.as_deref(), Some("1000:1000"));
+        assert_eq!(body.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(body.working_dir.as_deref(), Some("/app"));
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.cgroupns_mode,
+            Some(bollard::models::HostConfigCgroupnsModeEnum::HOST)
+        );
+        assert_eq!(hc.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(hc.cpuset_cpus.as_deref(), Some("0-3"));
+        assert_eq!(hc.runtime.as_deref(), Some("runc"));
+        assert_eq!(hc.userns_mode.as_deref(), Some("host"));
+        assert_eq!(hc.uts_mode.as_deref(), Some("host"));
     }
 
     #[test]
