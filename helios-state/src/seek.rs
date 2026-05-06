@@ -367,7 +367,6 @@ pub async fn start_seek(
         docker,
         local_store,
         registry_auth_client,
-        #[cfg(feature = "balenahup")]
         host_runtime_dir,
     } = runtime;
 
@@ -375,7 +374,6 @@ pub async fn start_seek(
     let worker = create(
         docker.clone(),
         local_store.clone(),
-        #[cfg(feature = "balenahup")]
         host_runtime_dir.clone(),
         registry_auth_client.clone(),
     );

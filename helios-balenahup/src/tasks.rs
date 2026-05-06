@@ -7,7 +7,7 @@ use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
 use tracing::debug;
 
-use crate::common_types::Uuid;
+use crate::common_types::{HostRuntimeDir, Uuid};
 use crate::oci::{self, Client as Docker};
 use crate::store::{self as store, DocumentStore};
 use crate::util::dirs::runtime_dir;
@@ -15,8 +15,8 @@ use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
+use super::BALENAHUP;
 use super::models::{Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget};
-use super::{BALENAHUP, HostRuntimeDir};
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {

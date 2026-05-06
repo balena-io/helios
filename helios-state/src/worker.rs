@@ -2,10 +2,9 @@ use mahler::worker::{Uninitialized, Worker};
 
 use helios_store::DocumentStore;
 
+use crate::common_types::HostRuntimeDir;
 use crate::oci::{Client as Docker, RegistryAuth};
 
-#[cfg(feature = "balenahup")]
-use super::config::HostRuntimeDir;
 use super::models::Device;
 use super::tasks::with_device_tasks;
 #[cfg(feature = "balenahup")]
@@ -50,7 +49,7 @@ pub type LocalWorker = Worker<Device, Uninitialized>;
 pub fn create(
     docker: Docker,
     local_store: DocumentStore,
-    #[cfg(feature = "balenahup")] host_runtime_dir: HostRuntimeDir,
+    host_runtime_dir: HostRuntimeDir,
     registry_auth_client: Option<RegistryAuth>,
 ) -> LocalWorker {
     // Create the worker and set-up resources
@@ -60,11 +59,7 @@ pub fn create(
         worker.use_resource(auth_client);
     }
 
-    #[cfg(feature = "balenahup")]
-    {
-        worker.use_resource(host_runtime_dir);
-    }
-
+    worker.use_resource(host_runtime_dir);
     worker.use_resource(local_store);
     worker
 }

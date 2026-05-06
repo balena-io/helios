@@ -47,7 +47,7 @@ if [ -n "${BALENA_HOST_OS_VERSION}" ]; then
   export HELIOS_HOST_OS_VERSION
 fi
 
-# Do not allow the board rev to be user configurable
+# Do not allow the runtime dir to be configurable
 unset HELIOS_HOST_RUNTIME_DIR
 
 if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then

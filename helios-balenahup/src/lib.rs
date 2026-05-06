@@ -1,6 +1,3 @@
-use std::ops::Deref;
-use std::path::PathBuf;
-
 mod models;
 pub mod read;
 mod tasks;
@@ -16,15 +13,3 @@ use helios_util::types as common_types;
 
 // prefix for container/dir and files for balenahup
 const BALENAHUP: &str = "balenahup";
-
-/// Directory on the host filesystem used by balenahup at runtime.
-#[derive(Debug, Clone)]
-pub struct HostRuntimeDir(pub PathBuf);
-
-impl Deref for HostRuntimeDir {
-    type Target = PathBuf;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
