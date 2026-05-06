@@ -253,6 +253,13 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .map(|m| m.to_string());
         let cgroup_parent = host_config.as_mut().and_then(|hc| hc.cgroup_parent.take());
         let cpuset = host_config.as_mut().and_then(|hc| hc.cpuset_cpus.take());
+        let cpu_rt_period = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_realtime_period.take());
+        let cpu_rt_runtime = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_realtime_runtime.take());
+        let cpu_shares = host_config.as_mut().and_then(|hc| hc.cpu_shares.take());
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -296,7 +303,15 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .into_iter()
             .map(Mount::try_from)
             .collect::<Result<Vec<_>>>()?;
+        let mem_limit = host_config.as_mut().and_then(|hc| hc.memory.take());
+        let mem_reservation = host_config
+            .as_mut()
+            .and_then(|hc| hc.memory_reservation.take());
+        let nano_cpus = host_config.as_mut().and_then(|hc| hc.nano_cpus.take());
+        let oom_score_adj = host_config.as_mut().and_then(|hc| hc.oom_score_adj.take());
+        let pids_limit = host_config.as_mut().and_then(|hc| hc.pids_limit.take());
         let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
+        let shm_size = host_config.as_mut().and_then(|hc| hc.shm_size.take());
         let userns_mode = host_config.as_mut().and_then(|hc| hc.userns_mode.take());
         let uts = host_config.as_mut().and_then(|hc| hc.uts_mode.take());
 
@@ -318,6 +333,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let cmd = config.as_mut().and_then(|c| c.cmd.take());
         let domainname = config.as_mut().and_then(|c| c.domainname.take());
         let hostname = config.as_mut().and_then(|c| c.hostname.take());
+        let stop_grace_period = config.as_mut().and_then(|c| c.stop_timeout.take());
         let stop_signal = config.as_mut().and_then(|c| c.stop_signal.take());
         let tty = config
             .as_mut()
@@ -357,15 +373,25 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cgroup_parent,
             command: cmd,
             cpuset,
+            cpu_rt_period,
+            cpu_rt_runtime,
+            cpu_shares,
             domainname,
             environment,
             hostname,
             init,
             labels,
+            mem_limit,
+            mem_reservation,
+            nano_cpus,
+            oom_score_adj,
+            pids_limit,
             privileged,
             read_only,
             restart_policy,
             runtime,
+            shm_size,
+            stop_grace_period,
             stop_signal,
             tty,
             user,
@@ -810,6 +836,15 @@ pub struct ContainerConfig {
     /// CPUs the container is allowed to run on (`0-3`, `1,3`, etc)
     pub cpuset: Option<String>,
 
+    /// Real-time CPU period in microseconds.
+    pub cpu_rt_period: Option<i64>,
+
+    /// Real-time CPU runtime in microseconds (must be <= `cpu_rt_period`).
+    pub cpu_rt_runtime: Option<i64>,
+
+    /// CPU shares (relative weight vs other containers; default 1024)
+    pub cpu_shares: Option<i64>,
+
     /// NIS domain name to use for the container.
     pub domainname: Option<String>,
 
@@ -827,6 +862,16 @@ pub struct ContainerConfig {
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
+
+    /// Memory limit in bytes
+    pub mem_limit: Option<i64>,
+
+    /// Memory reservation in bytes
+    pub mem_reservation: Option<i64>,
+
+    /// CPU quota in nanoseconds-of-CPU-per-second (1 CPU = 1_000_000_000),
+    /// Compose's fractional `cpus` is stored here after the `* 1e9` conversion
+    pub nano_cpus: Option<i64>,
 
     /// Run container with extended privileges.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -846,6 +891,13 @@ pub struct ContainerConfig {
     /// Runtime to use with this container, such as `runc` or `nvidia`
     pub runtime: Option<String>,
 
+    /// Size of `/dev/shm` in bytes
+    pub shm_size: Option<i64>,
+
+    /// Time in seconds the engine waits for a stopping container before
+    /// killing it
+    pub stop_grace_period: Option<i64>,
+
     /// Signal sent to stop the container
     pub stop_signal: Option<String>,
 
@@ -860,6 +912,13 @@ pub struct ContainerConfig {
 
     /// Working directory for commands run inside the container
     pub working_dir: Option<String>,
+
+    /// Tune the host's OOM-killer score adjustment for the container
+    /// process (-1000..=1000)
+    pub oom_score_adj: Option<i64>,
+
+    /// Maximum number of process IDs allowed in the container
+    pub pids_limit: Option<i64>,
 
     /// Network endpoint configurations, ordered by connection priority.
     ///
@@ -884,16 +943,26 @@ impl PartialEq for ContainerConfig {
         self.cgroup == other.cgroup
             && self.cgroup_parent == other.cgroup_parent
             && self.command == other.command
+            && self.cpu_rt_period == other.cpu_rt_period
+            && self.cpu_rt_runtime == other.cpu_rt_runtime
             && self.cpuset == other.cpuset
+            && self.cpu_shares == other.cpu_shares
             && self.domainname == other.domainname
             && self.environment == other.environment
             && self.hostname == other.hostname
             && self.init == other.init
             && self.labels == other.labels
+            && self.mem_limit == other.mem_limit
+            && self.mem_reservation == other.mem_reservation
+            && self.nano_cpus == other.nano_cpus
+            && self.oom_score_adj == other.oom_score_adj
+            && self.pids_limit == other.pids_limit
             && self.privileged == other.privileged
             && self.read_only == other.read_only
             && self.restart_policy == other.restart_policy
             && self.runtime == other.runtime
+            && self.shm_size == other.shm_size
+            && self.stop_grace_period == other.stop_grace_period
             && self.stop_signal == other.stop_signal
             && self.tty == other.tty
             && self.user == other.user
@@ -917,15 +986,25 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cgroup_parent,
             command: cmd,
             cpuset,
+            cpu_rt_period,
+            cpu_rt_runtime,
+            cpu_shares,
             domainname,
             environment,
             hostname,
             init,
             labels,
+            mem_limit,
+            mem_reservation,
+            nano_cpus,
+            oom_score_adj,
+            pids_limit,
             privileged,
             read_only,
             restart_policy,
             runtime,
+            shm_size,
+            stop_grace_period,
             stop_signal,
             tty,
             user,
@@ -1003,13 +1082,22 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cgroup_parent,
             cgroupns_mode,
             cpuset_cpus: cpuset,
+            cpu_realtime_period: cpu_rt_period,
+            cpu_realtime_runtime: cpu_rt_runtime,
+            cpu_shares,
             init,
+            memory: mem_limit,
+            memory_reservation: mem_reservation,
             mounts: engine_mounts,
+            nano_cpus,
             network_mode: host_network_mode,
+            oom_score_adj,
+            pids_limit,
             privileged: Some(privileged),
             readonly_rootfs: Some(read_only),
             restart_policy: Some(restart_policy),
             runtime,
+            shm_size,
             userns_mode,
             uts_mode: uts,
             ..Default::default()
@@ -1024,6 +1112,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             networking_config,
             host_config: Some(host_config),
             stop_signal,
+            stop_timeout: stop_grace_period,
             tty: Some(tty),
             user,
             working_dir,
@@ -1266,6 +1355,77 @@ mod tests {
         assert_eq!(hc.runtime.as_deref(), Some("runc"));
         assert_eq!(hc.userns_mode.as_deref(), Some("host"));
         assert_eq!(hc.uts_mode.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn inspect_reads_number_host_fields() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cpu_realtime_period: Some(1_000_000),
+                cpu_realtime_runtime: Some(950_000),
+                cpu_shares: Some(2048),
+                memory: Some(1073741824),
+                memory_reservation: Some(536870912),
+                nano_cpus: Some(1_500_000_000),
+                oom_score_adj: Some(-500),
+                pids_limit: Some(100),
+                shm_size: Some(67108864),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                stop_timeout: Some(30),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cpu_rt_period, Some(1_000_000));
+        assert_eq!(c.config.cpu_rt_runtime, Some(950_000));
+        assert_eq!(c.config.cpu_shares, Some(2048));
+        assert_eq!(c.config.mem_limit, Some(1073741824));
+        assert_eq!(c.config.mem_reservation, Some(536870912));
+        assert_eq!(c.config.nano_cpus, Some(1_500_000_000));
+        assert_eq!(c.config.oom_score_adj, Some(-500));
+        assert_eq!(c.config.pids_limit, Some(100));
+        assert_eq!(c.config.shm_size, Some(67108864));
+        assert_eq!(c.config.stop_grace_period, Some(30));
+    }
+
+    #[test]
+    fn container_create_body_emits_number_host_fields() {
+        let cfg = ContainerConfig {
+            cpu_rt_period: Some(1_000_000),
+            cpu_rt_runtime: Some(950_000),
+            cpu_shares: Some(2048),
+            mem_limit: Some(1073741824),
+            mem_reservation: Some(536870912),
+            nano_cpus: Some(1_500_000_000),
+            oom_score_adj: Some(-500),
+            pids_limit: Some(100),
+            shm_size: Some(67108864),
+            stop_grace_period: Some(30),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.stop_timeout, Some(30));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.cpu_realtime_period, Some(1_000_000));
+        assert_eq!(hc.cpu_realtime_runtime, Some(950_000));
+        assert_eq!(hc.cpu_shares, Some(2048));
+        assert_eq!(hc.memory, Some(1073741824));
+        assert_eq!(hc.memory_reservation, Some(536870912));
+        assert_eq!(hc.nano_cpus, Some(1_500_000_000));
+        assert_eq!(hc.oom_score_adj, Some(-500));
+        assert_eq!(hc.pids_limit, Some(100));
+        assert_eq!(hc.shm_size, Some(67108864));
     }
 
     #[test]

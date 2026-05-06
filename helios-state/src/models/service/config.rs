@@ -114,6 +114,15 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         if !label_config_fields.contains(&"cpuset".to_string()) {
             config.cpuset = None;
         }
+        if !label_config_fields.contains(&"cpu_rt_period".to_string()) {
+            config.cpu_rt_period = None;
+        }
+        if !label_config_fields.contains(&"cpu_rt_runtime".to_string()) {
+            config.cpu_rt_runtime = None;
+        }
+        if !label_config_fields.contains(&"cpu_shares".to_string()) {
+            config.cpu_shares = None;
+        }
         if !label_config_fields.contains(&"domainname".to_string()) {
             config.domainname = None;
         }
@@ -124,8 +133,29 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         if !label_config_fields.contains(&"init".to_string()) {
             config.init = None;
         }
+        if !label_config_fields.contains(&"mem_limit".to_string()) {
+            config.mem_limit = None;
+        }
+        if !label_config_fields.contains(&"mem_reservation".to_string()) {
+            config.mem_reservation = None;
+        }
+        if !label_config_fields.contains(&"nano_cpus".to_string()) {
+            config.nano_cpus = None;
+        }
+        if !label_config_fields.contains(&"oom_score_adj".to_string()) {
+            config.oom_score_adj = None;
+        }
+        if !label_config_fields.contains(&"pids_limit".to_string()) {
+            config.pids_limit = None;
+        }
         if !label_config_fields.contains(&"runtime".to_string()) {
             config.runtime = None;
+        }
+        if !label_config_fields.contains(&"shm_size".to_string()) {
+            config.shm_size = None;
+        }
+        if !label_config_fields.contains(&"stop_grace_period".to_string()) {
+            config.stop_grace_period = None;
         }
         if !label_config_fields.contains(&"stop_signal".to_string()) {
             config.stop_signal = None;
@@ -211,6 +241,15 @@ impl ServiceConfig {
         if config.cpuset.is_some() {
             fields.push("cpuset");
         }
+        if config.cpu_rt_period.is_some() {
+            fields.push("cpu_rt_period");
+        }
+        if config.cpu_rt_runtime.is_some() {
+            fields.push("cpu_rt_runtime");
+        }
+        if config.cpu_shares.is_some() {
+            fields.push("cpu_shares");
+        }
         if config.domainname.is_some() {
             fields.push("domainname");
         }
@@ -220,8 +259,29 @@ impl ServiceConfig {
         if config.init.is_some() {
             fields.push("init");
         }
+        if config.mem_limit.is_some() {
+            fields.push("mem_limit");
+        }
+        if config.mem_reservation.is_some() {
+            fields.push("mem_reservation");
+        }
+        if config.nano_cpus.is_some() {
+            fields.push("nano_cpus");
+        }
+        if config.oom_score_adj.is_some() {
+            fields.push("oom_score_adj");
+        }
+        if config.pids_limit.is_some() {
+            fields.push("pids_limit");
+        }
         if config.runtime.is_some() {
             fields.push("runtime");
+        }
+        if config.shm_size.is_some() {
+            fields.push("shm_size");
+        }
+        if config.stop_grace_period.is_some() {
+            fields.push("stop_grace_period");
         }
         if config.stop_signal.is_some() {
             fields.push("stop_signal");
@@ -308,10 +368,20 @@ mod tests {
             cgroup: Some("host".to_string()),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
+            cpu_rt_period: Some(1_000_000),
+            cpu_rt_runtime: Some(950_000),
+            cpu_shares: Some(2048),
             domainname: Some("example.com".to_string()),
             hostname: Some("my-host".to_string()),
             init: Some(true),
+            mem_limit: Some(1073741824),
+            mem_reservation: Some(536870912),
+            nano_cpus: Some(1_500_000_000),
+            oom_score_adj: Some(-500),
+            pids_limit: Some(100),
             runtime: Some("runc".to_string()),
+            shm_size: Some(67108864),
+            stop_grace_period: Some(30),
             stop_signal: Some("SIGTERM".to_string()),
             user: Some("1000:1000".to_string()),
             userns_mode: Some("host".to_string()),
@@ -327,10 +397,20 @@ mod tests {
         assert_eq!(back.cgroup, original.cgroup);
         assert_eq!(back.cgroup_parent, original.cgroup_parent);
         assert_eq!(back.cpuset, original.cpuset);
+        assert_eq!(back.cpu_rt_period, original.cpu_rt_period);
+        assert_eq!(back.cpu_rt_runtime, original.cpu_rt_runtime);
+        assert_eq!(back.cpu_shares, original.cpu_shares);
         assert_eq!(back.domainname, original.domainname);
         assert_eq!(back.hostname, original.hostname);
         assert_eq!(back.init, original.init);
+        assert_eq!(back.mem_limit, original.mem_limit);
+        assert_eq!(back.mem_reservation, original.mem_reservation);
+        assert_eq!(back.nano_cpus, original.nano_cpus);
+        assert_eq!(back.oom_score_adj, original.oom_score_adj);
+        assert_eq!(back.pids_limit, original.pids_limit);
         assert_eq!(back.runtime, original.runtime);
+        assert_eq!(back.shm_size, original.shm_size);
+        assert_eq!(back.stop_grace_period, original.stop_grace_period);
         assert_eq!(back.stop_signal, original.stop_signal);
         assert_eq!(back.user, original.user);
         assert_eq!(back.userns_mode, original.userns_mode);
@@ -348,10 +428,20 @@ mod tests {
             cgroup: Some("host".to_string()),
             cgroup_parent: Some("/docker".to_string()),
             cpuset: Some("0-3".to_string()),
+            cpu_rt_period: Some(0),
+            cpu_rt_runtime: Some(0),
+            cpu_shares: Some(1024),
             domainname: Some("auto.local".to_string()),
             hostname: Some("a1b2c3d4e5f6".to_string()),
             init: Some(true),
+            mem_limit: Some(0),
+            mem_reservation: Some(0),
+            nano_cpus: Some(0),
+            oom_score_adj: Some(0),
+            pids_limit: Some(0),
             runtime: Some("runc".to_string()),
+            shm_size: Some(67108864),
+            stop_grace_period: Some(10),
             stop_signal: Some("SIGTERM".to_string()),
             user: Some("root".to_string()),
             userns_mode: Some("host".to_string()),
@@ -365,10 +455,20 @@ mod tests {
         assert_eq!(svc.cgroup, None);
         assert_eq!(svc.cgroup_parent, None);
         assert_eq!(svc.cpuset, None);
+        assert_eq!(svc.cpu_rt_period, None);
+        assert_eq!(svc.cpu_rt_runtime, None);
+        assert_eq!(svc.cpu_shares, None);
         assert_eq!(svc.domainname, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
+        assert_eq!(svc.mem_limit, None);
+        assert_eq!(svc.mem_reservation, None);
+        assert_eq!(svc.nano_cpus, None);
+        assert_eq!(svc.oom_score_adj, None);
+        assert_eq!(svc.pids_limit, None);
         assert_eq!(svc.runtime, None);
+        assert_eq!(svc.shm_size, None);
+        assert_eq!(svc.stop_grace_period, None);
         assert_eq!(svc.stop_signal, None);
         assert_eq!(svc.user, None);
         assert_eq!(svc.userns_mode, None);
