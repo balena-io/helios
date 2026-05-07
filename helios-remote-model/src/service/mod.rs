@@ -4,12 +4,14 @@ use serde::Deserialize;
 
 use crate::common_types::{Environment, ImageUri, Value};
 
+mod cgroup;
 mod command;
 mod network_mode;
 mod networks;
 mod restart_policy;
 mod volumes;
 
+pub use cgroup::*;
 pub use command::*;
 pub use network_mode::*;
 pub use networks::*;
@@ -37,9 +39,8 @@ pub struct Service {
 // FIXME: add remaining fields
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ServiceComposition {
-    /// Cgroup namespace mode (`host` or `private`)
     #[serde(default)]
-    pub cgroup: Option<String>,
+    pub cgroup: Option<Cgroup>,
 
     #[serde(default)]
     pub cgroup_parent: Option<String>,
@@ -271,7 +272,7 @@ mod tests {
             "working_dir": "/app",
         }))
         .unwrap();
-        assert_eq!(comp.cgroup.as_deref(), Some("host"));
+        assert_eq!(comp.cgroup, Some(Cgroup::Host));
         assert_eq!(comp.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(comp.cpuset.as_deref(), Some("0-3"));
         assert_eq!(comp.domainname.as_deref(), Some("example.com"));

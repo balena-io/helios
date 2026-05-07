@@ -250,7 +250,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let cgroup = host_config
             .as_mut()
             .and_then(|hc| hc.cgroupns_mode.take())
-            .map(|m| m.to_string());
+            .and_then(|m| Cgroup::try_from(m).ok());
         let cgroup_parent = host_config.as_mut().and_then(|hc| hc.cgroup_parent.take());
         let cpuset = host_config.as_mut().and_then(|hc| hc.cpuset_cpus.take());
         let cpu_rt_period = host_config
@@ -478,6 +478,37 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+}
+
+/// Cgroup namespace mode for a container.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Cgroup {
+    Host,
+    Private,
+}
+
+impl From<Cgroup> for bollard::models::HostConfigCgroupnsModeEnum {
+    fn from(value: Cgroup) -> Self {
+        match value {
+            Cgroup::Host => Self::HOST,
+            Cgroup::Private => Self::PRIVATE,
+        }
+    }
+}
+
+impl TryFrom<bollard::models::HostConfigCgroupnsModeEnum> for Cgroup {
+    type Error = ();
+    fn try_from(
+        value: bollard::models::HostConfigCgroupnsModeEnum,
+    ) -> std::result::Result<Self, Self::Error> {
+        use bollard::models::HostConfigCgroupnsModeEnum::*;
+        match value {
+            HOST => Ok(Cgroup::Host),
+            PRIVATE => Ok(Cgroup::Private),
+            EMPTY => Err(()),
+        }
+    }
 }
 
 /// Docker compose restart policy for a container.
@@ -825,7 +856,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
 #[serde(default)]
 pub struct ContainerConfig {
     /// Cgroup namespace mode (`host` or `private`)
-    pub cgroup: Option<String>,
+    pub cgroup: Option<Cgroup>,
 
     /// Path to cgroups under which the container's cgroup is created
     pub cgroup_parent: Option<String>,
@@ -1074,9 +1105,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             Some(volumes.into_iter().map(Into::into).collect())
         };
 
-        // Compose's `cgroup` maps to bollard's typed `cgroupns_mode`. Invalid
-        // values fall through as None
-        let cgroupns_mode = cgroup.and_then(|s| s.parse().ok());
+        let cgroupns_mode = cgroup.map(Into::into);
 
         let host_config = bollard::config::HostConfig {
             cgroup_parent,
@@ -1310,7 +1339,7 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.config.cgroup.as_deref(), Some("host"));
+        assert_eq!(c.config.cgroup, Some(Cgroup::Host));
         assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
         assert_eq!(c.config.runtime.as_deref(), Some("runc"));
@@ -1326,7 +1355,7 @@ mod tests {
     #[test]
     fn container_create_body_emits_string_fields() {
         let cfg = ContainerConfig {
-            cgroup: Some("host".to_string()),
+            cgroup: Some(Cgroup::Host),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             domainname: Some("example.com".to_string()),

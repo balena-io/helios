@@ -365,7 +365,7 @@ mod tests {
     fn preserves_explicit_config_fields_using_label_config_fields() {
         let original = oci::ContainerConfig {
             command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            cgroup: Some("host".to_string()),
+            cgroup: Some(oci::Cgroup::Host),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             cpu_rt_period: Some(1_000_000),
@@ -425,7 +425,7 @@ mod tests {
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
-            cgroup: Some("host".to_string()),
+            cgroup: Some(oci::Cgroup::Host),
             cgroup_parent: Some("/docker".to_string()),
             cpuset: Some("0-3".to_string()),
             cpu_rt_period: Some(0),

@@ -4,11 +4,11 @@ use tracing::warn;
 
 use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
-    self, BindPropagation, ContainerConfig, DateTime, LocalContainer, Mount, NetworkMode,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, LocalContainer, Mount, NetworkMode,
     NetworkSettings, RestartPolicy,
 };
 use crate::remote_model::{
-    BindPropagation as RemoteBindPropagation, Mount as RemoteMount,
+    BindPropagation as RemoteBindPropagation, Cgroup as RemoteCgroup, Mount as RemoteMount,
     NetworkMode as RemoteNetworkMode, RestartPolicy as RemoteRestartPolicy,
     Service as RemoteServiceTarget,
 };
@@ -251,7 +251,10 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             image: image.into(),
             started: true,
             config: ServiceConfig(ContainerConfig {
-                cgroup: composition.cgroup,
+                cgroup: composition.cgroup.map(|c| match c {
+                    RemoteCgroup::Host => Cgroup::Host,
+                    RemoteCgroup::Private => Cgroup::Private,
+                }),
                 cgroup_parent: composition.cgroup_parent,
                 command,
                 cpuset: composition.cpuset,
