@@ -213,7 +213,11 @@ fn finish_release(
             release
                 .services
                 .get(svc_name)
-                .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+                .map(|svc| {
+                    svc.started == tgt_svc.started
+                        && svc.image == tgt_svc.image
+                        && svc.config == tgt_svc.config
+                })
                 .unwrap_or_default()
         }),
         "all services should have the correct configuration"
@@ -737,8 +741,11 @@ fn install_service_when_requirements_are_met(
         && volumes_ready
         && let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
-        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name)
-            .is_none_or(|svc| !svc.image.is_same_artifact(&tgt.image) || svc.config != tgt.config)
+        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none_or(|svc| {
+            !svc.image.is_same_artifact(&tgt.image)
+                || svc.started != tgt.started
+                || svc.config != tgt.config
+        })
     {
         return Some(install_service.with_target(tgt));
     }
@@ -991,14 +998,14 @@ fn uninstall_service_when_requirements_are_met(
     let mut tasks = Vec::new();
 
     // wait until all target images have been downloaded
-    if t_device.apps.values().any(|t_app| {
+    if t_device.apps.get(&app_uuid).is_some_and(|t_app| 
         t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
             t_rel_uuid != &rel_uuid
                 && t_rel.services.values().any(|t_svc| {
                     !matches!(&t_svc.image, ImageRef::Uri(t_img_uri) if device.images.contains_key(t_img_uri))
                 })
         })
-    }) {
+    ) {
         return tasks;
     }
 
@@ -1007,6 +1014,7 @@ fn uninstall_service_when_requirements_are_met(
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
         && svc.image.is_same_artifact(&tgt_svc.image)
+        && svc.started == tgt_svc.started
         && svc.config == tgt_svc.config
     {
         tasks.push(remove_service.into_task());
