@@ -74,8 +74,10 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub hostname: Option<String>,
 
-    /// `None`: daemon default applies
-    /// `Some(_)`: container-level setting
+    /// Whether to run an init process inside the container. Modeled as
+    /// `Option<bool>` rather than `bool` to distinguish user-set from
+    /// daemon/Podman global default (`--init` for dockerd or `init=true`
+    /// for Podman containers.conf).
     #[serde(default)]
     pub init: Option<bool>,
 
