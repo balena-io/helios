@@ -134,6 +134,109 @@ fn it_finds_a_workflow_for_migrating_volumes() {
 }
 
 #[test]
+fn it_finds_a_workflow_for_migrating_networks_with_linked_services() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "oci_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'",)
+            + par!(
+                "setup network 'my-net' for app 'my-app-uuid'",
+                "initialize service 'my-svc' for release 'new-release'"
+            )
+            + seq!(
+                "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+            )
+            + dag!(
+                seq!("remove data for network 'my-net' from release 'old-release'"),
+                par!(
+                    "remove data for 'my-svc' for release 'old-release'",
+                    "migrate service 'my-svc' to release 'new-release'"
+                )
+            )
+            + par!(
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+                "update image metadata for service 'my-svc' of release 'new-release'"
+            )
+            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
 fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
     init_tracing();
     assert_workflow(
