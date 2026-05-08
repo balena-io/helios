@@ -372,8 +372,11 @@ fn it_finds_a_workflow_for_updating_a_volume_in_use_by_a_service() {
             "my-app-uuid",
             seq!(
                 "stop service 'my-service' for release 'my-release-uuid'",
-                "remove container for service 'my-service' for release 'my-release-uuid'",
+                "uninstall service 'my-service' for release 'my-release-uuid'",
+            ) + par!(
+                "initialize service 'my-service' for release 'my-release-uuid'",
                 "remove volume 'my-volume' for app 'my-app-uuid'",
+            ) + seq!(
                 "setup volume 'my-volume' for app 'my-app-uuid'",
                 "install service 'my-service' for release 'my-release-uuid'",
                 "start service 'my-service' for release 'my-release-uuid'",
