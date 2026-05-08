@@ -240,8 +240,11 @@ fn it_finds_a_workflow_for_updating_networks() {
             "my-app-uuid",
             seq!(
                 "stop service 'my-service' for release 'my-release-uuid'",
-                "remove container for service 'my-service' for release 'my-release-uuid'",
+                "uninstall service 'my-service' for release 'my-release-uuid'",
+            ) + par!(
                 "remove network 'my-network' for app 'my-app-uuid'",
+                "initialize service 'my-service' for release 'my-release-uuid'"
+            ) + seq!(
                 "setup network 'my-network' for app 'my-app-uuid'",
                 "install service 'my-service' for release 'my-release-uuid'",
                 "start service 'my-service' for release 'my-release-uuid'",
