@@ -246,20 +246,33 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .trim_start_matches('/')
             .to_owned();
 
+        // Gather the host config fields from the engine
+        // while filtering out the default values such as "" / 0.
         let mut host_config = value.host_config;
         let cgroup = host_config
             .as_mut()
             .and_then(|hc| hc.cgroupns_mode.take())
             .and_then(|m| Cgroup::try_from(m).ok());
-        let cgroup_parent = host_config.as_mut().and_then(|hc| hc.cgroup_parent.take());
-        let cpuset = host_config.as_mut().and_then(|hc| hc.cpuset_cpus.take());
+        let cgroup_parent = host_config
+            .as_mut()
+            .and_then(|hc| hc.cgroup_parent.take())
+            .filter(|s| !s.is_empty());
+        let cpuset = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpuset_cpus.take())
+            .filter(|s| !s.is_empty());
         let cpu_rt_period = host_config
             .as_mut()
-            .and_then(|hc| hc.cpu_realtime_period.take());
+            .and_then(|hc| hc.cpu_realtime_period.take())
+            .filter(|n| *n != 0);
         let cpu_rt_runtime = host_config
             .as_mut()
-            .and_then(|hc| hc.cpu_realtime_runtime.take());
-        let cpu_shares = host_config.as_mut().and_then(|hc| hc.cpu_shares.take());
+            .and_then(|hc| hc.cpu_realtime_runtime.take())
+            .filter(|n| *n != 0);
+        let cpu_shares = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_shares.take())
+            .filter(|n| *n != 0);
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -303,17 +316,33 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .into_iter()
             .map(Mount::try_from)
             .collect::<Result<Vec<_>>>()?;
-        let mem_limit = host_config.as_mut().and_then(|hc| hc.memory.take());
+        let mem_limit = host_config
+            .as_mut()
+            .and_then(|hc| hc.memory.take())
+            .filter(|n| *n != 0);
         let mem_reservation = host_config
             .as_mut()
-            .and_then(|hc| hc.memory_reservation.take());
-        let nano_cpus = host_config.as_mut().and_then(|hc| hc.nano_cpus.take());
-        let oom_score_adj = host_config.as_mut().and_then(|hc| hc.oom_score_adj.take());
+            .and_then(|hc| hc.memory_reservation.take())
+            .filter(|n| *n != 0);
+        let nano_cpus = host_config
+            .as_mut()
+            .and_then(|hc| hc.nano_cpus.take())
+            .filter(|n| *n != 0);
+        let oom_score_adj = host_config
+            .as_mut()
+            .and_then(|hc| hc.oom_score_adj.take())
+            .filter(|n| *n != 0);
         let pids_limit = host_config.as_mut().and_then(|hc| hc.pids_limit.take());
         let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
         let shm_size = host_config.as_mut().and_then(|hc| hc.shm_size.take());
-        let userns_mode = host_config.as_mut().and_then(|hc| hc.userns_mode.take());
-        let uts = host_config.as_mut().and_then(|hc| hc.uts_mode.take());
+        let userns_mode = host_config
+            .as_mut()
+            .and_then(|hc| hc.userns_mode.take())
+            .filter(|s| !s.is_empty());
+        let uts = host_config
+            .as_mut()
+            .and_then(|hc| hc.uts_mode.take())
+            .filter(|s| !s.is_empty());
 
         // Sort by target so the serialized form is stable regardless of the
         // order the engine reports the mounts in — Mahler compares state via
@@ -331,7 +360,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .map(Environment::from)
             .unwrap_or_default();
         let cmd = config.as_mut().and_then(|c| c.cmd.take());
-        let domainname = config.as_mut().and_then(|c| c.domainname.take());
+        let domainname = config
+            .as_mut()
+            .and_then(|c| c.domainname.take())
+            .filter(|s| !s.is_empty());
         let hostname = config.as_mut().and_then(|c| c.hostname.take());
         let stop_grace_period = config.as_mut().and_then(|c| c.stop_timeout.take());
         let stop_signal = config.as_mut().and_then(|c| c.stop_signal.take());
@@ -1455,6 +1487,55 @@ mod tests {
         assert_eq!(hc.oom_score_adj, Some(-500));
         assert_eq!(hc.pids_limit, Some(100));
         assert_eq!(hc.shm_size, Some(67108864));
+    }
+
+    #[test]
+    fn inspect_filters_defaults_to_none() {
+        // Engine reports `""` and `0` for fields the user didn't set;
+        // the inspect path collapses those sentinels to `None` so target
+        // round-trip is stable without LABEL_CONFIG_FIELDS tracking.
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cgroup_parent: Some(String::new()),
+                cpuset_cpus: Some(String::new()),
+                cpu_realtime_period: Some(0),
+                cpu_realtime_runtime: Some(0),
+                cpu_shares: Some(0),
+                memory: Some(0),
+                memory_reservation: Some(0),
+                nano_cpus: Some(0),
+                oom_score_adj: Some(0),
+                userns_mode: Some(String::new()),
+                uts_mode: Some(String::new()),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                domainname: Some(String::new()),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cgroup_parent, None);
+        assert_eq!(c.config.cpuset, None);
+        assert_eq!(c.config.cpu_rt_period, None);
+        assert_eq!(c.config.cpu_rt_runtime, None);
+        assert_eq!(c.config.cpu_shares, None);
+        assert_eq!(c.config.domainname, None);
+        assert_eq!(c.config.mem_limit, None);
+        assert_eq!(c.config.mem_reservation, None);
+        assert_eq!(c.config.nano_cpus, None);
+        assert_eq!(c.config.oom_score_adj, None);
+        assert_eq!(c.config.userns_mode, None);
+        assert_eq!(c.config.uts, None);
     }
 
     #[test]

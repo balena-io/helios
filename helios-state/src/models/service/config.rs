@@ -52,27 +52,15 @@ macro_rules! impl_field_tracking {
 
 impl_field_tracking!(oci::ContainerConfig {
     cgroup,
-    cgroup_parent,
     command,
-    cpuset,
-    cpu_rt_period,
-    cpu_rt_runtime,
-    cpu_shares,
-    domainname,
     hostname,
     init,
-    mem_limit,
-    mem_reservation,
-    nano_cpus,
-    oom_score_adj,
     pids_limit,
     runtime,
     shm_size,
     stop_grace_period,
     stop_signal,
     user,
-    userns_mode,
-    uts,
     working_dir,
 });
 
@@ -342,31 +330,20 @@ mod tests {
     #[test]
     fn drops_config_fields_when_not_in_label_config_fields() {
         // Simulate an inspect where the engine/image filled in values the
-        // composition never requested.
+        // composition never requested. Fields that default to ""/0 are
+        // filtered in helios-oci during inspect.
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
             cgroup: Some(oci::Cgroup::Host),
-            cgroup_parent: Some("/docker".to_string()),
-            cpuset: Some("0-3".to_string()),
-            cpu_rt_period: Some(0),
-            cpu_rt_runtime: Some(0),
-            cpu_shares: Some(1024),
-            domainname: Some("auto.local".to_string()),
             hostname: Some("a1b2c3d4e5f6".to_string()),
             init: Some(true),
-            mem_limit: Some(0),
-            mem_reservation: Some(0),
-            nano_cpus: Some(0),
-            oom_score_adj: Some(0),
-            pids_limit: Some(0),
+            pids_limit: Some(100),
             runtime: Some("runc".to_string()),
             shm_size: Some(67108864),
             stop_grace_period: Some(10),
             stop_signal: Some("SIGTERM".to_string()),
             user: Some("root".to_string()),
-            userns_mode: Some("host".to_string()),
-            uts: Some("host".to_string()),
             working_dir: Some("/".to_string()),
             labels,
             ..Default::default()
@@ -374,26 +351,14 @@ mod tests {
         let svc = ServiceConfig::from(inspected);
         assert_eq!(svc.command, None);
         assert_eq!(svc.cgroup, None);
-        assert_eq!(svc.cgroup_parent, None);
-        assert_eq!(svc.cpuset, None);
-        assert_eq!(svc.cpu_rt_period, None);
-        assert_eq!(svc.cpu_rt_runtime, None);
-        assert_eq!(svc.cpu_shares, None);
-        assert_eq!(svc.domainname, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
-        assert_eq!(svc.mem_limit, None);
-        assert_eq!(svc.mem_reservation, None);
-        assert_eq!(svc.nano_cpus, None);
-        assert_eq!(svc.oom_score_adj, None);
         assert_eq!(svc.pids_limit, None);
         assert_eq!(svc.runtime, None);
         assert_eq!(svc.shm_size, None);
         assert_eq!(svc.stop_grace_period, None);
         assert_eq!(svc.stop_signal, None);
         assert_eq!(svc.user, None);
-        assert_eq!(svc.userns_mode, None);
-        assert_eq!(svc.uts, None);
         assert_eq!(svc.working_dir, None);
     }
 }
