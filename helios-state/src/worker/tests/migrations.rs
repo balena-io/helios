@@ -257,7 +257,7 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
                                     "started": true,
                                     "oci": running_container("old-release_my-svc"),
                                     "config": {
-                                        "networks": {"my-network": {}}
+                                        "networks": {"my-net": {}}
                                     },
                                 },
                             },
@@ -298,7 +298,7 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
                                     "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                                     "started": true,
                                     "config": {
-                                        "networks": {"my-network": {}}
+                                        "networks": {"my-net": {}}
                                     },
                                 },
                             },
@@ -316,26 +316,25 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
                 }
             },
         }),
-        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'",)
-            + par!(
-                "setup network 'my-net' for app 'my-app-uuid'",
-                "initialize service 'my-svc' for release 'new-release'"
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-svc' for release 'old-release'",
+                "uninstall service 'my-svc' for release 'old-release'"
             )
-            + seq!(
-                "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
-            )
-            + dag!(
-                seq!("remove data for network 'my-net' from release 'old-release'"),
-                par!(
-                    "remove data for 'my-svc' for release 'old-release'",
-                    "migrate service 'my-svc' to release 'new-release'"
-                )
-            )
-            + par!(
-                "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "update image metadata for service 'my-svc' of release 'new-release'"
-            )
-            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+        ) + par!(
+            "initialize service 'my-svc' for release 'new-release'",
+            "remove network 'my-net' for app 'my-app-uuid'",
+        ) + seq!(
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-net' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-svc' for release 'new-release'",
+            "start service 'my-svc' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+        ),
     );
 }
 
