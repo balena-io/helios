@@ -67,6 +67,106 @@ fn it_finds_a_workflow_for_migrating_networks() {
 }
 
 #[test]
+fn it_finds_a_workflow_for_migrating_networks_with_tagged_image() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-service"),
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "oci_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "enable_ipv6": false,
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "config": {
+                                        "driver": "overlay",
+                                        "enable_ipv6": true,
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-service' for release 'old-release'",
+                "uninstall service 'my-service' for release 'old-release'",
+            )
+        ) + par!(
+            "initialize service 'my-service' for release 'new-release'",
+            "remove network 'my-network' for app 'my-app-uuid'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-network' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-service' for release 'new-release'",
+            "start service 'my-service' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+        ),
+    );
+}
+
+#[test]
 fn it_finds_a_workflow_for_migrating_volumes() {
     init_tracing();
     assert_workflow(

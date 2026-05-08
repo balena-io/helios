@@ -1003,6 +1003,10 @@ fn uninstall_service_when_requirements_are_met(
     // config and image, then do a migration
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
+        && device
+            .apps
+            .get(&app_uuid)
+            .is_some_and(|app| app.releases.contains_key(t_rel_uuid))
         && svc.image.is_same_artifact(&tgt_svc.image)
         && svc.started == tgt_svc.started
         && svc.config == tgt_svc.config
