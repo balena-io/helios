@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
 use mahler::state::State;
@@ -14,6 +15,66 @@ const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
+
+/// Per-field tracking for config fields whose value the engine or image
+/// fills in when unset, so need to be tracked in LABEL_CONFIG_FIELDS.
+trait WithTrackedFields {
+    /// Set tracked fields to `None` unless their name appears in `fields`.
+    fn remove_untracked(&mut self, fields: &HashSet<String>);
+
+    /// Return the names of tracked fields whose value is currently `Some(_)`.
+    fn collect_tracked(&self) -> Vec<&'static str>;
+}
+
+macro_rules! impl_field_tracking {
+    ($ty:ty { $($name:ident),* $(,)? }) => {
+        impl WithTrackedFields for $ty {
+            fn remove_untracked(&mut self, fields: &HashSet<String>) {
+                $(
+                    if !fields.contains(stringify!($name)) {
+                        self.$name = None;
+                    }
+                )*
+            }
+
+            fn collect_tracked(&self) -> Vec<&'static str> {
+                let mut out = Vec::new();
+                $(
+                    if self.$name.is_some() {
+                        out.push(stringify!($name));
+                    }
+                )*
+                out
+            }
+        }
+    };
+}
+
+impl_field_tracking!(oci::ContainerConfig {
+    cgroup,
+    cgroup_parent,
+    command,
+    cpuset,
+    cpu_rt_period,
+    cpu_rt_runtime,
+    cpu_shares,
+    domainname,
+    hostname,
+    init,
+    mem_limit,
+    mem_reservation,
+    nano_cpus,
+    oom_score_adj,
+    pids_limit,
+    runtime,
+    shm_size,
+    stop_grace_period,
+    stop_signal,
+    user,
+    userns_mode,
+    uts,
+    working_dir,
+});
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct ServiceConfig(pub(super) oci::ContainerConfig);
@@ -45,7 +106,7 @@ impl From<oci::ContainerConfig> for ServiceConfig {
 
         // Read the list of fields defined in the composition used to create
         // this container
-        let label_config_fields: Vec<String> = labels
+        let label_config_fields: HashSet<String> = labels
             .remove(LABEL_CONFIG_FIELDS)
             .and_then(|s| json::from_str(&s).ok())
             .unwrap_or_default();
@@ -102,76 +163,7 @@ impl From<oci::ContainerConfig> for ServiceConfig {
 
         // Drop fields not in the composition as the engine fills these in
         // with default values.
-        if !label_config_fields.contains(&"cgroup".to_string()) {
-            config.cgroup = None;
-        }
-        if !label_config_fields.contains(&"cgroup_parent".to_string()) {
-            config.cgroup_parent = None;
-        }
-        if !label_config_fields.contains(&"command".to_string()) {
-            config.command = None;
-        }
-        if !label_config_fields.contains(&"cpuset".to_string()) {
-            config.cpuset = None;
-        }
-        if !label_config_fields.contains(&"cpu_rt_period".to_string()) {
-            config.cpu_rt_period = None;
-        }
-        if !label_config_fields.contains(&"cpu_rt_runtime".to_string()) {
-            config.cpu_rt_runtime = None;
-        }
-        if !label_config_fields.contains(&"cpu_shares".to_string()) {
-            config.cpu_shares = None;
-        }
-        if !label_config_fields.contains(&"domainname".to_string()) {
-            config.domainname = None;
-        }
-        if !label_config_fields.contains(&"hostname".to_string()) {
-            config.hostname = None;
-        }
-        // The daemon / Podman can set a default value for init
-        if !label_config_fields.contains(&"init".to_string()) {
-            config.init = None;
-        }
-        if !label_config_fields.contains(&"mem_limit".to_string()) {
-            config.mem_limit = None;
-        }
-        if !label_config_fields.contains(&"mem_reservation".to_string()) {
-            config.mem_reservation = None;
-        }
-        if !label_config_fields.contains(&"nano_cpus".to_string()) {
-            config.nano_cpus = None;
-        }
-        if !label_config_fields.contains(&"oom_score_adj".to_string()) {
-            config.oom_score_adj = None;
-        }
-        if !label_config_fields.contains(&"pids_limit".to_string()) {
-            config.pids_limit = None;
-        }
-        if !label_config_fields.contains(&"runtime".to_string()) {
-            config.runtime = None;
-        }
-        if !label_config_fields.contains(&"shm_size".to_string()) {
-            config.shm_size = None;
-        }
-        if !label_config_fields.contains(&"stop_grace_period".to_string()) {
-            config.stop_grace_period = None;
-        }
-        if !label_config_fields.contains(&"stop_signal".to_string()) {
-            config.stop_signal = None;
-        }
-        if !label_config_fields.contains(&"user".to_string()) {
-            config.user = None;
-        }
-        if !label_config_fields.contains(&"userns_mode".to_string()) {
-            config.userns_mode = None;
-        }
-        if !label_config_fields.contains(&"uts".to_string()) {
-            config.uts = None;
-        }
-        if !label_config_fields.contains(&"working_dir".to_string()) {
-            config.working_dir = None;
-        }
+        config.remove_untracked(&label_config_fields);
 
         Self(config)
     }
@@ -191,6 +183,16 @@ impl ServiceConfig {
         app_uuid: &Uuid,
     ) -> oci::ContainerConfig {
         let mut config = self.0;
+
+        // List of config fields coming from the composition. This is only necessary for fields that
+        // may be shared between the image and service, since docker will use the image version as
+        // the default unless overridden
+        let label_config_fields_value = config
+            .collect_tracked()
+            .into_iter()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+
         let labels = &mut config.labels;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
@@ -223,87 +225,6 @@ impl ServiceConfig {
         config
             .environment
             .insert(ENV_SERVICE_NAME.to_string(), Some(svc_name.into()));
-
-        // List of config fields coming from the composition. This is only necessary for fields that
-        // may be shared between the image and service, since docker will use the image version as
-        // the default unless overriden
-        let mut fields = Vec::new();
-
-        if config.cgroup.is_some() {
-            fields.push("cgroup");
-        }
-        if config.cgroup_parent.is_some() {
-            fields.push("cgroup_parent");
-        }
-        if config.command.is_some() {
-            fields.push("command");
-        }
-        if config.cpuset.is_some() {
-            fields.push("cpuset");
-        }
-        if config.cpu_rt_period.is_some() {
-            fields.push("cpu_rt_period");
-        }
-        if config.cpu_rt_runtime.is_some() {
-            fields.push("cpu_rt_runtime");
-        }
-        if config.cpu_shares.is_some() {
-            fields.push("cpu_shares");
-        }
-        if config.domainname.is_some() {
-            fields.push("domainname");
-        }
-        if config.hostname.is_some() {
-            fields.push("hostname");
-        }
-        if config.init.is_some() {
-            fields.push("init");
-        }
-        if config.mem_limit.is_some() {
-            fields.push("mem_limit");
-        }
-        if config.mem_reservation.is_some() {
-            fields.push("mem_reservation");
-        }
-        if config.nano_cpus.is_some() {
-            fields.push("nano_cpus");
-        }
-        if config.oom_score_adj.is_some() {
-            fields.push("oom_score_adj");
-        }
-        if config.pids_limit.is_some() {
-            fields.push("pids_limit");
-        }
-        if config.runtime.is_some() {
-            fields.push("runtime");
-        }
-        if config.shm_size.is_some() {
-            fields.push("shm_size");
-        }
-        if config.stop_grace_period.is_some() {
-            fields.push("stop_grace_period");
-        }
-        if config.stop_signal.is_some() {
-            fields.push("stop_signal");
-        }
-        if config.user.is_some() {
-            fields.push("user");
-        }
-        if config.userns_mode.is_some() {
-            fields.push("userns_mode");
-        }
-        if config.uts.is_some() {
-            fields.push("uts");
-        }
-        if config.working_dir.is_some() {
-            fields.push("working_dir");
-        }
-
-        // Create a label LABEL_CONFIG_FIELDS label with all the custom fields
-        let label_config_fields_value = fields
-            .into_iter()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
 
         labels.insert(
             LABEL_CONFIG_FIELDS.to_string(),
