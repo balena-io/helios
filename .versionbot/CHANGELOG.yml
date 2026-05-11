@@ -1,4 +1,80 @@
 - commits:
+    - subject: Fix issue with service migration happenning too early
+      hash: 97e80d07a7ce7c04b566bc8cff57ea1a216be57b
+      body: |
+        A service migration was being triggered before the target release
+        existed, causing an issue with planning.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Ensure services are removed when removing linked volumes
+      hash: b0819c85d596a39d1158d9a3d871c63816821f20
+      body: |
+        A volume cannot be removed if a container is attached to it, this
+        ensures the container is removed first.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Ensure services are removed when removing networks
+      hash: fd4c8d49e7c927eb5fbc367bdfff2e1baf7a5160
+      body: |
+        Modifies network tasks to make sure that on network removal, any linked
+        services are removed first. It also makes sure that in this case, the
+        new network is not created before removing the old network.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Test removal of services with changing networks
+      hash: d29fd73648dac6c939f5b709675e183b12a0e19f
+      body: >
+        When modifying networks, any linked services, even if unchanging, need
+        to be removed before
+
+        the networks.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Small tweaks to app tasks
+      hash: 0e0751ef4bb2d28d44521dac3461f017da0387ad
+      body: >
+        Avoids a clone and makes some of the requirements for install/uninstall
+        more specific
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Test migration of services linking to networks
+      hash: cec1388b3f098e0c42ba4115125a31ade8d1fa8b
+      body: |
+        The service should be migrated without problems by the worker
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Update dependencies
+      hash: 98a29f7593cf37766f0dabd23077085dbea5b4b6
+      body: |
+        Update mahler, bollard and sha2 to their latest versions. For the last
+        two it makes code changes to adapt to the interface changes.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.23.3
+  title: ""
+  date: 2026-05-11T22:56:58.549Z
+- commits:
     - subject: Improve error messaging for labels validation
       hash: 14ad38a5506364a316882694afbbd6277aff9dd7
       body: |
