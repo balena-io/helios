@@ -21,14 +21,14 @@ edition.workspace = true
 [workspace.dependencies]
 addr = { version = "0.15.6", default-features = false }
 futures-util = "0.3"
-axum = { version = "0.8.6", default-features = false, features = [
+axum = { version = "0.8.9", default-features = false, features = [
   "tokio",
   "http1",
   "json",
   "query",
 ] }
 dirs = "6.0.0"
-fastrand = "2.3.0"
+fastrand = "2.4.1"
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
 mahler = "0.25"
 regex = "1.12"
@@ -40,10 +40,10 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 tar = "0.4"
 thiserror = "2"
-tokio = { version = "1.47.1", default-features = false, features = [
+tokio = { version = "1.52.2", default-features = false, features = [
   "rt-multi-thread",
   "macros",
   "time",
@@ -53,14 +53,14 @@ tokio = { version = "1.47.1", default-features = false, features = [
 tokio-stream = { version = "0.1.18", default-features = false, features = [
   "sync",
 ] }
-tracing = "0.1.41"
-uuid = { version = "1.18", features = ["v4"] }
-zbus = { version = "5.11", default-features = false, features = ["tokio"] }
+tracing = "0.1.44"
+uuid = { version = "1.23", features = ["v4"] }
+zbus = { version = "5.15", default-features = false, features = ["tokio"] }
 
 # workspace dev dependencies
-bollard = "0.20"
+bollard = "0.21"
 mockito = { version = "1.7", default-features = false }
-tracing-subscriber = { version = "0.3.20", features = [
+tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
   "fmt",
   "registry",

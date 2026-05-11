@@ -67,6 +67,106 @@ fn it_finds_a_workflow_for_migrating_networks() {
 }
 
 #[test]
+fn it_finds_a_workflow_for_migrating_networks_with_tagged_image() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-service"),
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "oci_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                        "enable_ipv6": false,
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {
+                                            "my-network": {}
+                                        }
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "config": {
+                                        "driver": "overlay",
+                                        "enable_ipv6": true,
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-service' for release 'old-release'",
+                "uninstall service 'my-service' for release 'old-release'",
+            )
+        ) + par!(
+            "initialize service 'my-service' for release 'new-release'",
+            "remove network 'my-network' for app 'my-app-uuid'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-network' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-service' for release 'new-release'",
+            "start service 'my-service' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+        ),
+    );
+}
+
+#[test]
 fn it_finds_a_workflow_for_migrating_volumes() {
     init_tracing();
     assert_workflow(
@@ -130,6 +230,556 @@ fn it_finds_a_workflow_for_migrating_volumes() {
             "finish release 'new-release' for app with uuid 'my-app-uuid'",
             "remove data for volume 'my-vol' from release 'old-release'",
         ) + seq!("remove release 'old-release' for app with uuid 'my-app-uuid'",),
+    );
+}
+
+#[test]
+fn it_finds_a_workflow_for_migrating_volumes_with_linked_services() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "oci_name": "my-app-uuid_my-vol",
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {},
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'",)
+            + par!(
+                "initialize service 'my-svc' for release 'new-release'",
+                "setup volume 'my-vol' for app 'my-app-uuid'"
+            )
+            + seq!(
+                "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+            )
+            + dag!(
+                par!(
+                    "remove data for 'my-svc' for release 'old-release'",
+                    "migrate service 'my-svc' to release 'new-release'"
+                ),
+                seq!("remove data for volume 'my-vol' from release 'old-release'"),
+            )
+            + par!(
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+                "update image metadata for service 'my-svc' of release 'new-release'"
+            )
+            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_should_not_migrate_a_service_that_links_to_a_changing_volume() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "oci_name": "my-app-uuid_my-vol",
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "config": {
+                                        "labels": {
+                                            "io.balena.foo": "bar"
+                                        }
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-svc' for release 'old-release'",
+                "uninstall service 'my-svc' for release 'old-release'"
+            )
+        ) + par!(
+            "initialize service 'my-svc' for release 'new-release'",
+            "remove volume 'my-vol' for app 'my-app-uuid'",
+        ) + seq!(
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup volume 'my-vol' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-svc' for release 'new-release'",
+            "start service 'my-svc' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+        ),
+    );
+}
+
+#[test]
+fn it_should_not_migrate_a_service_that_links_to_a_changing_volume_and_network() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "networks": {"my-net": {}},
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "oci_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "oci_name": "my-app-uuid_my-vol",
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {"my-net": {}},
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "baz"
+                                        },
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-vol": {
+                                    "config": {
+                                        "labels": {
+                                            "io.balena.foo": "bar"
+                                        }
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-svc' for release 'old-release'",
+                "uninstall service 'my-svc' for release 'old-release'"
+            )
+        ) + par!(
+            "initialize service 'my-svc' for release 'new-release'",
+            "remove network 'my-net' for app 'my-app-uuid'",
+            "remove volume 'my-vol' for app 'my-app-uuid'",
+        ) + seq!(
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-net' for app 'my-app-uuid'",
+            "setup volume 'my-vol' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-svc' for release 'new-release'",
+            "start service 'my-svc' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+        ),
+    );
+}
+
+#[test]
+fn it_finds_a_workflow_for_migrating_networks_with_linked_services() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "oci_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'",)
+            + par!(
+                "setup network 'my-net' for app 'my-app-uuid'",
+                "initialize service 'my-svc' for release 'new-release'"
+            )
+            + seq!(
+                "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+            )
+            + dag!(
+                seq!("remove data for network 'my-net' from release 'old-release'"),
+                par!(
+                    "remove data for 'my-svc' for release 'old-release'",
+                    "migrate service 'my-svc' to release 'new-release'"
+                )
+            )
+            + par!(
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+                "update image metadata for service 'my-svc' of release 'new-release'"
+            )
+            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    // same digest as target, different URI name
+                                    "image": "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "oci": running_container("old-release_my-svc"),
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "oci_name": "my-app-uuid_my-net",
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "bar"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111": {
+                    "config": {},
+                    "download_progress": 100,
+                    "oci_id": "111"
+                },
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {
+                                "my-svc": {
+                                    "id": 1,
+                                    "image": "registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                                    "started": true,
+                                    "config": {
+                                        "networks": {"my-net": {}}
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-net": {
+                                    "config": {
+                                        "driver_opts": {
+                                            "foo": "baz"
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        dag!(
+            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
+            seq!(
+                "stop service 'my-svc' for release 'old-release'",
+                "uninstall service 'my-svc' for release 'old-release'"
+            )
+        ) + par!(
+            "initialize service 'my-svc' for release 'new-release'",
+            "remove network 'my-net' for app 'my-app-uuid'",
+        ) + seq!(
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-net' for app 'my-app-uuid'"
+        ) + seq!(
+            "install service 'my-svc' for release 'new-release'",
+            "start service 'my-svc' for release 'new-release'",
+            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+        ),
     );
 }
 

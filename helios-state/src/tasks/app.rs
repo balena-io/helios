@@ -12,6 +12,7 @@ use crate::models::{
 use crate::store::{self, DocumentStore};
 
 use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::tasks::utils::{find_installed_network, find_installed_volume};
 
 use super::image::create_image;
 use super::utils::{
@@ -213,7 +214,11 @@ fn finish_release(
             release
                 .services
                 .get(svc_name)
-                .map(|svc| tgt_svc == &ServiceTarget::from(svc.clone()))
+                .map(|svc| {
+                    svc.started == tgt_svc.started
+                        && svc.image == tgt_svc.image
+                        && svc.config == tgt_svc.config
+                })
                 .unwrap_or_default()
         }),
         "all services should have the correct configuration"
@@ -271,6 +276,22 @@ fn remove_release(mut release: View<Option<Release>>) -> View<Option<Release>> {
     release
 }
 
+fn create_network_when_requirements_are_met(
+    System(device): System<Device>,
+    Target(tgt): Target<Network>,
+    Args((app_uuid, rel_uuid, net_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    // Do not create a new network if there is an installed network from a different release
+    // as that network needs to be removed first
+    if let Some(cur_net) = find_installed_network(&device, &app_uuid, &rel_uuid, &net_name)
+        && tgt.config != cur_net.config
+    {
+        return None;
+    }
+
+    Some(create_network.into_task())
+}
+
 /// Create or migrate a network
 ///
 /// If the network already exists in Docker with the same config, migrate it
@@ -316,55 +337,11 @@ fn create_network(
 /// Reconfigure a network by uninstalling it when the config has changed
 ///
 /// After uninstall, the planner will re-create the network with the new config.
-fn reconfigure_network(
-    net: View<Network>,
-    System(device): System<Device>,
-    Target(tgt): Target<Network>,
-    Args((app_uuid, _, net_name)): Args<(Uuid, Uuid, String)>,
-) -> Vec<Task> {
+fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Option<Task> {
     if net.config != tgt.config {
-        let mut tasks = Vec::new();
-        let services_depending_on_network = device
-            .apps
-            .get(&app_uuid)
-            .map(|app| {
-                app.releases
-                    .iter()
-                    .flat_map(|(rel_uuid, rel)| {
-                        rel.services
-                            .iter()
-                            // find any services referencing the network that have a container
-                            .filter(|(_, svc)| {
-                                svc.oci.is_some() && svc.config.networks.contains_key(&net_name)
-                            })
-                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
-                    })
-                    .collect::<Vec<(&Uuid, &String)>>()
-            })
-            .unwrap_or_default();
-
-        // uninstall any services depending on the network first
-        for (rel_uuid, svc_name) in services_depending_on_network {
-            tasks.push(
-                stop_service_when_requirements_are_met
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-            tasks.push(
-                remove_service_container
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-        }
-
-        if tasks.is_empty() {
-            tasks.push(uninstall_network.into_task());
-        }
-
-        tasks
-    } else {
-        Vec::new()
+        return Some(remove_network_when_requirements_are_met.into_task());
     }
+    None
 }
 
 /// Uninstall a network from Docker and the state tree
@@ -379,6 +356,22 @@ fn uninstall_network(net: View<Network>, docker: Res<Docker>) -> IO<Option<Netwo
         docker.network().remove(&docker_name).await?;
         Ok(net)
     })
+}
+
+fn create_volume_when_requirements_are_met(
+    System(device): System<Device>,
+    Target(tgt): Target<Volume>,
+    Args((app_uuid, rel_uuid, vol_name)): Args<(Uuid, Uuid, String)>,
+) -> Option<Task> {
+    // Do not create a new volume if there is an installed volume from a different release
+    // as that volume needs to be removed first
+    if let Some(cur_vol) = find_installed_volume(&device, &app_uuid, &rel_uuid, &vol_name)
+        && tgt.config != cur_vol.config
+    {
+        return None;
+    }
+
+    Some(create_volume.into_task())
 }
 
 /// Create or migrate a volume
@@ -424,60 +417,12 @@ fn create_volume(
 
 /// Reconfigure a volume by uninstalling it when the config has changed
 ///
-/// Services referencing the volume that already have a container are torn down
-/// first; the planner will then uninstall and re-create the volume, and
-/// re-install the services on the next cycle.
-fn reconfigure_volume(
-    vol: View<Volume>,
-    System(device): System<Device>,
-    Target(tgt): Target<Volume>,
-    Args((app_uuid, _, vol_name)): Args<(Uuid, Uuid, String)>,
-) -> Vec<Task> {
+/// After uninstall, the planner will re-create the volume with the new config.
+fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<Task> {
     if vol.config != tgt.config {
-        let mut tasks = Vec::new();
-        let services_depending_on_volume = device
-            .apps
-            .get(&app_uuid)
-            .map(|app| {
-                app.releases
-                    .iter()
-                    .flat_map(|(rel_uuid, rel)| {
-                        rel.services
-                            .iter()
-                            .filter(|(_, svc)| {
-                                svc.oci.is_some()
-                                    && svc.config.volumes.iter().any(|m| {
-                                        matches!(m, Mount::Volume { source, .. }
-                                            if source == &vol_name)
-                                    })
-                            })
-                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
-                    })
-                    .collect::<Vec<(&Uuid, &String)>>()
-            })
-            .unwrap_or_default();
-
-        for (rel_uuid, svc_name) in services_depending_on_volume {
-            tasks.push(
-                stop_service_when_requirements_are_met
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-            tasks.push(
-                remove_service_container
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-        }
-
-        if tasks.is_empty() {
-            tasks.push(uninstall_volume.into_task());
-        }
-
-        tasks
-    } else {
-        Vec::new()
+        return Some(remove_volume_when_requirements_are_met.into_task());
     }
+    None
 }
 
 /// Uninstall a volume from Docker and the state tree
@@ -504,7 +449,8 @@ fn remove_network_when_requirements_are_met(
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, net_name)): Args<(Uuid, Uuid, String)>,
-) -> Option<Task> {
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
     if let Some((t_rel_uuid, future_net)) =
         find_future_network(&t_device, &app_uuid, &rel_uuid, &net_name)
         && net.config == future_net.config
@@ -517,28 +463,51 @@ fn remove_network_when_requirements_are_met(
             .and_then(|app| app.releases.get(t_rel_uuid))
             .is_some_and(|rel| rel.networks.contains_key(&net_name));
 
-        if !new_net_exists {
-            return None;
+        // State-only removal, Docker network preserved for new release to adopt
+        if new_net_exists {
+            tasks.push(remove_network.into_task());
+        }
+    } else {
+        let services_depending_on_network = device
+            .apps
+            .get(&app_uuid)
+            .map(|app| {
+                app.releases
+                    .iter()
+                    .flat_map(|(rel_uuid, rel)| {
+                        rel.services
+                            .iter()
+                            // find any services referencing the network that have a container
+                            .filter(|(_, svc)| {
+                                svc.oci.is_some() && svc.config.networks.contains_key(&net_name)
+                            })
+                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
+                    })
+                    .collect::<Vec<(&Uuid, &String)>>()
+            })
+            .unwrap_or_default();
+
+        // uninstall any services depending on the network first
+        for (rel_uuid, svc_name) in services_depending_on_network {
+            tasks.push(
+                stop_service_when_requirements_are_met
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
+            tasks.push(
+                uninstall_service
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
         }
 
-        // State-only removal, Docker network preserved for new release to adopt
-        Some(remove_network.into_task())
-    } else {
-        let services_depend_on_network = device.apps.get(&app_uuid).is_some_and(|app| {
-            app.releases.values().any(|rel| {
-                rel.services
-                    .values()
-                    .any(|svc| svc.config.networks.contains_key(&net_name))
-            })
-        });
-
-        // Cannot uninstall a network that has dependent services on any installed release
-        if !services_depend_on_network {
-            Some(uninstall_network.into_task())
-        } else {
-            None
+        // once services have been uninstalled, then remove the network
+        if tasks.is_empty() {
+            tasks.push(uninstall_network.into_task());
         }
     }
+
+    tasks
 }
 
 /// Remove network from the current release state
@@ -556,7 +525,8 @@ fn remove_volume_when_requirements_are_met(
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, vol_name)): Args<(Uuid, Uuid, String)>,
-) -> Option<Task> {
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
     if let Some((t_rel_uuid, future_vol)) =
         find_future_volume(&t_device, &app_uuid, &rel_uuid, &vol_name)
         && vol.config == future_vol.config
@@ -569,31 +539,55 @@ fn remove_volume_when_requirements_are_met(
             .and_then(|app| app.releases.get(t_rel_uuid))
             .is_some_and(|rel| rel.volumes.contains_key(&vol_name));
 
-        if !new_vol_exists {
-            return None;
+        // State-only removal, Docker volume preserved for new release to adopt
+        if new_vol_exists {
+            tasks.push(remove_volume.into_task());
+        }
+    } else {
+        let services_depending_on_volume = device
+            .apps
+            .get(&app_uuid)
+            .map(|app| {
+                app.releases
+                    .iter()
+                    .flat_map(|(rel_uuid, rel)| {
+                        rel.services
+                            .iter()
+                            // find any services referencing the volume that have a container
+                            .filter(|(_, svc)| {
+                                svc.oci.is_some()
+                                    && svc.config.volumes.iter().any(|m| {
+                                        matches!(m, Mount::Volume { source, .. }
+                                            if source == &vol_name)
+                                    })
+                            })
+                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
+                    })
+                    .collect::<Vec<(&Uuid, &String)>>()
+            })
+            .unwrap_or_default();
+
+        // uninstall any services depending on the volume first
+        for (rel_uuid, svc_name) in services_depending_on_volume {
+            tasks.push(
+                stop_service_when_requirements_are_met
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
+            tasks.push(
+                uninstall_service
+                    .with_arg("commit", rel_uuid.as_str())
+                    .with_arg("service_name", svc_name),
+            );
         }
 
-        // State-only removal, Docker volume preserved for new release to adopt
-        Some(remove_volume.into_task())
-    } else {
-        let services_depend_on_volume = device.apps.get(&app_uuid).is_some_and(|app| {
-            app.releases.values().any(|rel| {
-                rel.services.values().any(|svc| {
-                    svc.config
-                        .volumes
-                        .iter()
-                        .any(|m| matches!(m, Mount::Volume { source, .. } if source == &vol_name))
-                })
-            })
-        });
-
-        // Cannot uninstall a volume that has dependent services on any installed release
-        if !services_depend_on_volume {
-            Some(uninstall_volume.into_task())
-        } else {
-            None
+        // once services have been uninstalled, then remove the volume
+        if tasks.is_empty() {
+            tasks.push(uninstall_volume.into_task());
         }
     }
+
+    tasks
 }
 
 /// Remove volume from the current release state
@@ -737,8 +731,11 @@ fn install_service_when_requirements_are_met(
         && volumes_ready
         && let ImageRef::Uri(tgt_img) = &tgt.image
         && device.images.contains_key(tgt_img)
-        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name)
-            .is_none_or(|svc| !svc.image.is_same_artifact(&tgt.image) || svc.config != tgt.config)
+        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none_or(|svc| {
+            !svc.image.is_same_artifact(&tgt.image)
+                || svc.started != tgt.started
+                || svc.config != tgt.config
+        })
     {
         return Some(install_service.with_target(tgt));
     }
@@ -991,7 +988,7 @@ fn uninstall_service_when_requirements_are_met(
     let mut tasks = Vec::new();
 
     // wait until all target images have been downloaded
-    if t_device.apps.values().any(|t_app| {
+    if t_device.apps.get(&app_uuid).is_some_and(|t_app| {
         t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
             t_rel_uuid != &rel_uuid
                 && t_rel.services.values().any(|t_svc| {
@@ -1006,7 +1003,12 @@ fn uninstall_service_when_requirements_are_met(
     // config and image, then do a migration
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
+        && device
+            .apps
+            .get(&app_uuid)
+            .is_some_and(|app| app.releases.contains_key(t_rel_uuid))
         && svc.image.is_same_artifact(&tgt_svc.image)
+        && svc.started == tgt_svc.started
         && svc.config == tgt_svc.config
     {
         tasks.push(remove_service.into_task());
@@ -1177,7 +1179,8 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/networks/{network_name}",
             [
-                job::create(create_network).with_description(
+                job::create(create_network_when_requirements_are_met),
+                job::none(create_network).with_description(
                     |Args((app_uuid, _, network_name)): Args<(Uuid, Uuid, String)>| {
                         format!("setup network '{network_name}' for app '{app_uuid}'")
                     },
@@ -1199,7 +1202,8 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/apps/{app_uuid}/releases/{commit}/volumes/{volume_name}",
             [
-                job::create(create_volume).with_description(
+                job::create(create_volume_when_requirements_are_met),
+                job::none(create_volume).with_description(
                     |Args((app_uuid, _, volume_name)): Args<(Uuid, Uuid, String)>| {
                         format!("setup volume '{volume_name}' for app '{app_uuid}'")
                     },

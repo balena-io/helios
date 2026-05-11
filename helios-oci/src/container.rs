@@ -7,7 +7,7 @@ use bollard::{
     },
     models::{
         ContainerCreateBody, MountBindOptions, MountBindOptionsPropagationEnum, MountTmpfsOptions,
-        MountTypeEnum, MountVolumeOptions,
+        MountType, MountVolumeOptions,
     },
     query_parameters::{
         CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
@@ -391,6 +391,7 @@ impl From<ContainerStateStatusEnum> for ContainerStatus {
             RUNNING => ContainerStatus::Running,
             PAUSED => ContainerStatus::Stopped,
             RESTARTING => ContainerStatus::Running,
+            STOPPING => ContainerStatus::Stopped,
             REMOVING => ContainerStatus::Stopped,
             EXITED => ContainerStatus::Stopped,
             DEAD => ContainerStatus::Dead,
@@ -645,7 +646,7 @@ impl From<Mount> for bollard::models::Mount {
                     None
                 };
                 bollard::models::Mount {
-                    typ: Some(MountTypeEnum::VOLUME),
+                    typ: Some(MountType::VOLUME),
                     target: Some(target),
                     source: Some(source),
                     read_only: Some(read_only),
@@ -664,7 +665,7 @@ impl From<Mount> for bollard::models::Mount {
                     ..Default::default()
                 });
                 bollard::models::Mount {
-                    typ: Some(MountTypeEnum::BIND),
+                    typ: Some(MountType::BIND),
                     target: Some(target),
                     source: Some(source),
                     read_only: Some(read_only),
@@ -683,7 +684,7 @@ impl From<Mount> for bollard::models::Mount {
                     None
                 };
                 bollard::models::Mount {
-                    typ: Some(MountTypeEnum::TMPFS),
+                    typ: Some(MountType::TMPFS),
                     target: Some(target),
                     tmpfs_options,
                     ..Default::default()
@@ -708,7 +709,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
         let target = value.target.ok_or("mount target is required")?;
         let read_only = value.read_only.unwrap_or_default();
         match value.typ {
-            Some(MountTypeEnum::VOLUME) => {
+            Some(MountType::VOLUME) => {
                 let source = value.source.unwrap_or_default();
                 let (nocopy, subpath) = value
                     .volume_options
@@ -722,7 +723,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
                     subpath,
                 })
             }
-            Some(MountTypeEnum::BIND) => {
+            Some(MountType::BIND) => {
                 let source = value.source.unwrap_or_default();
                 let propagation = value
                     .bind_options
@@ -735,7 +736,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
                     propagation,
                 })
             }
-            Some(MountTypeEnum::TMPFS) => {
+            Some(MountType::TMPFS) => {
                 let (size, mode) = value
                     .tmpfs_options
                     .map(|o| (o.size_bytes, o.mode.map(|m| m as u32)))
@@ -924,7 +925,7 @@ mod tests {
 
     fn vol_mount(target: &str, source: &str) -> EngineMount {
         EngineMount {
-            typ: Some(MountTypeEnum::VOLUME),
+            typ: Some(MountType::VOLUME),
             target: Some(target.to_string()),
             source: Some(source.to_string()),
             read_only: Some(false),
@@ -968,7 +969,7 @@ mod tests {
         // An `image` mount on an existing container must not cause the inspect
         // conversion to fail — it round-trips as `Mount::Other`.
         let image_mount = EngineMount {
-            typ: Some(MountTypeEnum::IMAGE),
+            typ: Some(MountType::IMAGE),
             target: Some("/data".to_string()),
             source: Some("some/image".to_string()),
             ..Default::default()
@@ -987,7 +988,7 @@ mod tests {
     #[test]
     fn inspect_fails_on_missing_mount_target() {
         let no_target = EngineMount {
-            typ: Some(MountTypeEnum::VOLUME),
+            typ: Some(MountType::VOLUME),
             target: None,
             source: Some("vol".to_string()),
             ..Default::default()

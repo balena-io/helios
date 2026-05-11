@@ -1,5 +1,7 @@
 use crate::common_types::Uuid;
-use crate::models::{Device, DeviceTarget, NetworkTarget, Service, ServiceTarget, VolumeTarget};
+use crate::models::{
+    Device, DeviceTarget, Network, NetworkTarget, Service, ServiceTarget, Volume, VolumeTarget,
+};
 
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
@@ -39,6 +41,27 @@ pub fn find_future_network<'a>(
     })
 }
 
+/// Find a new network for a different commit
+pub fn find_installed_network<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    network_name: &'a String,
+) -> Option<&'a Network> {
+    device.apps.get(app_uuid).and_then(|app| {
+        app.releases
+            .iter()
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| {
+                r.networks
+                    .iter()
+                    .find(|(k, _)| k == &network_name)
+                    .map(|(_, n)| n)
+            })
+            .next()
+    })
+}
+
 /// Find a new volume for a different commit
 pub fn find_future_volume<'a>(
     t_device: &'a DeviceTarget,
@@ -55,6 +78,27 @@ pub fn find_future_volume<'a>(
                     .iter()
                     .find(|(k, _)| k == &volume_name)
                     .map(|(_, v)| (c, v))
+            })
+            .next()
+    })
+}
+
+/// Find an installed volume for a different commit
+pub fn find_installed_volume<'a>(
+    device: &'a Device,
+    app_uuid: &'a Uuid,
+    commit: &'a Uuid,
+    volume_name: &'a String,
+) -> Option<&'a Volume> {
+    device.apps.get(app_uuid).and_then(|app| {
+        app.releases
+            .iter()
+            .filter(|(c, _)| c != &commit)
+            .flat_map(|(_, r)| {
+                r.volumes
+                    .iter()
+                    .find(|(k, _)| k == &volume_name)
+                    .map(|(_, v)| v)
             })
             .next()
     })
