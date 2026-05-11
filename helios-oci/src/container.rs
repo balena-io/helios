@@ -669,9 +669,10 @@ impl std::fmt::Display for NetworkMode {
 }
 
 /// Bind mount propagation mode. Mirrors the compose `bind.propagation` setting.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
+    #[default]
     Private,
     Rprivate,
     Shared,
@@ -742,7 +743,11 @@ pub enum Mount {
         source: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         read_only: bool,
-        propagation: Option<BindPropagation>,
+        #[serde(default)]
+        propagation: BindPropagation,
+        /// Create the host source path if it does not exist
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        create_host_path: bool,
     },
     Tmpfs {
         target: String,
@@ -809,7 +814,9 @@ impl Mount {
             target: target.to_owned(),
             source: source.to_owned(),
             read_only,
-            propagation,
+            propagation: propagation.unwrap_or_default(),
+            // bind mounts will create the host path by default
+            create_host_path: true,
         })
     }
 }
@@ -847,11 +854,18 @@ impl From<Mount> for bollard::models::Mount {
                 source,
                 read_only,
                 propagation,
+                create_host_path,
             } => {
-                let bind_options = propagation.map(|p| MountBindOptions {
-                    propagation: Some(p.into()),
-                    ..Default::default()
-                });
+                let bind_options = if propagation != BindPropagation::default() || create_host_path
+                {
+                    Some(MountBindOptions {
+                        propagation: Some(propagation.into()),
+                        create_mountpoint: create_host_path.then_some(true),
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                };
                 bollard::models::Mount {
                     typ: Some(MountType::BIND),
                     target: Some(target),
@@ -913,15 +927,23 @@ impl TryFrom<bollard::models::Mount> for Mount {
             }
             Some(MountType::BIND) => {
                 let source = value.source.unwrap_or_default();
-                let propagation = value
+                let (propagation, create_host_path) = value
                     .bind_options
-                    .and_then(|o| o.propagation)
-                    .and_then(|p| BindPropagation::try_from(p).ok());
+                    .map(|o| {
+                        (
+                            o.propagation
+                                .and_then(|p| BindPropagation::try_from(p).ok())
+                                .unwrap_or_default(),
+                            o.create_mountpoint.unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or((BindPropagation::default(), false));
                 Ok(Mount::Bind {
                     target,
                     source,
                     read_only,
                     propagation,
+                    create_host_path,
                 })
             }
             Some(MountType::TMPFS) => {
@@ -1644,7 +1666,8 @@ mod tests {
                 target: "/container/a".to_string(),
                 source: "/host/a".to_string(),
                 read_only: false,
-                propagation: None,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
             }
         );
         assert_eq!(
@@ -1653,7 +1676,8 @@ mod tests {
                 target: "/container/b".to_string(),
                 source: "/host/b".to_string(),
                 read_only: true,
-                propagation: None,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
             }
         );
         assert_eq!(
@@ -1662,7 +1686,8 @@ mod tests {
                 target: "/container/c".to_string(),
                 source: "/host/c".to_string(),
                 read_only: true,
-                propagation: Some(BindPropagation::Rshared),
+                propagation: BindPropagation::Rshared,
+                create_host_path: true,
             }
         );
     }
@@ -1691,7 +1716,8 @@ mod tests {
                 target: "/t".to_string(),
                 source: "/h".to_string(),
                 read_only: false,
-                propagation: None,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
             }
         );
     }

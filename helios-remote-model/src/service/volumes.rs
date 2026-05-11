@@ -42,6 +42,8 @@ pub struct BindMount {
     pub target: String,
     pub read_only: bool,
     pub propagation: Option<BindPropagation>,
+    /// Create the host source path if it does not exist
+    pub create_host_path: bool,
 }
 
 /// Tmpfs-type mount (in-memory filesystem).
@@ -141,10 +143,20 @@ struct VolumeOptions {
     subpath: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(default)]
 struct BindOptions {
     propagation: Option<BindPropagation>,
+    create_host_path: bool,
+}
+
+impl Default for BindOptions {
+    fn default() -> Self {
+        Self {
+            propagation: None,
+            create_host_path: true,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -260,6 +272,7 @@ fn parse_short(s: &str) -> Result<Mount, String> {
             target: target.to_string(),
             read_only,
             propagation: None,
+            create_host_path: true,
         }))
     } else if source.starts_with('.') {
         Err(format!(
@@ -310,12 +323,16 @@ fn parse_long(m: LongMount) -> Result<Mount, String> {
                     "bind mount source '{source}' is not in the allowed list"
                 ));
             }
-            let BindOptions { propagation } = bind.unwrap_or_default();
+            let BindOptions {
+                propagation,
+                create_host_path,
+            } = bind.unwrap_or_default();
             Ok(Mount::Bind(BindMount {
                 source,
                 target,
                 read_only,
                 propagation,
+                create_host_path,
             }))
         }
         "tmpfs" => {
@@ -367,6 +384,7 @@ mod tests {
                 target: "/etc/machine-id".to_string(),
                 read_only: false,
                 propagation: None,
+                create_host_path: true,
             })]
         );
     }
@@ -389,6 +407,7 @@ mod tests {
                 target: "/app/machine-id".to_string(),
                 read_only: true,
                 propagation: None,
+                create_host_path: true,
             })]
         );
     }
