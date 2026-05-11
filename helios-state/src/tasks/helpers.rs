@@ -1,7 +1,7 @@
 use crate::common_types::Uuid;
 use crate::models::{
-    ContainerStatus, Device, DeviceTarget, Network, NetworkTarget, Service, ServiceConfig,
-    ServiceTarget, Volume, VolumeTarget,
+    ContainerStatus, Device, DeviceTarget, ImageRef, Network, NetworkTarget, Service,
+    ServiceConfig, ServiceTarget, Volume, VolumeTarget,
 };
 use crate::oci::Mount;
 
@@ -256,6 +256,26 @@ pub fn services_need_stopping(app_uuid: &Uuid, device: &Device, t_device: &Devic
             rel.services.iter().any(|(svc_name, svc)| {
                 service_needs_stopping(device, t_device, app_uuid, rel_uuid, svc_name, svc)
             })
+        })
+    })
+}
+
+/// True if any target release of `app_uuid` other than `exclude_rel` contains
+/// a service whose image URI has not yet been pulled. Used by uninstall paths
+/// to defer disturbing current state until the future release's images are
+/// ready to take over.
+pub fn any_images_are_pending_download(
+    device: &Device,
+    t_device: &DeviceTarget,
+    app_uuid: &Uuid,
+    exclude_rel: &Uuid,
+) -> bool {
+    t_device.apps.get(app_uuid).is_some_and(|t_app| {
+        t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
+            t_rel_uuid != exclude_rel
+                && t_rel.services.values().any(|t_svc| {
+                    !matches!(&t_svc.image, ImageRef::Uri(uri) if device.images.contains_key(uri))
+                })
         })
     })
 }

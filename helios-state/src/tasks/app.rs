@@ -11,7 +11,7 @@ use mahler::worker::{Uninitialized, Worker};
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
-    Service, ServiceTarget, Volume,
+    ReleaseTarget, Service, ServiceTarget, Volume,
 };
 use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
 use crate::store::{self, DocumentStore};
@@ -20,10 +20,14 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, LockSet};
 
 use super::helpers::{
-    find_future_network, find_future_service, find_future_volume, find_installed_network,
-    find_installed_service, find_installed_volume, service_matches_target, services_need_stopping,
+    any_images_are_pending_download, find_future_network, find_future_service, find_future_volume,
+    find_installed_network, find_installed_service, find_installed_volume, service_matches_target,
+    services_need_stopping,
 };
 use super::image::create_image;
+
+/// Maximum number of images to pull concurrently per planning cycle.
+const MAX_CONCURRENT_IMAGE_PULLS: usize = 3;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -109,60 +113,70 @@ fn store_app_name(
     })
 }
 
+/// If a target service is staged (exists in state without a container yet)
+/// and its image has not been pulled, return the URI to pull. Otherwise None.
+fn service_needs_image_download<'a>(
+    device: &Device,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+    svc_name: &str,
+    tgt_svc: &'a ServiceTarget,
+) -> Option<&'a ImageUri> {
+    // service must exist in current state without a container yet
+    let svc = device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(rel_uuid))
+        .and_then(|rel| rel.services.get(svc_name))?;
+    if svc.oci.is_some() {
+        return None;
+    }
+
+    // image must be a URI not yet pulled
+    let ImageRef::Uri(uri) = &tgt_svc.image else {
+        return None;
+    };
+    if device.images.contains_key(uri) {
+        return None;
+    }
+    Some(uri)
+}
+
+/// True if `candidate` is already represented in `queued` — either by full
+/// URI equality or by a matching non-empty digest. Two URIs sharing a digest
+/// resolve to the same content, so pulling either is sufficient.
+fn already_queued_for_pull(queued: &[&ImageUri], candidate: &ImageUri) -> bool {
+    queued.iter().any(|img| {
+        *img == candidate || (img.digest().is_some() && img.digest() == candidate.digest())
+    })
+}
+
 /// Install all new images for all target apps
 fn fetch_apps_images(
     System(device): System<Device>,
     Target(tgt_apps): Target<AppMap>,
 ) -> Vec<Task> {
-    // Find all images for new services in the target state
-    let images_to_install: Vec<&ImageUri> = tgt_apps
+    let images_to_install = tgt_apps
         .iter()
-        .flat_map(|(t_app_uuid, t_app)| {
-            t_app.releases.iter().flat_map(|(t_rel_uuid, t_rel)| {
-                t_rel
-                    .services
-                    .iter()
-                    // find all services that need downloading
-                    .filter_map(|(t_svc_name, t_svc)| {
-                        if device
-                            .apps
-                            .get(t_app_uuid)
-                            .and_then(|app| app.releases.get(t_rel_uuid))
-                            .and_then(|rel| rel.services.get(t_svc_name))
-                            .is_none_or(|svc| svc.oci.is_some())
-                        {
-                            // the service already has a container, ignore
-                            // the image
-                            return None;
-                        }
-
-                        // only use the target image ref if it has not been downloaded yet
-                        if let ImageRef::Uri(t_img_uri) = &t_svc.image
-                            && !device.images.contains_key(t_img_uri)
-                        {
-                            Some(t_img_uri)
-                        } else {
-                            None
-                        }
-                    })
+        .flat_map(|(app_uuid, t_app)| {
+            t_app.releases.iter().flat_map(|(rel_uuid, t_rel)| {
+                t_rel.services.iter().filter_map(|(svc_name, t_svc)| {
+                    service_needs_image_download(&device, app_uuid, rel_uuid, svc_name, t_svc)
+                })
             })
         })
-        // remove duplicate digests and tags
-        .fold(Vec::<&ImageUri>::new(), |mut acc, svc_img| {
-            if acc.iter().all(|img| {
-                img != &svc_img && (img.digest().is_none() || img.digest() != svc_img.digest())
-            }) {
-                acc.push(svc_img);
+        .fold(Vec::<&ImageUri>::new(), |mut acc, candidate| {
+            if !already_queued_for_pull(&acc, candidate) {
+                acc.push(candidate);
             }
             acc
         });
 
-    // download at most 3 images at the time
-    let mut tasks: Vec<Task> = Vec::new();
-    for image in images_to_install.into_iter().take(3) {
-        tasks.push(create_image.with_arg("image_name", image.clone()))
-    }
-    tasks
+    images_to_install
+        .into_iter()
+        .take(MAX_CONCURRENT_IMAGE_PULLS)
+        .map(|image| create_image.with_arg("image_name", image.clone()))
+        .collect()
 }
 
 /// Take locks for the running app once all target services have been installed
@@ -277,31 +291,48 @@ fn create_release(release: View<Option<Release>>) -> View<Release> {
     })
 }
 
+/// True if any target service is missing in the current release or has a
+/// different image, config, or started state.
+fn any_service_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
+    tgt_rel.services.iter().any(|(name, tgt_svc)| {
+        rel.services.get(name).is_none_or(|svc| {
+            svc.started != tgt_svc.started
+                || svc.image != tgt_svc.image
+                || svc.config != tgt_svc.config
+        })
+    })
+}
+
+/// True if any target network is missing in the current release or has a
+/// different config.
+fn any_network_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
+    tgt_rel.networks.iter().any(|(name, tgt_net)| {
+        rel.networks
+            .get(name)
+            .is_none_or(|net| net.config != tgt_net.config)
+    })
+}
+
+/// True if any target volume is missing in the current release or has a
+/// different config.
+fn any_volume_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
+    tgt_rel.volumes.iter().any(|(name, tgt_vol)| {
+        rel.volumes
+            .get(name)
+            .is_none_or(|vol| vol.config != tgt_vol.config)
+    })
+}
+
 /// If modifying a release, make sure `release.installed` is set to false to
 /// ensure the release gets finished afterwards
 fn ensure_release_is_finalized(
     mut rel: View<Release>,
     Target(tgt_rel): Target<Release>,
 ) -> View<Release> {
-    if tgt_rel.services.iter().any(|(svc_name, tgt_svc)| {
-        rel.services
-            .get(svc_name)
-            .map(|svc| tgt_svc != &ServiceTarget::from(svc.clone()))
-            // target service does not exist yet or has a different config
-            .unwrap_or(true)
-    }) || tgt_rel.networks.iter().any(|(net_name, tgt_net)| {
-        rel.networks
-            .get(net_name)
-            .map(|net| tgt_net.config != net.config)
-            // target network does not exist yet or has a different config
-            .unwrap_or(true)
-    }) || tgt_rel.volumes.iter().any(|(vol_name, tgt_vol)| {
-        rel.volumes
-            .get(vol_name)
-            .map(|vol| tgt_vol.config != vol.config)
-            // target volume does not exist yet or has a different config
-            .unwrap_or(true)
-    }) {
+    if any_service_differs(&rel, &tgt_rel)
+        || any_network_differs(&rel, &tgt_rel)
+        || any_volume_differs(&rel, &tgt_rel)
+    {
         // We only modify the release in memory to avoid writing to disk.
         // If something interrupts the update, services/network/volumes won't match
         // so this task will be executed again
@@ -313,63 +344,36 @@ fn ensure_release_is_finalized(
 
 /// Finalize an installed release
 fn finish_release(
-    mut release: View<Release>,
-    Target(target): Target<Release>,
-    Args((app_uuid, commit)): Args<(Uuid, Uuid)>,
+    mut rel: View<Release>,
+    Target(t_rel): Target<Release>,
+    Args((app_uuid, rel_uuid)): Args<(Uuid, Uuid)>,
     store: Res<DocumentStore>,
 ) -> IO<Release, store::Error> {
-    // all target services have been installed
     enforce!(
-        target.services.iter().all(|(svc_name, tgt_svc)| {
-            release
-                .services
-                .get(svc_name)
-                .map(|svc| {
-                    svc.started == tgt_svc.started
-                        && svc.image == tgt_svc.image
-                        && svc.config == tgt_svc.config
-                })
-                .unwrap_or_default()
-        }),
+        !any_service_differs(&rel, &t_rel),
         "all services should have the correct configuration"
     );
-
-    // all target networks have been created
     enforce!(
-        target.networks.iter().all(|(net_name, tgt_net)| {
-            release
-                .networks
-                .get(net_name)
-                .map(|net| tgt_net.config == net.config)
-                .unwrap_or_default()
-        }),
+        !any_network_differs(&rel, &t_rel),
         "all networks should have the correct configuration"
     );
-
-    // all target volumes have been created
     enforce!(
-        target.volumes.iter().all(|(vol_name, tgt_vol)| {
-            release
-                .volumes
-                .get(vol_name)
-                .map(|vol| tgt_vol.config == vol.config)
-                .unwrap_or_default()
-        }),
+        !any_volume_differs(&rel, &t_rel),
         "all volumes should have the correct configuration"
     );
 
-    release.installed = true;
-    with_io(release, async move |release| {
+    rel.installed = true;
+    with_io(rel, async move |rel| {
         // mark the release as installed on the local store
         let local_store = store.as_ref().expect("store should be available");
         local_store
             .put(
-                format!("apps/{app_uuid}/releases/{commit}/installed"),
+                format!("apps/{app_uuid}/releases/{rel_uuid}/installed"),
                 &true,
             )
             .await?;
 
-        Ok(release)
+        Ok(rel)
     })
 }
 
@@ -549,74 +553,79 @@ fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>
     })
 }
 
+/// For every running service in `app_uuid` that depends on a resource (per
+/// `depends_on`), emit a stop+uninstall task pair. Returns an empty Vec when
+/// no services depend on the resource — callers use this to know it's safe
+/// to remove the resource itself.
+fn uninstall_services_depending_on(
+    device: &Device,
+    app_uuid: &Uuid,
+    depends_on: impl Fn(&Service) -> bool,
+) -> Vec<Task> {
+    let Some(app) = device.apps.get(app_uuid) else {
+        return Vec::new();
+    };
+
+    app.releases
+        .iter()
+        .flat_map(|(rel_uuid, rel)| {
+            rel.services
+                .iter()
+                .filter(|(_, svc)| svc.oci.is_some() && depends_on(svc))
+                .flat_map(move |(svc_name, _)| {
+                    [
+                        stop_service_when_requirements_are_met
+                            .with_arg("commit", rel_uuid.as_str())
+                            .with_arg("service_name", svc_name),
+                        uninstall_service
+                            .with_arg("commit", rel_uuid.as_str())
+                            .with_arg("service_name", svc_name),
+                    ]
+                })
+        })
+        .collect()
+}
+
 /// Migrate or remove a network
 ///
 /// If the same-named network exists in the target with identical config,
-/// perform a state-only removal and migration of data. Otherwise do a full
-/// Docker removal.
+/// perform a state-only removal so the Docker network is reused. Otherwise
+/// stop and uninstall any services using the network, then remove it.
 fn remove_network_when_requirements_are_met(
     net: View<Network>,
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, net_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
-    let mut tasks = Vec::new();
+    // Migration path: same-named network in a future release with matching
+    // config. Wait for the new release to register the network in state,
+    // then perform a state-only removal — the Docker network is preserved
+    // for the new release to adopt.
     if let Some((t_rel_uuid, future_net)) =
         find_future_network(&t_device, &app_uuid, &rel_uuid, &net_name)
         && net.config == future_net.config
     {
-        // Wait until the target release's network has been created in state
-        // before emitting migration tasks
-        let new_net_exists = device
+        let new_release_has_network = device
             .apps
             .get(&app_uuid)
             .and_then(|app| app.releases.get(t_rel_uuid))
             .is_some_and(|rel| rel.networks.contains_key(&net_name));
 
-        // State-only removal, Docker network preserved for new release to adopt
-        if new_net_exists {
-            tasks.push(remove_network.into_task());
-        }
-    } else {
-        let services_depending_on_network = device
-            .apps
-            .get(&app_uuid)
-            .map(|app| {
-                app.releases
-                    .iter()
-                    .flat_map(|(rel_uuid, rel)| {
-                        rel.services
-                            .iter()
-                            // find any services referencing the network that have a container
-                            .filter(|(_, svc)| {
-                                svc.oci.is_some() && svc.config.networks.contains_key(&net_name)
-                            })
-                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
-                    })
-                    .collect::<Vec<(&Uuid, &String)>>()
-            })
-            .unwrap_or_default();
-
-        // uninstall any services depending on the network first
-        for (rel_uuid, svc_name) in services_depending_on_network {
-            tasks.push(
-                stop_service_when_requirements_are_met
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-            tasks.push(
-                uninstall_service
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-        }
-
-        // once services have been uninstalled, then remove the network
-        if tasks.is_empty() {
-            tasks.push(uninstall_network.into_task());
-        }
+        return if new_release_has_network {
+            vec![remove_network.into_task()]
+        } else {
+            Vec::new()
+        };
     }
 
+    // Otherwise: stop and uninstall any services using the network, then
+    // remove it on a subsequent retry once no dependents remain.
+    let mut tasks = uninstall_services_depending_on(&device, &app_uuid, |svc| {
+        svc.config.networks.contains_key(&net_name)
+    });
+    if tasks.is_empty() {
+        tasks.push(uninstall_network.into_task());
+    }
     tasks
 }
 
@@ -628,75 +637,46 @@ fn remove_network(net: View<Network>) -> View<Option<Network>> {
 /// Migrate or remove a volume
 ///
 /// If the same-named volume exists in the target with identical config,
-/// perform a state-only removal and migration of data. Otherwise do a full
-/// Docker removal.
+/// perform a state-only removal so the Docker volume is reused. Otherwise
+/// stop and uninstall any services using the volume, then remove it.
 fn remove_volume_when_requirements_are_met(
     vol: View<Volume>,
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, vol_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
-    let mut tasks = Vec::new();
+    // Migration path: same-named volume in a future release with matching
+    // config. Wait for the new release to register the volume in state,
+    // then perform a state-only removal — the Docker volume is preserved
+    // for the new release to adopt.
     if let Some((t_rel_uuid, future_vol)) =
         find_future_volume(&t_device, &app_uuid, &rel_uuid, &vol_name)
         && vol.config == future_vol.config
     {
-        // Wait until the target release's volume has been created in state
-        // before emitting migration tasks
-        let new_vol_exists = device
+        let new_release_has_volume = device
             .apps
             .get(&app_uuid)
             .and_then(|app| app.releases.get(t_rel_uuid))
             .is_some_and(|rel| rel.volumes.contains_key(&vol_name));
 
-        // State-only removal, Docker volume preserved for new release to adopt
-        if new_vol_exists {
-            tasks.push(remove_volume.into_task());
-        }
-    } else {
-        let services_depending_on_volume = device
-            .apps
-            .get(&app_uuid)
-            .map(|app| {
-                app.releases
-                    .iter()
-                    .flat_map(|(rel_uuid, rel)| {
-                        rel.services
-                            .iter()
-                            // find any services referencing the volume that have a container
-                            .filter(|(_, svc)| {
-                                svc.oci.is_some()
-                                    && svc.config.volumes.iter().any(|m| {
-                                        matches!(m, Mount::Volume { source, .. }
-                                            if source == &vol_name)
-                                    })
-                            })
-                            .map(move |(svc_name, _)| (rel_uuid, svc_name))
-                    })
-                    .collect::<Vec<(&Uuid, &String)>>()
-            })
-            .unwrap_or_default();
-
-        // uninstall any services depending on the volume first
-        for (rel_uuid, svc_name) in services_depending_on_volume {
-            tasks.push(
-                stop_service_when_requirements_are_met
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-            tasks.push(
-                uninstall_service
-                    .with_arg("commit", rel_uuid.as_str())
-                    .with_arg("service_name", svc_name),
-            );
-        }
-
-        // once services have been uninstalled, then remove the volume
-        if tasks.is_empty() {
-            tasks.push(uninstall_volume.into_task());
-        }
+        return if new_release_has_volume {
+            vec![remove_volume.into_task()]
+        } else {
+            Vec::new()
+        };
     }
 
+    // Otherwise: stop and uninstall any services mounting the volume, then
+    // remove it on a subsequent retry once no dependents remain.
+    let mut tasks = uninstall_services_depending_on(&device, &app_uuid, |svc| {
+        svc.config
+            .volumes
+            .iter()
+            .any(|m| matches!(m, Mount::Volume { source, .. } if source == &vol_name))
+    });
+    if tasks.is_empty() {
+        tasks.push(uninstall_volume.into_task());
+    }
     tasks
 }
 
@@ -753,17 +733,13 @@ fn migrate_service(
     })
 }
 
-/// Install the service when requirements are met for this operation
-///
-/// A service can be installed after
-/// - the image has been pulled
-/// - any networks referenced by the service exist in the release and have been created
-/// - any volumes referenced by the service exist in the release and have been created
-/// - if upgrading between releases, and there is an identically named service in
-///   a previous release, the services are for different images and have different
-///   configurations, otherwise the old service just requires as migration
-///
-/// These requirements may vary a little depending on the update strategy
+/// Emit `install_service` once the service is ready to install:
+/// - the service is registered in state but has no container yet,
+/// - the image has been pulled,
+/// - every linked network and volume exists in the current release with
+///   config matching the target, and
+/// - no identically-named service in another release could be migrated
+///   here instead (that path is handled by `uninstall_service_when_requirements_are_met`).
 fn install_service_when_requirements_are_met(
     svc: View<Service>,
     System(device): System<Device>,
@@ -771,7 +747,6 @@ fn install_service_when_requirements_are_met(
     Target(tgt): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
-    // do not install a container that already exists
     if svc.oci.is_some() {
         return None;
     }
@@ -780,77 +755,59 @@ fn install_service_when_requirements_are_met(
         .apps
         .get(&app_uuid)
         .and_then(|app| app.releases.get(&rel_uuid));
-
     let t_release = tgt_device
         .apps
         .get(&app_uuid)
         .and_then(|app| app.releases.get(&rel_uuid));
 
-    // Check that all required networks have been created in the release
-    let networks_ready = if !tgt.config.networks.is_empty() {
-        release.is_some_and(|release| {
-            // for every configured network
-            tgt.config.networks.keys().all(|net_name| {
-                // the network has been created
-                if release.networks.contains_key(net_name)
-                    && let Some(net) = release.networks.get(net_name)
-                    && let Some(t_net) = t_release.and_then(|t_rel| t_rel.networks.get(net_name))
-                    // and the installed network configuration matches its target
-                    && net.config == t_net.config
-                {
-                    return true;
-                }
-                false
-            })
-        })
-    } else {
-        true
+    // the service image has already been pulled
+    let ImageRef::Uri(tgt_img) = &tgt.image else {
+        return None;
+    };
+    let image_pulled = device.images.contains_key(tgt_img);
+
+    // A linked resource is "ready" if it exists in the current release with
+    // config matching its target.
+    let network_ready = |name: &String| -> bool {
+        matches!(
+            (
+                release.and_then(|r| r.networks.get(name)),
+                t_release.and_then(|r| r.networks.get(name)),
+            ),
+            (Some(net), Some(t_net)) if net.config == t_net.config,
+        )
+    };
+    let volume_ready = |name: &String| -> bool {
+        matches!(
+            (
+                release.and_then(|r| r.volumes.get(name)),
+                t_release.and_then(|r| r.volumes.get(name)),
+            ),
+            (Some(vol), Some(t_vol)) if vol.config == t_vol.config,
+        )
     };
 
-    // Check that every volume referenced by a mount has been created with the right config
-    let tgt_volume_sources: Vec<&str> = tgt
-        .config
-        .volumes
-        .iter()
-        .filter_map(|m| match m {
-            Mount::Volume { source, .. } => Some(source.as_str()),
-            _ => None,
-        })
-        .collect();
-    let volumes_ready = if tgt_volume_sources.is_empty() {
-        true
-    } else {
-        release.is_some_and(|release| {
-            tgt_volume_sources.iter().all(|vol_name| {
-                if let Some(vol) = release.volumes.get(*vol_name)
-                    && let Some(t_vol) = t_release.and_then(|t_rel| t_rel.volumes.get(*vol_name))
-                    && vol.config == t_vol.config
-                {
-                    return true;
-                }
-                false
-            })
-        })
-    };
+    let networks_ready = tgt.config.networks.keys().all(network_ready);
+    let volumes_ready = tgt.config.volumes.iter().all(|m| match m {
+        Mount::Volume { source, .. } => volume_ready(source),
+        _ => true,
+    });
 
-    // Skip the task if the image for the service doesn't exist yet
-    // or there is an identically named service with the same image and
-    // config. In the last scenario, the service will be created by the `uninstall_service`
-    // operation
-    if networks_ready
-        && volumes_ready
-        && let ImageRef::Uri(tgt_img) = &tgt.image
-        && device.images.contains_key(tgt_img)
-        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none_or(|svc| {
-            !svc.image.is_same_artifact(&tgt.image)
-                || svc.started != tgt.started
-                || svc.config != tgt.config
-        })
-    {
-        return Some(install_service.with_target(tgt));
+    // If an identically-named service exists in another release matching
+    // image/started/config, the migration path in `uninstall_service_when_requirements_are_met`
+    // will adopt it — skip a fresh install here.
+    let no_migratable_predecessor =
+        find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none_or(|prev| {
+            !prev.image.is_same_artifact(&tgt.image)
+                || prev.started != tgt.started
+                || prev.config != tgt.config
+        });
+
+    if networks_ready && volumes_ready && image_pulled && no_migratable_predecessor {
+        Some(install_service.with_target(tgt))
+    } else {
+        None
     }
-
-    None
 }
 
 /// Install the service
@@ -1091,69 +1048,64 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
     })
 }
 
-/// Stop a service if running and remove the service if requirements are met
+/// Stop a service if running and remove it, with a fast-path that migrates
+/// the running container to a future release instead of recreating it.
 ///
-/// A service can be uninstalled if
-/// - If upgrading between releases, all the target images have been pulled
-/// - If upgrading between releases and there is an identically named service in the new release:
-///     - if the service has the same image and configuration, the old service should be migrated
-///     - otherwise the container for the new service should exist before uninstalling the old one
-///
-/// These requirements may vary a little depending on the update strategy
+/// The planner picks this task when:
+/// - all target images for *other* releases of the app have already been
+///   pulled (so uninstalling the current state won't strand a future install), and
+/// - either a matching future service exists and a migration is safe, or
+/// - the service can be stopped (if running) and uninstalled.
 fn uninstall_service_when_requirements_are_met(
     svc: View<Service>,
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
-    let mut tasks = Vec::new();
-
-    // wait until all target images have been downloaded
-    if t_device.apps.get(&app_uuid).is_some_and(|t_app| {
-        t_app.releases.iter().any(|(t_rel_uuid, t_rel)| {
-            t_rel_uuid != &rel_uuid
-                && t_rel.services.values().any(|t_svc| {
-                    !matches!(&t_svc.image, ImageRef::Uri(t_img_uri) if device.images.contains_key(t_img_uri))
-                })
-        })
-    }) {
-        return tasks;
+    // Defer uninstall until future-release images are pulled. Removing now
+    // could free networks/volumes that pending installs depend on.
+    if any_images_are_pending_download(&device, &t_device, &app_uuid, &rel_uuid) {
+        return Vec::new();
     }
 
-    // If there is a new target service for a different release with the same
-    // config and image, then do a migration
+    // Migration path: a future release expects the same service with
+    // matching image/config/started state. State-only remove from the
+    // current release, then migrate the container into the future release.
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
-        // target release has already been created (needed to call `migrate_service`)
-        && device
+    {
+        let target_release_exists = device
             .apps
             .get(&app_uuid)
-            .is_some_and(|app| app.releases.contains_key(t_rel_uuid))
-        // current service matches the future target and can be migrated as-is
-        && service_matches_target(&device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, tgt_svc)
-        // if any services need stopping, then locks have already been taken
-        && (!services_need_stopping(&app_uuid, &device, &t_device)
-            || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
-    {
-        tasks.push(remove_service.into_task());
-        tasks.push(
-            migrate_service
-                .with_arg("commit", t_rel_uuid.as_str())
-                .with_target(&*svc),
+            .is_some_and(|app| app.releases.contains_key(t_rel_uuid));
+        let can_migrate_as_is = service_matches_target(
+            &device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, tgt_svc,
         );
-    } else {
-        if svc
-            .oci
-            .as_ref()
-            .is_some_and(|c| c.status == ContainerStatus::Running)
-        {
-            // stop the service if running
-            tasks.push(stop_service_when_requirements_are_met.into_task());
+        // Either no service in the app needs stopping (lock-free), or locks
+        // were already taken upstream.
+        let locks_satisfied = !services_need_stopping(&app_uuid, &device, &t_device)
+            || device.apps.get(&app_uuid).is_some_and(|app| app.locked);
+
+        if target_release_exists && can_migrate_as_is && locks_satisfied {
+            return vec![
+                remove_service.into_task(),
+                migrate_service
+                    .with_arg("commit", t_rel_uuid.as_str())
+                    .with_target(&*svc),
+            ];
         }
-        // otherwise uninstall the service
-        tasks.push(uninstall_service.into_task());
     }
 
+    // Fallback: stop the service if it is still running, then uninstall it.
+    let mut tasks = Vec::new();
+    if svc
+        .oci
+        .as_ref()
+        .is_some_and(|c| c.status == ContainerStatus::Running)
+    {
+        tasks.push(stop_service_when_requirements_are_met.into_task());
+    }
+    tasks.push(uninstall_service.into_task());
     tasks
 }
 
