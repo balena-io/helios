@@ -478,6 +478,7 @@ pub async fn start_seek(
                     let proxy_state = &proxy_state;
                     let prev_seek_state = prev_seek_state.clone();
                     let legacy_config = legacy_config.clone();
+                    let host_runtime_dir = host_runtime_dir.clone();
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
@@ -512,7 +513,7 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            device_target.add_environment_from_state(current_state);
+                            device_target.add_runtime_context(current_state, &host_runtime_dir);
 
                             // Look for a plan to the target
                             update_status = seek_target(
