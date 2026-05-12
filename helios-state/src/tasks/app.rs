@@ -855,9 +855,7 @@ fn start_service(
     // need to loop again to re-create the container
     enforce!(
         svc.config == tgt_svc.config,
-        "service configuration should match the target before start: {:?}, {:?}",
-        svc.config,
-        tgt_svc.config
+        "service configuration should match the target before start",
     );
 
     svc.started = true;
@@ -887,10 +885,8 @@ fn start_service(
             .await
             .context("failed to inspect container for service")?;
 
-        svc.oci.replace(Container::from((
-            local_container.name.as_ref(),
-            local_container.state,
-        )));
+        *svc = Service::from(local_container);
+        svc.image = tgt_svc.image;
 
         Ok(svc)
     })
