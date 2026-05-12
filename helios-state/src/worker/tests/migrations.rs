@@ -146,14 +146,12 @@ fn it_finds_a_workflow_for_migrating_networks_with_tagged_image() {
                 }
             },
         }),
-        dag!(
-            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
-            seq!(
-                "stop service 'my-service' for release 'old-release'",
-                "uninstall service 'my-service' for release 'old-release'",
-            )
-        ) + par!(
+        seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
             "initialize service 'my-service' for release 'new-release'",
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'my-service' for release 'old-release'",
+            "uninstall service 'my-service' for release 'old-release'",
             "remove network 'my-network' for app 'my-app-uuid'"
         ) + par!(
             "remove release 'old-release' for app with uuid 'my-app-uuid'",
@@ -162,6 +160,7 @@ fn it_finds_a_workflow_for_migrating_networks_with_tagged_image() {
             "install service 'my-service' for release 'new-release'",
             "start service 'my-service' for release 'new-release'",
             "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'"
         ),
     );
 }
@@ -424,24 +423,22 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_volume() {
                 }
             },
         }),
-        dag!(
-            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
-            seq!(
-                "stop service 'my-svc' for release 'old-release'",
-                "uninstall service 'my-svc' for release 'old-release'"
-            )
-        ) + par!(
+        seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
             "initialize service 'my-svc' for release 'new-release'",
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'",
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'my-svc' for release 'old-release'",
+            "uninstall service 'my-svc' for release 'old-release'",
             "remove volume 'my-vol' for app 'my-app-uuid'",
-        ) + seq!(
-            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
         ) + par!(
             "remove release 'old-release' for app with uuid 'my-app-uuid'",
             "setup volume 'my-vol' for app 'my-app-uuid'"
         ) + seq!(
             "install service 'my-svc' for release 'new-release'",
             "start service 'my-svc' for release 'new-release'",
-            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'"
         ),
     );
 }
@@ -554,18 +551,16 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_volume_and_network()
                 }
             },
         }),
-        dag!(
-            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
-            seq!(
-                "stop service 'my-svc' for release 'old-release'",
-                "uninstall service 'my-svc' for release 'old-release'"
-            )
-        ) + par!(
+        seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
             "initialize service 'my-svc' for release 'new-release'",
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'",
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'my-svc' for release 'old-release'",
+            "uninstall service 'my-svc' for release 'old-release'"
+        ) + par!(
             "remove network 'my-net' for app 'my-app-uuid'",
             "remove volume 'my-vol' for app 'my-app-uuid'",
-        ) + seq!(
-            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
         ) + par!(
             "remove release 'old-release' for app with uuid 'my-app-uuid'",
             "setup network 'my-net' for app 'my-app-uuid'",
@@ -573,7 +568,8 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_volume_and_network()
         ) + seq!(
             "install service 'my-svc' for release 'new-release'",
             "start service 'my-svc' for release 'new-release'",
-            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'"
         ),
     );
 }
@@ -761,24 +757,22 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
                 }
             },
         }),
-        dag!(
-            seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'"),
-            seq!(
-                "stop service 'my-svc' for release 'old-release'",
-                "uninstall service 'my-svc' for release 'old-release'"
-            )
-        ) + par!(
+        seq!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
             "initialize service 'my-svc' for release 'new-release'",
-            "remove network 'my-net' for app 'my-app-uuid'",
-        ) + seq!(
-            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'"
+            "tag image 'registry2.balena-cloud.com/v2/oldsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111' as 'registry2.balena-cloud.com/v2/newsvc@sha256:a111111111111111111111111111111111111111111111111111111111111111'",
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'my-svc' for release 'old-release'",
+            "uninstall service 'my-svc' for release 'old-release'",
+            "remove network 'my-net' for app 'my-app-uuid'"
         ) + par!(
             "remove release 'old-release' for app with uuid 'my-app-uuid'",
             "setup network 'my-net' for app 'my-app-uuid'"
         ) + seq!(
             "install service 'my-svc' for release 'new-release'",
             "start service 'my-svc' for release 'new-release'",
-            "finish release 'new-release' for app with uuid 'my-app-uuid'"
+            "finish release 'new-release' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'"
         ),
     );
 }

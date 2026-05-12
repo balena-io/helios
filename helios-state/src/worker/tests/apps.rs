@@ -164,26 +164,28 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
         dag!(
             seq!("initialize app with uuid 'other-app-uuid'"),
             seq!(
+                "take locks for app with uuid 'my-app-uuid'",
                 "stop service 'service1' for release 'my-release-uuid'",
                 "uninstall service 'service1' for release 'my-release-uuid'"
-            ),
+            )
+        ) + dag!(
+            seq!("initialize release 'my-release-uuid' for app with uuid 'other-app-uuid'"),
             seq!(
                 "stop service 'service2' for release 'my-release-uuid'",
                 "uninstall service 'service2' for release 'my-release-uuid'"
             )
         ) + par!(
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
-            "initialize release 'my-release-uuid' for app with uuid 'other-app-uuid'"
-        ) + par!(
-            "remove app with uuid 'my-app-uuid'",
             "initialize service 'service1' for release 'my-release-uuid'",
             "initialize service 'service2' for release 'my-release-uuid'",
         ) + par!(
+            "release locks for app with uuid 'my-app-uuid'",
             "install service 'service1' for release 'my-release-uuid'",
             "install service 'service2' for release 'my-release-uuid'",
         ) + par!(
+            "remove app with uuid 'my-app-uuid'",
             "start service 'service1' for release 'my-release-uuid'",
             "start service 'service2' for release 'my-release-uuid'",
-        ) + seq!("finish release 'my-release-uuid' for app with uuid 'other-app-uuid'"),
+        ) + seq!("finish release 'my-release-uuid' for app with uuid 'other-app-uuid'",),
     )
 }

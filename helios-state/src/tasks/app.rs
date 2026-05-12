@@ -1,23 +1,29 @@
+use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
+
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
 use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 
-use crate::common_types::{ImageUri, Uuid};
+use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
     Service, ServiceTarget, Volume,
 };
-use crate::store::{self, DocumentStore};
-
 use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
-use crate::tasks::utils::{find_installed_network, find_installed_volume};
+use crate::store::{self, DocumentStore};
+use crate::util::dirs::runtime_dir;
+use crate::util::fs::run_async;
+use crate::util::locking::{self, LockSet};
 
-use super::image::create_image;
-use super::utils::{
-    find_future_network, find_future_service, find_future_volume, find_installed_service,
+use super::helpers::{
+    find_future_network, find_future_service, find_future_volume, find_installed_network,
+    find_installed_service, find_installed_volume, service_matches_target, services_need_stopping,
 };
+use super::image::create_image;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -40,6 +46,8 @@ fn create_app(
     let app = maybe_app.create(App {
         id,
         name,
+        locked: false,
+        lockfiles: Vec::new(),
         releases: Map::new(),
     });
 
@@ -61,7 +69,7 @@ fn create_app(
 fn remove_app(mut app: View<Option<App>>) -> View<Option<App>> {
     if app
         .as_ref()
-        .map(|a| a.releases.is_empty())
+        .map(|a| !a.locked && a.releases.is_empty())
         .unwrap_or_default()
     {
         app.take();
@@ -155,6 +163,108 @@ fn fetch_apps_images(
         tasks.push(create_image.with_arg("image_name", image.clone()))
     }
     tasks
+}
+
+/// Take locks for the running app once all target services have been installed
+fn take_locks(
+    mut app: View<App>,
+    host_runtime_dir: Res<HostRuntimeDir>,
+    locks: Res<LockSet>,
+) -> IO<App, io::Error> {
+    app.locked = true;
+    with_io(app, async move |mut app| {
+        let host_runtime_dir = host_runtime_dir
+            .as_ref()
+            .expect("host_runtime_dir resource should be available");
+
+        // resolve a lock file for each running service whose /tmp/balena bind
+        // mount lives under the host runtime directory, grouping the services
+        // that share each lock path so each lock is taken at most once.
+        let service_locks: HashMap<PathBuf, Vec<String>> = app
+            .releases
+            .iter()
+            .flat_map(|(_, rel)| rel.services.iter())
+            .filter(|(_, svc)| svc.oci.is_some())
+            .filter_map(|(svc_name, svc)| {
+                let bind_source = svc.config.volumes.iter().find_map(|mount| match mount {
+                    Mount::Bind { source, target, .. } if target == "/tmp/balena" => Some(source),
+                    _ => None,
+                })?;
+                let suffix = Path::new(bind_source)
+                    .strip_prefix(host_runtime_dir.as_path())
+                    .ok()?;
+                Some((
+                    runtime_dir().join(suffix).join("updates.lock"),
+                    svc_name.clone(),
+                ))
+            })
+            .fold(HashMap::new(), |mut acc, (path, svc_name)| {
+                acc.entry(path).or_default().push(svc_name);
+                acc
+            });
+
+        let acquired = run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            let mut acquired: Vec<PathBuf> = Vec::with_capacity(service_locks.len());
+            for (lock_path, svc_names) in service_locks {
+                if let Err(e) = locks.try_lock(lock_path.clone()) {
+                    for p in acquired {
+                        let _ = locks.unlock(p);
+                    }
+                    return match e {
+                        locking::Error::WouldBlock => Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            format!("services locked: {}", svc_names.join(", ")),
+                        )),
+                        locking::Error::IO(e) => Err(e),
+                    };
+                }
+                acquired.push(lock_path);
+            }
+            Ok(acquired)
+        })
+        .await?;
+
+        app.lockfiles = acquired;
+        Ok(app)
+    })
+}
+
+/// Release locks for the running app once all current services have been removed
+fn release_locks(
+    mut app: View<App>,
+    Target(tgt_app): Target<Option<App>>,
+    locks: Res<LockSet>,
+) -> IO<App, io::Error> {
+    // if there is no target app, wait until releases are deleted
+    enforce!(tgt_app.is_some() || app.releases.is_empty());
+
+    // if there is a target app with a target release, wait until the release is installed
+    if let Some((t_rel_uuid, _)) = tgt_app
+        .as_ref()
+        .and_then(|t_app| t_app.releases.first_key_value())
+        && app
+            .releases
+            .get(t_rel_uuid)
+            .is_none_or(|rel| !rel.installed)
+    {
+        return IO::abort(format!("target release {t_rel_uuid} is not installed"));
+    }
+
+    app.locked = false;
+    with_io(app, async move |mut app| {
+        let to_release = std::mem::take(&mut app.lockfiles);
+        run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            for path in to_release {
+                locks.unlock(path)?;
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(app)
+    })
 }
 
 /// Initialize an empty release
@@ -826,11 +936,17 @@ fn install_service(
 /// These requirements may vary a little depending on the update strategy
 fn start_service_when_requirements_are_met(
     System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
     Target(tgt_svc): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Option<Task> {
-    // only start the service if there are no services from a previous release
-    if find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none() {
+    // only start the service if
+    // no services need stopping or the app is already locked
+    if (!services_need_stopping(&app_uuid, &device, &t_device)
+        || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
+        // and any service from a previous release has already been installed
+        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none()
+    {
         return Some(start_service.with_target(tgt_svc));
     }
 
@@ -911,11 +1027,22 @@ fn reconfigure_service(svc: View<Service>, Target(tgt): Target<Service>) -> Vec<
 /// Stop a service and its dependents when all the requirements are met
 ///
 /// A service can be stopped if:
-/// - Locks are taken (TODO)
+/// - Locks are taken
 /// - Any services depending on it that have `restart: true` are stopped  (TODO)
-fn stop_service_when_requirements_are_met() -> Vec<Task> {
-    // just push the stop service task for now
-    vec![stop_service.into_task()]
+fn stop_service_when_requirements_are_met(
+    System(device): System<Device>,
+    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
+    // the service cannot be stopped until the app is locked
+    if let Some(app) = device.apps.get(&app_uuid)
+        && !app.locked
+    {
+        tasks.push(take_locks.into_task());
+    }
+
+    tasks.push(stop_service.into_task());
+    tasks
 }
 
 /// Stop a running service
@@ -967,12 +1094,10 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
 /// Stop a service if running and remove the service if requirements are met
 ///
 /// A service can be uninstalled if
-/// - Locks have been taken by this service (TODO)
 /// - If upgrading between releases, all the target images have been pulled
-///   has been created (TODO)
 /// - If upgrading between releases and there is an identically named service in the new release:
-///     - if the service has the same image and configuration, the old service should be migrated (TODO)
-///     - otherwise the container for the new service should exist before uninstalling the old one (TODO)
+///     - if the service has the same image and configuration, the old service should be migrated
+///     - otherwise the container for the new service should exist before uninstalling the old one
 ///
 /// These requirements may vary a little depending on the update strategy
 fn uninstall_service_when_requirements_are_met(
@@ -999,13 +1124,16 @@ fn uninstall_service_when_requirements_are_met(
     // config and image, then do a migration
     if let Some((t_rel_uuid, tgt_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
+        // target release has already been created (needed to call `migrate_service`)
         && device
             .apps
             .get(&app_uuid)
             .is_some_and(|app| app.releases.contains_key(t_rel_uuid))
-        && svc.image.is_same_artifact(&tgt_svc.image)
-        && svc.started == tgt_svc.started
-        && svc.config == tgt_svc.config
+        // current service matches the future target and can be migrated as-is
+        && service_matches_target(&device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, tgt_svc)
+        // if any services need stopping, then locks have already been taken
+        && (!services_need_stopping(&app_uuid, &device, &t_device)
+            || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
     {
         tasks.push(remove_service.into_task());
         tasks.push(
@@ -1124,6 +1252,15 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             [
                 job::create(create_app).with_description(|Args(uuid): Args<Uuid>| {
                     format!("initialize app with uuid '{uuid}'")
+                }),
+                job::none(take_locks).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("take locks for app with uuid '{uuid}'")
+                }),
+                job::update(release_locks).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("release locks for app with uuid '{uuid}'")
+                }),
+                job::delete(release_locks).with_description(|Args(uuid): Args<Uuid>| {
+                    format!("release locks for app with uuid '{uuid}'")
                 }),
                 job::delete(remove_app).with_description(|Args(uuid): Args<Uuid>| {
                     format!("remove app with uuid '{uuid}'")

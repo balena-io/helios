@@ -4,6 +4,7 @@ use helios_store::DocumentStore;
 
 use crate::common_types::HostRuntimeDir;
 use crate::oci::{Client as Docker, RegistryAuth};
+use crate::util::locking::LockSet;
 
 use super::models::Device;
 use super::tasks::with_device_tasks;
@@ -61,6 +62,7 @@ pub fn create(
 
     worker.use_resource(host_runtime_dir);
     worker.use_resource(local_store);
+    worker.use_resource(LockSet::new());
     worker
 }
 

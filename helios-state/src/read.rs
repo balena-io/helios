@@ -54,6 +54,8 @@ async fn get_or_create_app<'a>(
             App {
                 id: 0,
                 name,
+                locked: false,
+                lockfiles: Vec::new(),
                 releases: Map::new(),
             },
         );
@@ -108,6 +110,8 @@ pub async fn read(
                     App {
                         id,
                         name,
+                        locked: false,
+                        lockfiles: Vec::new(),
                         releases: Map::new(),
                     },
                 );
