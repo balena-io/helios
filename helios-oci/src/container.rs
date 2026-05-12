@@ -246,7 +246,34 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .trim_start_matches('/')
             .to_owned();
 
+        // Gather the host config fields from the engine
+        // while filtering out the default values such as "" / 0.
         let mut host_config = value.host_config;
+        let cgroup = host_config
+            .as_mut()
+            .and_then(|hc| hc.cgroupns_mode.take())
+            .and_then(|m| Cgroup::try_from(m).ok());
+        let cgroup_parent = host_config
+            .as_mut()
+            .and_then(|hc| hc.cgroup_parent.take())
+            .filter(|s| !s.is_empty());
+        let cpuset = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpuset_cpus.take())
+            .filter(|s| !s.is_empty());
+        let cpu_rt_period = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_realtime_period.take())
+            .filter(|n| *n != 0);
+        let cpu_rt_runtime = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_realtime_runtime.take())
+            .filter(|n| *n != 0);
+        let cpu_shares = host_config
+            .as_mut()
+            .and_then(|hc| hc.cpu_shares.take())
+            .filter(|n| *n != 0);
+        let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
         // be misread as a NetworkMode::Other passthrough. `Other(..)` target-state modes
@@ -259,7 +286,14 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 "host" => Some(NetworkMode::Host),
                 _ => None,
             });
-
+        let privileged = host_config
+            .as_mut()
+            .and_then(|hc| hc.privileged.take())
+            .unwrap_or_default();
+        let read_only = host_config
+            .as_mut()
+            .and_then(|hc| hc.readonly_rootfs.take())
+            .unwrap_or_default();
         let restart_policy = host_config
             .as_mut()
             .and_then(|hc| hc.restart_policy.take())
@@ -275,7 +309,6 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                 })
             })
             .unwrap_or_default();
-
         let mut volumes = host_config
             .as_mut()
             .and_then(|hc| hc.mounts.take())
@@ -283,6 +316,33 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .into_iter()
             .map(Mount::try_from)
             .collect::<Result<Vec<_>>>()?;
+        let mem_limit = host_config
+            .as_mut()
+            .and_then(|hc| hc.memory.take())
+            .filter(|n| *n != 0);
+        let mem_reservation = host_config
+            .as_mut()
+            .and_then(|hc| hc.memory_reservation.take())
+            .filter(|n| *n != 0);
+        let nano_cpus = host_config
+            .as_mut()
+            .and_then(|hc| hc.nano_cpus.take())
+            .filter(|n| *n != 0);
+        let oom_score_adj = host_config
+            .as_mut()
+            .and_then(|hc| hc.oom_score_adj.take())
+            .filter(|n| *n != 0);
+        let pids_limit = host_config.as_mut().and_then(|hc| hc.pids_limit.take());
+        let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
+        let shm_size = host_config.as_mut().and_then(|hc| hc.shm_size.take());
+        let userns_mode = host_config
+            .as_mut()
+            .and_then(|hc| hc.userns_mode.take())
+            .filter(|s| !s.is_empty());
+        let uts = host_config
+            .as_mut()
+            .and_then(|hc| hc.uts_mode.take())
+            .filter(|s| !s.is_empty());
 
         // Sort by target so the serialized form is stable regardless of the
         // order the engine reports the mounts in — Mahler compares state via
@@ -299,7 +359,20 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|c| c.env.take())
             .map(Environment::from)
             .unwrap_or_default();
-        let cmd = config.and_then(|c| c.cmd);
+        let cmd = config.as_mut().and_then(|c| c.cmd.take());
+        let domainname = config
+            .as_mut()
+            .and_then(|c| c.domainname.take())
+            .filter(|s| !s.is_empty());
+        let hostname = config.as_mut().and_then(|c| c.hostname.take());
+        let stop_grace_period = config.as_mut().and_then(|c| c.stop_timeout.take());
+        let stop_signal = config.as_mut().and_then(|c| c.stop_signal.take());
+        let tty = config
+            .as_mut()
+            .and_then(|c| c.tty.take())
+            .unwrap_or_default();
+        let user = config.as_mut().and_then(|c| c.user.take());
+        let working_dir = config.as_mut().and_then(|c| c.working_dir.take());
 
         // Read network endpoint configurations from the container's network settings.
         // When network_mode is `host` or `none`, networks are not user-managed — leave empty.
@@ -328,10 +401,35 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         };
 
         let config = ContainerConfig {
+            cgroup,
+            cgroup_parent,
             command: cmd,
+            cpuset,
+            cpu_rt_period,
+            cpu_rt_runtime,
+            cpu_shares,
+            domainname,
             environment,
+            hostname,
+            init,
             labels,
+            mem_limit,
+            mem_reservation,
+            nano_cpus,
+            oom_score_adj,
+            pids_limit,
+            privileged,
+            read_only,
             restart_policy,
+            runtime,
+            shm_size,
+            stop_grace_period,
+            stop_signal,
+            tty,
+            user,
+            userns_mode,
+            uts,
+            working_dir,
             networks,
             network_mode,
             volumes,
@@ -412,6 +510,37 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+}
+
+/// Cgroup namespace mode for a container.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Cgroup {
+    Host,
+    Private,
+}
+
+impl From<Cgroup> for bollard::models::HostConfigCgroupnsModeEnum {
+    fn from(value: Cgroup) -> Self {
+        match value {
+            Cgroup::Host => Self::HOST,
+            Cgroup::Private => Self::PRIVATE,
+        }
+    }
+}
+
+impl TryFrom<bollard::models::HostConfigCgroupnsModeEnum> for Cgroup {
+    type Error = ();
+    fn try_from(
+        value: bollard::models::HostConfigCgroupnsModeEnum,
+    ) -> std::result::Result<Self, Self::Error> {
+        use bollard::models::HostConfigCgroupnsModeEnum::*;
+        match value {
+            HOST => Ok(Cgroup::Host),
+            PRIVATE => Ok(Cgroup::Private),
+            EMPTY => Err(()),
+        }
+    }
 }
 
 /// Docker compose restart policy for a container.
@@ -758,19 +887,101 @@ impl TryFrom<bollard::models::Mount> for Mount {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(default)]
 pub struct ContainerConfig {
+    /// Cgroup namespace mode (`host` or `private`)
+    pub cgroup: Option<Cgroup>,
+
+    /// Path to cgroups under which the container's cgroup is created
+    pub cgroup_parent: Option<String>,
+
     /// Command to run specified as an array of strings
     pub command: Option<Vec<String>>,
+
+    /// CPUs the container is allowed to run on (`0-3`, `1,3`, etc)
+    pub cpuset: Option<String>,
+
+    /// Real-time CPU period in microseconds.
+    pub cpu_rt_period: Option<i64>,
+
+    /// Real-time CPU runtime in microseconds (must be <= `cpu_rt_period`).
+    pub cpu_rt_runtime: Option<i64>,
+
+    /// CPU shares (relative weight vs other containers; default 1024)
+    pub cpu_shares: Option<i64>,
+
+    /// NIS domain name to use for the container.
+    pub domainname: Option<String>,
 
     /// Environment variables
     #[serde(skip_serializing_if = "Environment::is_empty")]
     pub environment: Environment,
 
+    /// Hostname to use for the container, as a valid RFC 1123 hostname
+    pub hostname: Option<String>,
+
+    /// Run an init process inside the container. `None` defers to the daemon
+    /// default, `Some(_)` overrides it.
+    pub init: Option<bool>,
+
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
 
+    /// Memory limit in bytes
+    pub mem_limit: Option<i64>,
+
+    /// Memory reservation in bytes
+    pub mem_reservation: Option<i64>,
+
+    /// CPU quota in nanoseconds-of-CPU-per-second (1 CPU = 1_000_000_000),
+    /// Compose's fractional `cpus` is stored here after the `* 1e9` conversion
+    pub nano_cpus: Option<i64>,
+
+    /// Run container with extended privileges.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub privileged: bool,
+
+    /// Mount container's root filesystem as read-only.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+
+    /// Allocate a pseudo-TTY for the container
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
+
     /// Restart policy for the container
     pub restart_policy: RestartPolicy,
+
+    /// Runtime to use with this container, such as `runc` or `nvidia`
+    pub runtime: Option<String>,
+
+    /// Size of `/dev/shm` in bytes
+    pub shm_size: Option<i64>,
+
+    /// Time in seconds the engine waits for a stopping container before
+    /// killing it
+    pub stop_grace_period: Option<i64>,
+
+    /// Signal sent to stop the container
+    pub stop_signal: Option<String>,
+
+    /// User the container runs commands as, format `<name|uid>[:<group|gid>]`
+    pub user: Option<String>,
+
+    /// User namespace mode, only `host` is supported
+    pub userns_mode: Option<String>,
+
+    /// UTS namespace mode (`host` or empty)
+    pub uts: Option<String>,
+
+    /// Working directory for commands run inside the container
+    pub working_dir: Option<String>,
+
+    /// Tune the host's OOM-killer score adjustment for the container
+    /// process (-1000..=1000)
+    pub oom_score_adj: Option<i64>,
+
+    /// Maximum number of process IDs allowed in the container
+    pub pids_limit: Option<i64>,
 
     /// Network endpoint configurations, ordered by connection priority.
     ///
@@ -792,10 +1003,35 @@ pub struct ContainerConfig {
 /// comparison is stable across target-state reorderings.
 impl PartialEq for ContainerConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.command == other.command
+        self.cgroup == other.cgroup
+            && self.cgroup_parent == other.cgroup_parent
+            && self.command == other.command
+            && self.cpu_rt_period == other.cpu_rt_period
+            && self.cpu_rt_runtime == other.cpu_rt_runtime
+            && self.cpuset == other.cpuset
+            && self.cpu_shares == other.cpu_shares
+            && self.domainname == other.domainname
             && self.environment == other.environment
+            && self.hostname == other.hostname
+            && self.init == other.init
             && self.labels == other.labels
+            && self.mem_limit == other.mem_limit
+            && self.mem_reservation == other.mem_reservation
+            && self.nano_cpus == other.nano_cpus
+            && self.oom_score_adj == other.oom_score_adj
+            && self.pids_limit == other.pids_limit
+            && self.privileged == other.privileged
+            && self.read_only == other.read_only
             && self.restart_policy == other.restart_policy
+            && self.runtime == other.runtime
+            && self.shm_size == other.shm_size
+            && self.stop_grace_period == other.stop_grace_period
+            && self.stop_signal == other.stop_signal
+            && self.tty == other.tty
+            && self.user == other.user
+            && self.userns_mode == other.userns_mode
+            && self.uts == other.uts
+            && self.working_dir == other.working_dir
             && self.network_mode == other.network_mode
             && self.networks.len() == other.networks.len()
             && self
@@ -809,10 +1045,35 @@ impl PartialEq for ContainerConfig {
 impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
         let ContainerConfig {
+            cgroup,
+            cgroup_parent,
             command: cmd,
+            cpuset,
+            cpu_rt_period,
+            cpu_rt_runtime,
+            cpu_shares,
+            domainname,
             environment,
+            hostname,
+            init,
             labels,
+            mem_limit,
+            mem_reservation,
+            nano_cpus,
+            oom_score_adj,
+            pids_limit,
+            privileged,
+            read_only,
             restart_policy,
+            runtime,
+            shm_size,
+            stop_grace_period,
+            stop_signal,
+            tty,
+            user,
+            userns_mode,
+            uts,
+            working_dir,
             networks,
             network_mode,
             volumes,
@@ -876,19 +1137,46 @@ impl From<ContainerConfig> for ContainerCreateBody {
             Some(volumes.into_iter().map(Into::into).collect())
         };
 
+        let cgroupns_mode = cgroup.map(Into::into);
+
         let host_config = bollard::config::HostConfig {
-            network_mode: host_network_mode,
-            restart_policy: Some(restart_policy),
+            cgroup_parent,
+            cgroupns_mode,
+            cpuset_cpus: cpuset,
+            cpu_realtime_period: cpu_rt_period,
+            cpu_realtime_runtime: cpu_rt_runtime,
+            cpu_shares,
+            init,
+            memory: mem_limit,
+            memory_reservation: mem_reservation,
             mounts: engine_mounts,
+            nano_cpus,
+            network_mode: host_network_mode,
+            oom_score_adj,
+            pids_limit,
+            privileged: Some(privileged),
+            readonly_rootfs: Some(read_only),
+            restart_policy: Some(restart_policy),
+            runtime,
+            shm_size,
+            userns_mode,
+            uts_mode: uts,
             ..Default::default()
         };
 
         ContainerCreateBody {
             cmd,
+            domainname,
             env,
+            hostname,
             labels: Some(labels),
             networking_config,
             host_config: Some(host_config),
+            stop_signal,
+            stop_timeout: stop_grace_period,
+            tty: Some(tty),
+            user,
+            working_dir,
             ..Default::default()
         }
     }
@@ -983,6 +1271,271 @@ mod tests {
             }
             other => panic!("expected Mount::Other, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn inspect_reads_bool_host_flags() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                init: Some(true),
+                privileged: Some(true),
+                readonly_rootfs: Some(true),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                tty: Some(true),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.init, Some(true));
+        assert!(c.config.privileged);
+        assert!(c.config.read_only);
+        assert!(c.config.tty);
+    }
+
+    #[test]
+    fn inspect_defaults_missing_bool_flags_to_false_and_init_to_none() {
+        let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
+        assert_eq!(c.config.init, None);
+        assert!(!c.config.privileged);
+        assert!(!c.config.read_only);
+        assert!(!c.config.tty);
+    }
+
+    #[test]
+    fn container_create_body_emits_bool_host_flags() {
+        let cfg = ContainerConfig {
+            init: Some(false),
+            privileged: true,
+            read_only: true,
+            tty: true,
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.tty, Some(true));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.init, Some(false));
+        assert_eq!(hc.privileged, Some(true));
+        assert_eq!(hc.readonly_rootfs, Some(true));
+    }
+
+    #[test]
+    fn container_create_body_preserves_init_none() {
+        let cfg = ContainerConfig::default();
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.tty, Some(false));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.init, None);
+        assert_eq!(hc.privileged, Some(false));
+        assert_eq!(hc.readonly_rootfs, Some(false));
+    }
+
+    #[test]
+    fn inspect_reads_string_fields() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cgroup_parent: Some("/custom".to_string()),
+                cgroupns_mode: Some(bollard::models::HostConfigCgroupnsModeEnum::HOST),
+                cpuset_cpus: Some("0-3".to_string()),
+                runtime: Some("runc".to_string()),
+                userns_mode: Some("host".to_string()),
+                uts_mode: Some("host".to_string()),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                hostname: Some("my-host".to_string()),
+                domainname: Some("example.com".to_string()),
+                user: Some("1000:1000".to_string()),
+                stop_signal: Some("SIGTERM".to_string()),
+                working_dir: Some("/app".to_string()),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cgroup, Some(Cgroup::Host));
+        assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
+        assert_eq!(c.config.runtime.as_deref(), Some("runc"));
+        assert_eq!(c.config.userns_mode.as_deref(), Some("host"));
+        assert_eq!(c.config.uts.as_deref(), Some("host"));
+        assert_eq!(c.config.hostname.as_deref(), Some("my-host"));
+        assert_eq!(c.config.domainname.as_deref(), Some("example.com"));
+        assert_eq!(c.config.user.as_deref(), Some("1000:1000"));
+        assert_eq!(c.config.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(c.config.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn container_create_body_emits_string_fields() {
+        let cfg = ContainerConfig {
+            cgroup: Some(Cgroup::Host),
+            cgroup_parent: Some("/custom".to_string()),
+            cpuset: Some("0-3".to_string()),
+            domainname: Some("example.com".to_string()),
+            hostname: Some("my-host".to_string()),
+            runtime: Some("runc".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            user: Some("1000:1000".to_string()),
+            userns_mode: Some("host".to_string()),
+            uts: Some("host".to_string()),
+            working_dir: Some("/app".to_string()),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.hostname.as_deref(), Some("my-host"));
+        assert_eq!(body.domainname.as_deref(), Some("example.com"));
+        assert_eq!(body.user.as_deref(), Some("1000:1000"));
+        assert_eq!(body.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(body.working_dir.as_deref(), Some("/app"));
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.cgroupns_mode,
+            Some(bollard::models::HostConfigCgroupnsModeEnum::HOST)
+        );
+        assert_eq!(hc.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(hc.cpuset_cpus.as_deref(), Some("0-3"));
+        assert_eq!(hc.runtime.as_deref(), Some("runc"));
+        assert_eq!(hc.userns_mode.as_deref(), Some("host"));
+        assert_eq!(hc.uts_mode.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn inspect_reads_number_host_fields() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cpu_realtime_period: Some(1_000_000),
+                cpu_realtime_runtime: Some(950_000),
+                cpu_shares: Some(2048),
+                memory: Some(1073741824),
+                memory_reservation: Some(536870912),
+                nano_cpus: Some(1_500_000_000),
+                oom_score_adj: Some(-500),
+                pids_limit: Some(100),
+                shm_size: Some(67108864),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                stop_timeout: Some(30),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cpu_rt_period, Some(1_000_000));
+        assert_eq!(c.config.cpu_rt_runtime, Some(950_000));
+        assert_eq!(c.config.cpu_shares, Some(2048));
+        assert_eq!(c.config.mem_limit, Some(1073741824));
+        assert_eq!(c.config.mem_reservation, Some(536870912));
+        assert_eq!(c.config.nano_cpus, Some(1_500_000_000));
+        assert_eq!(c.config.oom_score_adj, Some(-500));
+        assert_eq!(c.config.pids_limit, Some(100));
+        assert_eq!(c.config.shm_size, Some(67108864));
+        assert_eq!(c.config.stop_grace_period, Some(30));
+    }
+
+    #[test]
+    fn container_create_body_emits_number_host_fields() {
+        let cfg = ContainerConfig {
+            cpu_rt_period: Some(1_000_000),
+            cpu_rt_runtime: Some(950_000),
+            cpu_shares: Some(2048),
+            mem_limit: Some(1073741824),
+            mem_reservation: Some(536870912),
+            nano_cpus: Some(1_500_000_000),
+            oom_score_adj: Some(-500),
+            pids_limit: Some(100),
+            shm_size: Some(67108864),
+            stop_grace_period: Some(30),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(body.stop_timeout, Some(30));
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.cpu_realtime_period, Some(1_000_000));
+        assert_eq!(hc.cpu_realtime_runtime, Some(950_000));
+        assert_eq!(hc.cpu_shares, Some(2048));
+        assert_eq!(hc.memory, Some(1073741824));
+        assert_eq!(hc.memory_reservation, Some(536870912));
+        assert_eq!(hc.nano_cpus, Some(1_500_000_000));
+        assert_eq!(hc.oom_score_adj, Some(-500));
+        assert_eq!(hc.pids_limit, Some(100));
+        assert_eq!(hc.shm_size, Some(67108864));
+    }
+
+    #[test]
+    fn inspect_filters_defaults_to_none() {
+        // Engine reports `""` and `0` for fields the user didn't set;
+        // the inspect path collapses those sentinels to `None` so target
+        // round-trip is stable without LABEL_CONFIG_FIELDS tracking.
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cgroup_parent: Some(String::new()),
+                cpuset_cpus: Some(String::new()),
+                cpu_realtime_period: Some(0),
+                cpu_realtime_runtime: Some(0),
+                cpu_shares: Some(0),
+                memory: Some(0),
+                memory_reservation: Some(0),
+                nano_cpus: Some(0),
+                oom_score_adj: Some(0),
+                userns_mode: Some(String::new()),
+                uts_mode: Some(String::new()),
+                ..Default::default()
+            }),
+            config: Some(bollard::models::ContainerConfig {
+                domainname: Some(String::new()),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cgroup_parent, None);
+        assert_eq!(c.config.cpuset, None);
+        assert_eq!(c.config.cpu_rt_period, None);
+        assert_eq!(c.config.cpu_rt_runtime, None);
+        assert_eq!(c.config.cpu_shares, None);
+        assert_eq!(c.config.domainname, None);
+        assert_eq!(c.config.mem_limit, None);
+        assert_eq!(c.config.mem_reservation, None);
+        assert_eq!(c.config.nano_cpus, None);
+        assert_eq!(c.config.oom_score_adj, None);
+        assert_eq!(c.config.userns_mode, None);
+        assert_eq!(c.config.uts, None);
     }
 
     #[test]

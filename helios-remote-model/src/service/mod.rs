@@ -4,12 +4,14 @@ use serde::Deserialize;
 
 use crate::common_types::{Environment, ImageUri, Value};
 
+mod cgroup;
 mod command;
 mod network_mode;
 mod networks;
 mod restart_policy;
 mod volumes;
 
+pub use cgroup::*;
 pub use command::*;
 pub use network_mode::*;
 pub use networks::*;
@@ -38,19 +40,101 @@ pub struct Service {
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ServiceComposition {
     #[serde(default)]
-    pub restart: RestartPolicy,
+    pub cgroup: Option<Cgroup>,
+
+    #[serde(default)]
+    pub cgroup_parent: Option<String>,
 
     #[serde(default)]
     pub command: Option<Command>,
 
     #[serde(default)]
-    pub labels: Labels,
+    pub cpuset: Option<String>,
+
+    #[serde(default)]
+    pub cpu_rt_period: Option<i64>,
+
+    #[serde(default)]
+    pub cpu_rt_runtime: Option<i64>,
+
+    #[serde(default)]
+    pub cpu_shares: Option<i64>,
+
+    /// Fractional CPU count such as `1.5`, stored as nano_cpus on the
+    /// container config (1 cpu = 1_000_000_000 nano_cpus)
+    #[serde(default)]
+    pub cpus: Option<f64>,
+
+    #[serde(default)]
+    pub domainname: Option<String>,
 
     #[serde(default)]
     pub environment: Environment,
 
     #[serde(default)]
+    pub hostname: Option<String>,
+
+    /// Whether to run an init process inside the container. Modeled as
+    /// `Option<bool>` rather than `bool` to distinguish user-set from
+    /// daemon/Podman global default (`--init` for dockerd or `init=true`
+    /// for Podman containers.conf).
+    #[serde(default)]
+    pub init: Option<bool>,
+
+    #[serde(default)]
+    pub labels: Labels,
+
+    #[serde(default)]
+    pub mem_limit: Option<i64>,
+
+    #[serde(default)]
+    pub mem_reservation: Option<i64>,
+
+    #[serde(default)]
+    pub privileged: bool,
+
+    #[serde(default)]
+    pub read_only: bool,
+
+    #[serde(default)]
+    pub restart: RestartPolicy,
+
+    #[serde(default)]
+    pub runtime: Option<String>,
+
+    #[serde(default)]
+    pub shm_size: Option<i64>,
+
+    #[serde(default)]
+    pub stop_grace_period: Option<i64>,
+
+    #[serde(default)]
+    pub stop_signal: Option<String>,
+
+    #[serde(default)]
+    pub tty: bool,
+
+    #[serde(default)]
+    pub user: Option<String>,
+
+    #[serde(default)]
+    pub userns_mode: Option<String>,
+
+    /// UTS namespace mode (`host` or empty)
+    #[serde(default)]
+    pub uts: Option<String>,
+
+    #[serde(default)]
+    pub working_dir: Option<String>,
+
+    #[serde(default)]
     pub networks: NetworkingConfig,
+
+    #[serde(default)]
+    pub oom_score_adj: Option<i64>,
+
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
 
     #[serde(default)]
     pub network_mode: Option<NetworkMode>,
@@ -132,6 +216,124 @@ mod tests {
             svc.environment.get("RATIO"),
             Some(&Some(Value::Float(5.14)))
         );
+    }
+
+    #[test]
+    fn composition_bool_fields_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!comp.privileged);
+        assert!(!comp.read_only);
+        assert!(!comp.tty);
+        assert_eq!(comp.init, None);
+    }
+
+    #[test]
+    fn composition_bool_fields_parse_explicit_values() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "privileged": true,
+            "read_only": true,
+            "tty": true,
+            "init": true,
+        }))
+        .unwrap();
+        assert!(comp.privileged);
+        assert!(comp.read_only);
+        assert!(comp.tty);
+        assert_eq!(comp.init, Some(true));
+    }
+
+    #[test]
+    fn composition_string_fields_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.cgroup, None);
+        assert_eq!(comp.cgroup_parent, None);
+        assert_eq!(comp.cpuset, None);
+        assert_eq!(comp.domainname, None);
+        assert_eq!(comp.hostname, None);
+        assert_eq!(comp.runtime, None);
+        assert_eq!(comp.stop_signal, None);
+        assert_eq!(comp.user, None);
+        assert_eq!(comp.userns_mode, None);
+        assert_eq!(comp.uts, None);
+        assert_eq!(comp.working_dir, None);
+    }
+
+    #[test]
+    fn composition_string_fields_parse_explicit_values() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cgroup": "host",
+            "cgroup_parent": "/custom",
+            "cpuset": "0-3",
+            "domainname": "example.com",
+            "hostname": "my-host",
+            "runtime": "runc",
+            "stop_signal": "SIGTERM",
+            "user": "1000:1000",
+            "userns_mode": "host",
+            "uts": "host",
+            "working_dir": "/app",
+        }))
+        .unwrap();
+        assert_eq!(comp.cgroup, Some(Cgroup::Host));
+        assert_eq!(comp.cgroup_parent.as_deref(), Some("/custom"));
+        assert_eq!(comp.cpuset.as_deref(), Some("0-3"));
+        assert_eq!(comp.domainname.as_deref(), Some("example.com"));
+        assert_eq!(comp.hostname.as_deref(), Some("my-host"));
+        assert_eq!(comp.runtime.as_deref(), Some("runc"));
+        assert_eq!(comp.stop_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(comp.user.as_deref(), Some("1000:1000"));
+        assert_eq!(comp.userns_mode.as_deref(), Some("host"));
+        assert_eq!(comp.uts.as_deref(), Some("host"));
+        assert_eq!(comp.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn composition_number_fields_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.cpu_rt_period, None);
+        assert_eq!(comp.cpu_rt_runtime, None);
+        assert_eq!(comp.cpu_shares, None);
+        assert_eq!(comp.cpus, None);
+        assert_eq!(comp.mem_limit, None);
+        assert_eq!(comp.mem_reservation, None);
+        assert_eq!(comp.oom_score_adj, None);
+        assert_eq!(comp.pids_limit, None);
+        assert_eq!(comp.shm_size, None);
+        assert_eq!(comp.stop_grace_period, None);
+    }
+
+    #[test]
+    fn composition_number_fields_parse_explicit_values() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cpu_rt_period": 1000000,
+            "cpu_rt_runtime": 950000,
+            "cpu_shares": 2048,
+            "cpus": 1.5,
+            "mem_limit": 1073741824i64,
+            "mem_reservation": 536870912i64,
+            "oom_score_adj": -500,
+            "pids_limit": 100,
+            "shm_size": 67108864,
+            "stop_grace_period": 30,
+        }))
+        .unwrap();
+        assert_eq!(comp.cpu_rt_period, Some(1000000));
+        assert_eq!(comp.cpu_rt_runtime, Some(950000));
+        assert_eq!(comp.cpu_shares, Some(2048));
+        assert_eq!(comp.cpus, Some(1.5));
+        assert_eq!(comp.mem_limit, Some(1073741824));
+        assert_eq!(comp.mem_reservation, Some(536870912));
+        assert_eq!(comp.oom_score_adj, Some(-500));
+        assert_eq!(comp.pids_limit, Some(100));
+        assert_eq!(comp.shm_size, Some(67108864));
+        assert_eq!(comp.stop_grace_period, Some(30));
+    }
+
+    #[test]
+    fn composition_init_preserves_explicit_false() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"init": false})).unwrap();
+        assert_eq!(comp.init, Some(false));
     }
 
     #[test]
