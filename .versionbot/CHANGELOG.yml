@@ -1,4 +1,53 @@
 - commits:
+    - subject: Support numeric compose service fields
+      hash: 6e6f76b9911be6def20d43175eaeedf10c6f4a52
+      body: >
+        - Support cpu_shares, cpu_rt_period, cpu_rt_runtime, cpus,
+          oom_score_adj, pids_limit, mem_limit, mem_reservation,
+          shm_size, stop_grace_period numeric fields as Option<i64>
+        - mem_limit, shm_size, stop_grace_period are size/duration scalars,
+          but should be converted to i64 integer prior to getting sent to helios,
+          as Bollard only supports i64.
+        - cpus arrives as f64, but gets converted to i64 by multiplying by 1e9
+          as the Engine takes nanoseconds of CPU per second
+        - Handle fields with LABEL_CONFIG_FIELDS as they're set as Some(0)
+          when unset through target state. As an exception, pids_limit is set as null,
+          but is added to LABEL_CONFIG_FIELDS handling anyway for forward-compat.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Support String compose service fields
+      hash: 7a760adb3c0378a62bda65f6464010fe14df44ce
+      body: >
+        - Adds cgroup, cgroup_parent, cpuset, domainname, hostname, runtime,
+          stop_signal, user, userns_mode, uts, working_dir as Option<String>
+        - Add fields to LABEL_CONFIG_FIELDS mechanism as Engine sets String
+        defaults
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Support init, privileged, read_only, tty bool fields
+      hash: 041b21e3c0b2a55d941b84b8ec3c0509fa7b3a9b
+      body: |
+        - Don't support oom_kill_disable as it's cgroups v1 only.
+        - Don't support `attach` as it's a compose-only field as is
+          not applied to the Engine.
+        - Add init to LABEL_CONFIG_FIELD handling as the daemon /
+          Podman can set a global default. Other fields are empty if
+          not set.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+  version: 0.24.0
+  title: ""
+  date: 2026-05-12T20:32:20.921Z
+- commits:
     - subject: Fix issue with service migration happenning too early
       hash: 97e80d07a7ce7c04b566bc8cff57ea1a216be57b
       body: |
