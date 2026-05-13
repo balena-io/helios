@@ -51,7 +51,7 @@ macro_rules! impl_field_tracking {
 }
 
 impl_field_tracking!(oci::ContainerConfig {
-    cgroup,
+    cgroup_parent,
     command,
     hostname,
     init,
@@ -60,7 +60,9 @@ impl_field_tracking!(oci::ContainerConfig {
     shm_size,
     stop_grace_period,
     stop_signal,
+    oom_score_adj,
     user,
+    uts,
     working_dir,
 });
 
@@ -127,6 +129,17 @@ impl From<oci::ContainerConfig> for ServiceConfig {
                     net_config
                         .aliases
                         .retain(|alias| target_aliases.contains(alias));
+
+                    // The engine assigns a mac_address when one isn't provided.
+                    // The label marks whether the target set one; if absent,
+                    // drop whatever the engine reported so a round-trip
+                    // doesn't see the engine-assigned address as a config change.
+                    if labels
+                        .remove(&format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"))
+                        .is_none()
+                    {
+                        net_config.mac_address = None;
+                    }
 
                     (net_name, net_config)
                 })
@@ -248,6 +261,15 @@ impl ServiceConfig {
                     .to_string(),
             );
 
+            // mark whether the target set a mac_address so we can drop the
+            // engine-assigned one on read when the composition didn't ask for it
+            if net_config.mac_address.is_some() {
+                labels.insert(
+                    format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"),
+                    String::new(),
+                );
+            }
+
             let net_id = namespace.to_identifier(&net_name);
 
             // insert the current service name as an alias on the network
@@ -274,18 +296,18 @@ mod tests {
     fn preserves_explicit_config_fields_using_label_config_fields() {
         let original = oci::ContainerConfig {
             command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            cgroup: Some(oci::Cgroup::Host),
+            cgroup: oci::Cgroup::Host,
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
-            cpu_rt_period: Some(1_000_000),
-            cpu_rt_runtime: Some(950_000),
-            cpu_shares: Some(2048),
+            cpu_rt_period: 1_000_000,
+            cpu_rt_runtime: 950_000,
+            cpu_shares: 2048,
             domainname: Some("example.com".to_string()),
             hostname: Some("my-host".to_string()),
             init: Some(true),
-            mem_limit: Some(1073741824),
-            mem_reservation: Some(536870912),
-            nano_cpus: Some(1_500_000_000),
+            mem_limit: 1073741824,
+            mem_reservation: 536870912,
+            nano_cpus: 1_500_000_000,
             oom_score_adj: Some(-500),
             pids_limit: Some(100),
             runtime: Some("runc".to_string()),
@@ -335,7 +357,6 @@ mod tests {
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
-            cgroup: Some(oci::Cgroup::Host),
             hostname: Some("a1b2c3d4e5f6".to_string()),
             init: Some(true),
             pids_limit: Some(100),
@@ -350,7 +371,6 @@ mod tests {
         };
         let svc = ServiceConfig::from(inspected);
         assert_eq!(svc.command, None);
-        assert_eq!(svc.cgroup, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
         assert_eq!(svc.pids_limit, None);

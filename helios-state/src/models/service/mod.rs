@@ -1,6 +1,5 @@
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
@@ -125,30 +124,6 @@ impl From<Service> for ServiceTarget {
     }
 }
 
-/// Convert a fractional CPU count (compose `cpus`) to nano-CPUs (engine
-/// `nano_cpus`). Returns `None` and logs a warning when the value isn't a
-/// finite non-negative number, or when the converted value would overflow
-/// `i64`. Round to nearest to avoid drift on values like `0.3` whose binary
-/// f64 representation is slightly below the rational.
-fn cpus_to_nano_cpus(svc_id: u32, cpus: f64) -> Option<i64> {
-    if !cpus.is_finite() || cpus < 0.0 {
-        warn!(
-            svc_id,
-            cpus, "ignoring invalid `cpus` value (must be finite and non-negative)"
-        );
-        return None;
-    }
-    let nanos = (cpus * 1_000_000_000.0).round();
-    if nanos > i64::MAX as f64 {
-        warn!(
-            svc_id,
-            cpus, "ignoring `cpus` value that overflows i64 nano_cpus"
-        );
-        return None;
-    }
-    Some(nanos as i64)
-}
-
 impl From<RemoteServiceTarget> for ServiceTarget {
     fn from(service: RemoteServiceTarget) -> Self {
         let RemoteServiceTarget {
@@ -251,27 +226,35 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             image: image.into(),
             started: true,
             config: ServiceConfig(ContainerConfig {
-                cgroup: composition.cgroup.map(|c| match c {
-                    RemoteCgroup::Host => Cgroup::Host,
-                    RemoteCgroup::Private => Cgroup::Private,
-                }),
+                cgroup: composition
+                    .cgroup
+                    .map(|c| match c {
+                        RemoteCgroup::Host => Cgroup::Host,
+                        RemoteCgroup::Private => Cgroup::Private,
+                    })
+                    .unwrap_or_default(),
                 cgroup_parent: composition.cgroup_parent,
                 command,
                 cpuset: composition.cpuset,
-                cpu_rt_period: composition.cpu_rt_period,
-                cpu_rt_runtime: composition.cpu_rt_runtime,
-                cpu_shares: composition.cpu_shares,
+                cpu_rt_period: composition.cpu_rt_period.unwrap_or(0),
+                cpu_rt_runtime: composition.cpu_rt_runtime.unwrap_or(0),
+                cpu_shares: composition.cpu_shares.unwrap_or(0),
                 domainname: composition.domainname,
                 environment,
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,
-                mem_limit: composition.mem_limit,
-                mem_reservation: composition.mem_reservation,
-                // Compose ships fractional CPU; engine takes nanoseconds-of-CPU-per-second.
-                // Drop NaN/Inf/negative/overflow with a warning rather than producing a
-                // saturated i64 that the engine would silently accept.
-                nano_cpus: composition.cpus.and_then(|c| cpus_to_nano_cpus(id, c)),
+                mem_limit: composition.mem_limit.unwrap_or(0),
+                mem_reservation: composition.mem_reservation.unwrap_or(0),
+                // Compose ships fractional CPU; engine takes nano-CPUs. The
+                // value is validated at deserialization time, so a plain cast
+                // is safe here. Round to nearest to avoid drift on values like
+                // `0.3` whose binary f64 representation is slightly below the
+                // rational.
+                nano_cpus: composition
+                    .cpus
+                    .map(|c| (c * 1_000_000_000.0).round() as i64)
+                    .unwrap_or(0),
                 oom_score_adj: composition.oom_score_adj,
                 pids_limit: composition.pids_limit,
                 privileged: composition.privileged,
@@ -322,34 +305,5 @@ impl<N> From<LocalContainer<N>> for Service {
             started,
             config,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cpus_to_nano_cpus_rounds_to_nearest() {
-        // 0.3 has no exact f64 representation; truncation would yield
-        // 299_999_999, rounding gives the user-intended 300_000_000.
-        assert_eq!(cpus_to_nano_cpus(1, 0.3), Some(300_000_000));
-        assert_eq!(cpus_to_nano_cpus(1, 1.5), Some(1_500_000_000));
-        assert_eq!(cpus_to_nano_cpus(1, 2.0), Some(2_000_000_000));
-        assert_eq!(cpus_to_nano_cpus(1, 0.0), Some(0));
-    }
-
-    #[test]
-    fn cpus_to_nano_cpus_rejects_invalid_values() {
-        assert_eq!(cpus_to_nano_cpus(1, f64::NAN), None);
-        assert_eq!(cpus_to_nano_cpus(1, f64::INFINITY), None);
-        assert_eq!(cpus_to_nano_cpus(1, f64::NEG_INFINITY), None);
-        assert_eq!(cpus_to_nano_cpus(1, -0.5), None);
-    }
-
-    #[test]
-    fn cpus_to_nano_cpus_rejects_overflow() {
-        // 1e10 cpus * 1e9 ns/cpu = 1e19, which exceeds i64::MAX (~9.2e18).
-        assert_eq!(cpus_to_nano_cpus(1, 1e10), None);
     }
 }

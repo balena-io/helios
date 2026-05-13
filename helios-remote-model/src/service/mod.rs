@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::common_types::{Environment, ImageUri, Value};
 
@@ -60,9 +60,11 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub cpu_shares: Option<i64>,
 
-    /// Fractional CPU count such as `1.5`, stored as nano_cpus on the
-    /// container config (1 cpu = 1_000_000_000 nano_cpus)
-    #[serde(default)]
+    /// Fractional CPU count such as `1.5` (Compose `cpus`). Rejected at
+    /// deserialization time if non-finite, negative, or large enough to
+    /// overflow `i64` when converted to nano_cpus (`* 1_000_000_000`), since
+    /// the engine takes nano_cpus and would otherwise saturate silently.
+    #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
 
     #[serde(default)]
@@ -141,6 +143,30 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub volumes: VolumesConfig,
+}
+
+fn validate_cpus(cpus: f64) -> Result<f64, String> {
+    if !cpus.is_finite() || cpus < 0.0 {
+        return Err(format!(
+            "`cpus` must be a finite non-negative number, got {cpus}"
+        ));
+    }
+    // Engine takes nano_cpus (i64). Round to nearest to avoid drift on values
+    // like `0.3` whose binary f64 representation is slightly below the rational.
+    if (cpus * 1_000_000_000.0).round() > i64::MAX as f64 {
+        return Err(format!("`cpus` value {cpus} overflows i64 nano_cpus"));
+    }
+    Ok(cpus)
+}
+
+fn deserialize_cpus<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<f64>::deserialize(deserializer)?
+        .map(validate_cpus)
+        .transpose()
+        .map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]
@@ -327,6 +353,43 @@ mod tests {
         assert_eq!(comp.pids_limit, Some(100));
         assert_eq!(comp.shm_size, Some(67108864));
         assert_eq!(comp.stop_grace_period, Some(30));
+    }
+
+    #[test]
+    fn validate_cpus_accepts_finite_non_negative() {
+        assert_eq!(validate_cpus(0.0), Ok(0.0));
+        assert_eq!(validate_cpus(0.3), Ok(0.3));
+        assert_eq!(validate_cpus(1.5), Ok(1.5));
+        assert_eq!(validate_cpus(2.0), Ok(2.0));
+    }
+
+    #[test]
+    fn validate_cpus_rejects_non_finite_or_negative() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.5] {
+            let err = validate_cpus(bad).unwrap_err();
+            assert!(
+                err.contains("finite non-negative"),
+                "unexpected error for {bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_cpus_rejects_overflow() {
+        // 1e10 cpus * 1e9 ns/cpu = 1e19, which exceeds i64::MAX (~9.2e18).
+        let err = validate_cpus(1e10).unwrap_err();
+        assert!(err.contains("overflows i64 nano_cpus"));
+    }
+
+    #[test]
+    fn composition_cpus_rejects_invalid_on_deserialize() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({"cpus": -0.5}))
+            .unwrap_err();
+        assert!(err.to_string().contains("finite non-negative"));
+
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({"cpus": 1e10}))
+            .unwrap_err();
+        assert!(err.to_string().contains("overflows i64 nano_cpus"));
     }
 
     #[test]
