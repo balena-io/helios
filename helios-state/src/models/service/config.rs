@@ -51,7 +51,6 @@ macro_rules! impl_field_tracking {
 }
 
 impl_field_tracking!(oci::ContainerConfig {
-    cgroup,
     cgroup_parent,
     command,
     hostname,
@@ -297,18 +296,18 @@ mod tests {
     fn preserves_explicit_config_fields_using_label_config_fields() {
         let original = oci::ContainerConfig {
             command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            cgroup: Some(oci::Cgroup::Host),
+            cgroup: oci::Cgroup::Host,
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
-            cpu_rt_period: Some(1_000_000),
-            cpu_rt_runtime: Some(950_000),
-            cpu_shares: Some(2048),
+            cpu_rt_period: 1_000_000,
+            cpu_rt_runtime: 950_000,
+            cpu_shares: 2048,
             domainname: Some("example.com".to_string()),
             hostname: Some("my-host".to_string()),
             init: Some(true),
-            mem_limit: Some(1073741824),
-            mem_reservation: Some(536870912),
-            nano_cpus: Some(1_500_000_000),
+            mem_limit: 1073741824,
+            mem_reservation: 536870912,
+            nano_cpus: 1_500_000_000,
             oom_score_adj: Some(-500),
             pids_limit: Some(100),
             runtime: Some("runc".to_string()),
@@ -358,7 +357,6 @@ mod tests {
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
-            cgroup: Some(oci::Cgroup::Host),
             hostname: Some("a1b2c3d4e5f6".to_string()),
             init: Some(true),
             pids_limit: Some(100),
@@ -373,7 +371,6 @@ mod tests {
         };
         let svc = ServiceConfig::from(inspected);
         assert_eq!(svc.command, None);
-        assert_eq!(svc.cgroup, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
         assert_eq!(svc.pids_limit, None);

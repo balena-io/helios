@@ -251,27 +251,33 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             image: image.into(),
             started: true,
             config: ServiceConfig(ContainerConfig {
-                cgroup: composition.cgroup.map(|c| match c {
-                    RemoteCgroup::Host => Cgroup::Host,
-                    RemoteCgroup::Private => Cgroup::Private,
-                }),
+                cgroup: composition
+                    .cgroup
+                    .map(|c| match c {
+                        RemoteCgroup::Host => Cgroup::Host,
+                        RemoteCgroup::Private => Cgroup::Private,
+                    })
+                    .unwrap_or_default(),
                 cgroup_parent: composition.cgroup_parent,
                 command,
                 cpuset: composition.cpuset,
-                cpu_rt_period: composition.cpu_rt_period,
-                cpu_rt_runtime: composition.cpu_rt_runtime,
-                cpu_shares: composition.cpu_shares,
+                cpu_rt_period: composition.cpu_rt_period.unwrap_or(0),
+                cpu_rt_runtime: composition.cpu_rt_runtime.unwrap_or(0),
+                cpu_shares: composition.cpu_shares.unwrap_or(0),
                 domainname: composition.domainname,
                 environment,
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,
-                mem_limit: composition.mem_limit,
-                mem_reservation: composition.mem_reservation,
+                mem_limit: composition.mem_limit.unwrap_or(0),
+                mem_reservation: composition.mem_reservation.unwrap_or(0),
                 // Compose ships fractional CPU; engine takes nanoseconds-of-CPU-per-second.
                 // Drop NaN/Inf/negative/overflow with a warning rather than producing a
                 // saturated i64 that the engine would silently accept.
-                nano_cpus: composition.cpus.and_then(|c| cpus_to_nano_cpus(id, c)),
+                nano_cpus: composition
+                    .cpus
+                    .and_then(|c| cpus_to_nano_cpus(id, c))
+                    .unwrap_or(0),
                 oom_score_adj: composition.oom_score_adj,
                 pids_limit: composition.pids_limit,
                 privileged: composition.privileged,

@@ -252,7 +252,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let cgroup = host_config
             .as_mut()
             .and_then(|hc| hc.cgroupns_mode.take())
-            .and_then(|m| Cgroup::try_from(m).ok());
+            .map(Cgroup::from)
+            .unwrap_or_default();
         let cgroup_parent = host_config
             .as_mut()
             .and_then(|hc| hc.cgroup_parent.take())
@@ -264,15 +265,15 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let cpu_rt_period = host_config
             .as_mut()
             .and_then(|hc| hc.cpu_realtime_period.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let cpu_rt_runtime = host_config
             .as_mut()
             .and_then(|hc| hc.cpu_realtime_runtime.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let cpu_shares = host_config
             .as_mut()
             .and_then(|hc| hc.cpu_shares.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -319,15 +320,15 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let mem_limit = host_config
             .as_mut()
             .and_then(|hc| hc.memory.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let mem_reservation = host_config
             .as_mut()
             .and_then(|hc| hc.memory_reservation.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let nano_cpus = host_config
             .as_mut()
             .and_then(|hc| hc.nano_cpus.take())
-            .filter(|n| *n != 0);
+            .unwrap_or(0);
         let oom_score_adj = host_config
             .as_mut()
             .and_then(|hc| hc.oom_score_adj.take())
@@ -513,10 +514,11 @@ pub struct ContainerState {
 }
 
 /// Cgroup namespace mode for a container.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Cgroup {
     Host,
+    #[default]
     Private,
 }
 
@@ -529,18 +531,22 @@ impl From<Cgroup> for bollard::models::HostConfigCgroupnsModeEnum {
     }
 }
 
-impl TryFrom<bollard::models::HostConfigCgroupnsModeEnum> for Cgroup {
-    type Error = ();
-    fn try_from(
-        value: bollard::models::HostConfigCgroupnsModeEnum,
-    ) -> std::result::Result<Self, Self::Error> {
+impl From<bollard::models::HostConfigCgroupnsModeEnum> for Cgroup {
+    fn from(value: bollard::models::HostConfigCgroupnsModeEnum) -> Self {
         use bollard::models::HostConfigCgroupnsModeEnum::*;
         match value {
-            HOST => Ok(Cgroup::Host),
-            PRIVATE => Ok(Cgroup::Private),
-            EMPTY => Err(()),
+            HOST => Cgroup::Host,
+            PRIVATE | EMPTY => Cgroup::Private,
         }
     }
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
+}
+
+fn non_zero(n: i64) -> Option<i64> {
+    (n != 0).then_some(n)
 }
 
 /// Docker compose restart policy for a container.
@@ -888,7 +894,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
 #[serde(default)]
 pub struct ContainerConfig {
     /// Cgroup namespace mode (`host` or `private`)
-    pub cgroup: Option<Cgroup>,
+    pub cgroup: Cgroup,
 
     /// Path to cgroups under which the container's cgroup is created
     pub cgroup_parent: Option<String>,
@@ -900,13 +906,16 @@ pub struct ContainerConfig {
     pub cpuset: Option<String>,
 
     /// Real-time CPU period in microseconds.
-    pub cpu_rt_period: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cpu_rt_period: i64,
 
     /// Real-time CPU runtime in microseconds (must be <= `cpu_rt_period`).
-    pub cpu_rt_runtime: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cpu_rt_runtime: i64,
 
     /// CPU shares (relative weight vs other containers; default 1024)
-    pub cpu_shares: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cpu_shares: i64,
 
     /// NIS domain name to use for the container.
     pub domainname: Option<String>,
@@ -927,14 +936,17 @@ pub struct ContainerConfig {
     pub labels: HashMap<String, String>,
 
     /// Memory limit in bytes
-    pub mem_limit: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mem_limit: i64,
 
     /// Memory reservation in bytes
-    pub mem_reservation: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mem_reservation: i64,
 
     /// CPU quota in nanoseconds-of-CPU-per-second (1 CPU = 1_000_000_000),
     /// Compose's fractional `cpus` is stored here after the `* 1e9` conversion
-    pub nano_cpus: Option<i64>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub nano_cpus: i64,
 
     /// Run container with extended privileges.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1137,20 +1149,20 @@ impl From<ContainerConfig> for ContainerCreateBody {
             Some(volumes.into_iter().map(Into::into).collect())
         };
 
-        let cgroupns_mode = cgroup.map(Into::into);
+        let cgroupns_mode = Some(cgroup.into());
 
         let host_config = bollard::config::HostConfig {
             cgroup_parent,
             cgroupns_mode,
             cpuset_cpus: cpuset,
-            cpu_realtime_period: cpu_rt_period,
-            cpu_realtime_runtime: cpu_rt_runtime,
-            cpu_shares,
+            cpu_realtime_period: non_zero(cpu_rt_period),
+            cpu_realtime_runtime: non_zero(cpu_rt_runtime),
+            cpu_shares: non_zero(cpu_shares),
             init,
-            memory: mem_limit,
-            memory_reservation: mem_reservation,
+            memory: non_zero(mem_limit),
+            memory_reservation: non_zero(mem_reservation),
             mounts: engine_mounts,
-            nano_cpus,
+            nano_cpus: non_zero(nano_cpus),
             network_mode: host_network_mode,
             oom_score_adj,
             pids_limit,
@@ -1371,7 +1383,7 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.config.cgroup, Some(Cgroup::Host));
+        assert_eq!(c.config.cgroup, Cgroup::Host);
         assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
         assert_eq!(c.config.runtime.as_deref(), Some("runc"));
@@ -1387,7 +1399,7 @@ mod tests {
     #[test]
     fn container_create_body_emits_string_fields() {
         let cfg = ContainerConfig {
-            cgroup: Some(Cgroup::Host),
+            cgroup: Cgroup::Host,
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             domainname: Some("example.com".to_string()),
@@ -1448,12 +1460,12 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.config.cpu_rt_period, Some(1_000_000));
-        assert_eq!(c.config.cpu_rt_runtime, Some(950_000));
-        assert_eq!(c.config.cpu_shares, Some(2048));
-        assert_eq!(c.config.mem_limit, Some(1073741824));
-        assert_eq!(c.config.mem_reservation, Some(536870912));
-        assert_eq!(c.config.nano_cpus, Some(1_500_000_000));
+        assert_eq!(c.config.cpu_rt_period, 1_000_000);
+        assert_eq!(c.config.cpu_rt_runtime, 950_000);
+        assert_eq!(c.config.cpu_shares, 2048);
+        assert_eq!(c.config.mem_limit, 1073741824);
+        assert_eq!(c.config.mem_reservation, 536870912);
+        assert_eq!(c.config.nano_cpus, 1_500_000_000);
         assert_eq!(c.config.oom_score_adj, Some(-500));
         assert_eq!(c.config.pids_limit, Some(100));
         assert_eq!(c.config.shm_size, Some(67108864));
@@ -1463,12 +1475,12 @@ mod tests {
     #[test]
     fn container_create_body_emits_number_host_fields() {
         let cfg = ContainerConfig {
-            cpu_rt_period: Some(1_000_000),
-            cpu_rt_runtime: Some(950_000),
-            cpu_shares: Some(2048),
-            mem_limit: Some(1073741824),
-            mem_reservation: Some(536870912),
-            nano_cpus: Some(1_500_000_000),
+            cpu_rt_period: 1_000_000,
+            cpu_rt_runtime: 950_000,
+            cpu_shares: 2048,
+            mem_limit: 1073741824,
+            mem_reservation: 536870912,
+            nano_cpus: 1_500_000_000,
             oom_score_adj: Some(-500),
             pids_limit: Some(100),
             shm_size: Some(67108864),
@@ -1490,9 +1502,10 @@ mod tests {
     }
 
     #[test]
-    fn inspect_filters_defaults_to_none() {
-        // Engine reports `""` and `0` for fields the user didn't set;
-        // the inspect path collapses those sentinels to `None` so target
+    fn inspect_collapses_default_sentinels() {
+        // Engine reports `""` and `0` for fields the user didn't set; the
+        // inspect path collapses those sentinels to the field's default
+        // (`None` for string options, `0` for numeric fields) so target
         // round-trip is stable without LABEL_CONFIG_FIELDS tracking.
         let resp = ContainerInspectResponse {
             id: Some("cid".to_string()),
@@ -1526,13 +1539,13 @@ mod tests {
         let c: LocalContainer = resp.try_into().unwrap();
         assert_eq!(c.config.cgroup_parent, None);
         assert_eq!(c.config.cpuset, None);
-        assert_eq!(c.config.cpu_rt_period, None);
-        assert_eq!(c.config.cpu_rt_runtime, None);
-        assert_eq!(c.config.cpu_shares, None);
+        assert_eq!(c.config.cpu_rt_period, 0);
+        assert_eq!(c.config.cpu_rt_runtime, 0);
+        assert_eq!(c.config.cpu_shares, 0);
         assert_eq!(c.config.domainname, None);
-        assert_eq!(c.config.mem_limit, None);
-        assert_eq!(c.config.mem_reservation, None);
-        assert_eq!(c.config.nano_cpus, None);
+        assert_eq!(c.config.mem_limit, 0);
+        assert_eq!(c.config.mem_reservation, 0);
+        assert_eq!(c.config.nano_cpus, 0);
         assert_eq!(c.config.oom_score_adj, None);
         assert_eq!(c.config.userns_mode, None);
         assert_eq!(c.config.uts, None);
