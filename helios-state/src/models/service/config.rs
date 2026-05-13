@@ -131,6 +131,17 @@ impl From<oci::ContainerConfig> for ServiceConfig {
                         .aliases
                         .retain(|alias| target_aliases.contains(alias));
 
+                    // The engine assigns a mac_address when one isn't provided.
+                    // The label marks whether the target set one; if absent,
+                    // drop whatever the engine reported so a round-trip
+                    // doesn't see the engine-assigned address as a config change.
+                    if labels
+                        .remove(&format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"))
+                        .is_none()
+                    {
+                        net_config.mac_address = None;
+                    }
+
                     (net_name, net_config)
                 })
                 .collect();
@@ -250,6 +261,15 @@ impl ServiceConfig {
                     .collect::<json::Value>()
                     .to_string(),
             );
+
+            // mark whether the target set a mac_address so we can drop the
+            // engine-assigned one on read when the composition didn't ask for it
+            if net_config.mac_address.is_some() {
+                labels.insert(
+                    format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"),
+                    String::new(),
+                );
+            }
 
             let net_id = namespace.to_identifier(&net_name);
 
