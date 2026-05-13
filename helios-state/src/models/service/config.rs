@@ -52,6 +52,7 @@ macro_rules! impl_field_tracking {
 
 impl_field_tracking!(oci::ContainerConfig {
     cgroup,
+    cgroup_parent,
     command,
     hostname,
     init,
@@ -60,7 +61,9 @@ impl_field_tracking!(oci::ContainerConfig {
     shm_size,
     stop_grace_period,
     stop_signal,
+    oom_score_adj,
     user,
+    uts,
     working_dir,
 });
 
