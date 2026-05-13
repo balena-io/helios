@@ -1,4 +1,60 @@
 - commits:
+    - subject: Validate cpus field on helios-remote-model
+      hash: dbe4961165ddd1a9547aae872096c89c8553e1db
+      body: |
+        An invalid cpus would default to 0 (no limit), which would only be
+        caught by a user if they see the warning logs or when they observe their
+        containers using more CPU than expected.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove some Option properties in container config
+      hash: 868d8997ea0dc42b4e249faeb3a11970c0997d73
+      body: |
+        For those values that have 0 as the default, as well as cgroup that has
+        `private` as the default, this removes the use of Option.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Write a label for service networks.mac_address
+      hash: 1bf218d4c9be72694d92f9819e8642d6b618c453
+      body: |
+        The address is set by the engine if not defined, add a label to know if
+        the value was set for comparing.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add missing field tracking
+      hash: 400ae9852b166a1b5432cc26be6b6bfab9f30ad8
+      body: |
+        Podman sets values for `cgroup_parent`, `oom_score_adj` and `uts`. This
+        adds them to the tracked list
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read the full container configuration after service start
+      hash: 1492ac1369f7e63d1f89c1a0c2abb5695ff75f44
+      body: |
+        Some properties are set by the engine after the service starts (e.g.
+        container mac address) so we won't know if the configuration matches
+        until the container has started.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.24.1
+  title: ""
+  date: 2026-05-13T19:44:32.841Z
+- commits:
     - subject: Support numeric compose service fields
       hash: 6e6f76b9911be6def20d43175eaeedf10c6f4a52
       body: >
