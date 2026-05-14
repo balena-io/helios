@@ -1,4 +1,32 @@
 - commits:
+    - subject: Add additional poll tests for critical paths
+      hash: 48d786dd58d7db7c28b0126a0b67d061830d688d
+      body: |
+        Check that request information is propagated to the seek request and
+        that poll request with a `reemit: true` results in a seek request even
+        if the return from the API is a 304
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fix poll loop after the 24-hour timer is triggered
+      hash: 47cebf88b8abc8587cc846d119e9c0fcd2649515
+      body: |
+        The timer was not being re-set after a trigger, causing the loop to
+        always enter the same branch in the select after that event, causing a
+        poll/cancel/poll/cancel loop.
+
+        This also adds a regression test for the issue.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.24.2
+  title: ""
+  date: 2026-05-14T23:57:36.181Z
+- commits:
     - subject: Validate cpus field on helios-remote-model
       hash: dbe4961165ddd1a9547aae872096c89c8553e1db
       body: |
