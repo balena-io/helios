@@ -375,4 +375,160 @@ mod tests {
             _ = observer => {}
         }
     }
+
+    /// An API-triggered poll must carry the caller's `UpdateOpts` through to the
+    /// resulting `SeekRequest`. The local API relies on this contract for force/
+    /// cancel flags; a refactor that drops `update_req.opts` would silently break
+    /// it without any other test catching it.
+    #[tokio::test]
+    async fn api_request_propagates_opts_to_seek() {
+        let uuid = Uuid::from("testdevice");
+
+        let body = json!({
+            uuid.to_string(): {
+                "name": "test-device",
+                "apps": {}
+            }
+        })
+        .to_string();
+
+        let mut server = Server::new_async().await;
+        let path = format!("/device/v3/{uuid}/state");
+        let _mock = server
+            .mock("GET", path.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .expect_at_least(2)
+            .create_async()
+            .await;
+
+        let remote = test_remote_config(&server.url());
+        let (poll_tx, poll_rx) = watch::channel(PollRequest::default());
+        let (seek_tx, mut seek_rx) = watch::channel(SeekRequest::default());
+
+        let observer = async {
+            // Initial poll completes from the network.
+            expect_seek_request(&mut seek_rx, "initial").await;
+
+            // Drive an API-triggered poll with non-default opts.
+            poll_tx
+                .send(PollRequest {
+                    opts: UpdateOpts {
+                        force: true,
+                        cancel: true,
+                    },
+                    reemit: false,
+                })
+                .expect("poll channel closed");
+
+            // The new poll must produce a seek update carrying the supplied opts.
+            expect_seek_request(&mut seek_rx, "api-triggered").await;
+
+            let seek = seek_rx.borrow();
+            assert!(seek.opts.force, "force flag must propagate to SeekRequest");
+            assert!(
+                seek.opts.cancel,
+                "cancel flag must propagate to SeekRequest"
+            );
+        };
+
+        tokio::select! {
+            _ = start_poll_with_reemit(
+                uuid.clone(),
+                remote,
+                poll_rx,
+                seek_tx,
+                Duration::from_secs(3600),
+            ) => {
+                unreachable!("start_poll_with_reemit should not return on its own");
+            }
+            _ = observer => {}
+        }
+    }
+
+    /// A `PollRequest` with `reemit: true` must produce a seek update even when
+    /// the server returns 304 Not Modified. This is the contract that lets the
+    /// API replay an aborted apply — without it, subsequent polls all see 304
+    /// and the target can never be re-delivered to the seek loop.
+    #[tokio::test]
+    async fn reemit_true_emits_target_on_304() {
+        let uuid = Uuid::from("testdevice");
+
+        let body = json!({
+            uuid.to_string(): {
+                "name": "test-device",
+                "apps": {}
+            }
+        })
+        .to_string();
+
+        let mut server = Server::new_async().await;
+        let path = format!("/device/v3/{uuid}/state");
+
+        // First request: 200 with ETag — populates the in-memory cache and etag.
+        let _mock_200 = server
+            .mock("GET", path.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("etag", "\"v1\"")
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Subsequent requests send If-None-Match and receive 304.
+        let _mock_304 = server
+            .mock("GET", path.as_str())
+            .match_header("if-none-match", "\"v1\"")
+            .with_status(304)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let remote = test_remote_config(&server.url());
+        let (poll_tx, poll_rx) = watch::channel(PollRequest::default());
+        let (seek_tx, mut seek_rx) = watch::channel(SeekRequest::default());
+
+        let observer = async {
+            // Initial 200 → seek update with the target.
+            expect_seek_request(&mut seek_rx, "initial").await;
+
+            // API request with reemit=true; server will respond 304.
+            poll_tx
+                .send(PollRequest {
+                    opts: UpdateOpts::default(),
+                    reemit: true,
+                })
+                .expect("poll channel closed");
+
+            // Without reemit, the 304 would suppress the seek update; with reemit
+            // the cached target must be re-delivered.
+            expect_seek_request(&mut seek_rx, "reemit-on-304").await;
+
+            let seek = seek_rx.borrow();
+            match &seek.target {
+                TargetState::Remote { target, .. } => {
+                    assert!(
+                        target.is_some(),
+                        "reemit on 304 must re-deliver the cached target"
+                    );
+                }
+                _ => panic!("expected Remote target state"),
+            }
+        };
+
+        tokio::select! {
+            _ = start_poll_with_reemit(
+                uuid.clone(),
+                remote,
+                poll_rx,
+                seek_tx,
+                Duration::from_secs(3600),
+            ) => {
+                unreachable!("start_poll_with_reemit should not return on its own");
+            }
+            _ = observer => {}
+        }
+    }
 }
