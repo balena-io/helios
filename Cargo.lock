@@ -1023,6 +1023,7 @@ dependencies = [
  "helios-state",
  "helios-store",
  "helios-util",
+ "mockito",
  "rand 0.10.1",
  "reqwest",
  "serde",

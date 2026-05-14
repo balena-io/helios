@@ -109,8 +109,18 @@ const REEMIT_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 pub async fn start_poll(
     uuid: Uuid,
     remote: RemoteConfig,
+    poll_rx: Receiver<PollRequest>,
+    seek_tx: Sender<SeekRequest>,
+) {
+    start_poll_with_reemit(uuid, remote, poll_rx, seek_tx, REEMIT_TIMEOUT).await
+}
+
+async fn start_poll_with_reemit(
+    uuid: Uuid,
+    remote: RemoteConfig,
     mut poll_rx: Receiver<PollRequest>,
     seek_tx: Sender<SeekRequest>,
+    reemit_timeout: Duration,
 ) {
     info!("starting");
 
@@ -121,7 +131,7 @@ pub async fn start_poll(
     let mut poll_future: Pin<Box<dyn Future<Output = PollResult>>>;
     let mut interrupt = Interrupt::new();
 
-    let mut daily_reemit_poll = Instant::now() + REEMIT_TIMEOUT;
+    let mut daily_reemit_poll = Instant::now() + reemit_timeout;
 
     // Use the client cached target if any as the result of the first poll
     if let Some(target_state) = initial_target {
@@ -157,6 +167,8 @@ pub async fn start_poll(
             // Wake up every 24 hours and re-emit the target state to re-try expired
             // abort state
             _ = tokio::time::sleep_until(daily_reemit_poll) => {
+                // re-set the timer to avoid busy-waiting after emit
+                daily_reemit_poll = Instant::now() + reemit_timeout;
                 PollAction::Poll(PollRequest {
                     opts: UpdateOpts::default(),
                     reemit: true,
@@ -226,7 +238,7 @@ pub async fn start_poll(
                 // If there is a new target
                 if let Some(target_state) = target {
                     // re-set the daily poll timer
-                    daily_reemit_poll = Instant::now() + REEMIT_TIMEOUT;
+                    daily_reemit_poll = Instant::now() + reemit_timeout;
 
                     // put the poll back on the channel
                     match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
@@ -256,6 +268,111 @@ pub async fn start_poll(
                     };
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::types::ApiKey;
+    use mockito::Server;
+    use serde_json::json;
+    use std::str::FromStr;
+    use tokio::sync::watch;
+
+    fn test_remote_config(server_url: &str) -> RemoteConfig {
+        RemoteConfig {
+            api_endpoint: Uri::from_str(server_url).unwrap(),
+            api_key: ApiKey::from("test-token".to_string()),
+            request: RequestConfig {
+                timeout: Duration::from_secs(5),
+                // Long so the regular poll branch does not fire during the test
+                poll_interval: Duration::from_secs(10),
+                // Zero so back-to-back polls under a paused clock are not blocked
+                // by the rate-limit `sleep_until`.
+                poll_min_interval: Duration::from_millis(0),
+                poll_max_jitter: Duration::from_millis(0),
+            },
+        }
+    }
+
+    /// Wait for a seek update bounded by a real OS-thread timeout
+    /// (immune to the paused clock). Panics on hang.
+    async fn expect_seek_request(rx: &mut watch::Receiver<SeekRequest>, label: &str) {
+        let kill = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(1000));
+        });
+        tokio::select! {
+            res = rx.changed() => {
+                res.expect("seek channel closed");
+                let _ = rx.borrow_and_update();
+            }
+            _ = kill => panic!("timed out waiting for seek update ({label})"),
+        }
+    }
+
+    /// Regression test: when the daily reemit timer fires, it must be re-armed.
+    /// Otherwise its `sleep_until` deadline stays in the past and the select
+    /// arm fires on every loop iteration, cancelling each new poll before it
+    /// can complete — a busy cancellation loop where the seek channel never
+    /// receives another target after the initial one.
+    ///
+    /// Runs under `start_paused = true` so the reemit interval is driven by
+    /// explicit `tokio::time::advance` calls rather than wall-clock waits.
+    /// A real-thread (`spawn_blocking`) kill-switch wraps each wait so the
+    /// test fails fast — rather than hanging — when the loop is busy-cancelling.
+    #[tokio::test(start_paused = true)]
+    async fn daily_reemit_does_not_busy_cancel() {
+        let uuid = Uuid::from("testdevice");
+
+        let body = json!({
+            uuid.to_string(): {
+                "name": "test-device",
+                "apps": {}
+            }
+        })
+        .to_string();
+
+        let mut server = Server::new_async().await;
+        let path = format!("/device/v3/{uuid}/state");
+        let _mock = server
+            .mock("GET", path.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let remote = test_remote_config(&server.url());
+        let (_poll_tx, poll_rx) = watch::channel(PollRequest::default());
+        let (seek_tx, mut seek_rx) = watch::channel(SeekRequest::default());
+
+        let reemit_timeout = Duration::from_millis(100);
+
+        // The observer drives virtual time between expected updates. It runs
+        // alongside the poll loop in a select! so both share the test task;
+        // each `.await` here lets the loop's branch be polled and progress.
+        let observer = async {
+            // 1. Initial poll — HTTP completes in real time, no advance needed.
+            expect_seek_request(&mut seek_rx, "initial").await;
+
+            // 2-3. Each reemit requires advancing virtual time past the timer.
+            //      Under the bug, the reemit deadline is never re-armed and
+            //      the loop busy-cancels every poll without ever triggering seek,
+            //      the kill-switch trips here.
+            for n in 2..=3 {
+                tokio::time::advance(reemit_timeout + Duration::from_millis(10)).await;
+                expect_seek_request(&mut seek_rx, &format!("reemit #{n}")).await;
+            }
+        };
+
+        tokio::select! {
+            _ = start_poll_with_reemit(uuid.clone(), remote, poll_rx, seek_tx, reemit_timeout) => {
+                unreachable!("start_poll_with_reemit should not return on its own");
+            }
+            _ = observer => {}
         }
     }
 }
