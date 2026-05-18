@@ -1,4 +1,93 @@
 - commits:
+    - subject: Add /tmp/balena bind mount to services
+      hash: 4168889e380d3040287638282ed718284446780e
+      body: |
+        This mounts /tmp/balena on the container to the app directory on the
+        host runtime dir. Note that, unlike the supervisor, this uses the same
+        mount point for all services.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor tasks for readability
+      hash: 8ea4224dd7bebbbdff8fd35cf8959f3d30226aa9
+      body: |
+        Extracts repeated code into functions. Re-orders code in tasks
+        definitions to optimize readability.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Implement app locking via update locks
+      hash: 25ffd3c12c1ac6fb9fc10b945586cc24b2b97609
+      body: |
+        This adds two tasks for handling taking and releasing locks. These
+        operations will be added to the plan before any service requires
+        stopping. Services that only migrate or new services starting also wait
+        for locks in this case to make sure the device is not left running a
+        combination of old and new services.
+
+        Locking state is given by two new App properties: `locked` tells the
+        planner the state of app locking and allows to ensure that the plan
+        doesn't finish until the app is unlocked. The `lockfiles` property keeps
+        track of held locks by the app and can be queried via the API.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Create helios-util::locking module
+      hash: 827041a2ffb76319c858e5cf71710ef8cdf18b30
+      body: |
+        The module uses both file existence and flock to check for lock
+        ownership.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Move HostRuntimeDir to helios-util::types
+      hash: 68bb8ffec922c8a36dc3f20ae1c4d358d1c2a14d
+      body: |
+        The newtype will also be used to determine the location for update locks
+        and thus is no longer exclusive to the balenahup feature. Moving it to
+        helios-util makes it available to the balenahup and state crates.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Bind mount handling improvements
+      hash: 7eb4a77c76a1a1e8592e111dc935d4efb7193498
+      body: >
+        - Add `create_host_path` option to bind mounts. The option was missing
+          from the initial implementation and it is needed for update locks.
+        - Make service volumes BindPropagation default to `private`, this is
+          already the default used by the engine and adding it prevents apply loops
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read bind mounts from container host config
+      hash: 315edd58be171c52eaf20184ad148c8f61a6613a
+      body: |
+        Previously we were reading only mounts from the host config into the
+        service volumes property, legacy supervisor created bind mounts can show
+        up as part of `HostConfig.Binds`. This would not matter except we want
+        to get the location where `/tmp/balena` is mounted for legacy services
+        so we can check locks before replacing them
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.0
+  title: ""
+  date: 2026-05-18T19:27:40.839Z
+- commits:
     - subject: Add additional poll tests for critical paths
       hash: 48d786dd58d7db7c28b0126a0b67d061830d688d
       body: |
