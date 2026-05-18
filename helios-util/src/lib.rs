@@ -5,6 +5,7 @@ pub mod fs;
 pub mod http;
 pub mod interrupt;
 pub mod json;
+pub mod locking;
 pub mod logs;
 pub mod rand;
 pub mod request;

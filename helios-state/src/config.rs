@@ -2,15 +2,12 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::common_types::{OperatingSystem, Uuid};
+use crate::common_types::{HostRuntimeDir, OperatingSystem, Uuid};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, read};
 use crate::store::DocumentStore;
 use crate::util::dirs;
-
-#[cfg(feature = "balenahup")]
-pub use crate::balenahup::HostRuntimeDir;
 
 pub struct StateConfig {
     pub host_os: Option<OperatingSystem>,
@@ -21,7 +18,6 @@ pub struct Resources {
     pub(crate) docker: Docker,
     pub(crate) registry_auth_client: Option<RegistryAuth>,
     pub(crate) local_store: DocumentStore,
-    #[cfg(feature = "balenahup")]
     pub(crate) host_runtime_dir: HostRuntimeDir,
 }
 
@@ -54,15 +50,11 @@ pub async fn prepare(
         host_runtime_dir,
     } = host_config;
 
-    #[cfg(not(feature = "balenahup"))]
-    let _ = host_runtime_dir;
-
     let initial_state = read(&docker, &local_store, uuid, host_os).await?;
     let runtime = Resources {
         docker,
         registry_auth_client,
         local_store,
-        #[cfg(feature = "balenahup")]
         host_runtime_dir: HostRuntimeDir(host_runtime_dir),
     };
 

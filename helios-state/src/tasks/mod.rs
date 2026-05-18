@@ -1,9 +1,9 @@
 #[cfg(feature = "userapps")]
 mod app;
 #[cfg(feature = "userapps")]
-mod image;
+mod helpers;
 #[cfg(feature = "userapps")]
-mod utils;
+mod image;
 
 mod device;
 

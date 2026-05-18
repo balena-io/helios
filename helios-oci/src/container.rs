@@ -345,6 +345,18 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.uts_mode.take())
             .filter(|s| !s.is_empty());
 
+        // Legacy supervisor bind mounts are reported via `HostConfig.Binds` as
+        // `source:target[:options]` strings, not in `HostConfig.Mounts`. Parse
+        // those into `Mount::Bind` so the same container config covers both
+        // creation paths.
+        let binds = host_config
+            .as_mut()
+            .and_then(|hc| hc.binds.take())
+            .unwrap_or_default();
+        for spec in binds {
+            volumes.push(Mount::try_from_bind_spec(&spec)?);
+        }
+
         // Sort by target so the serialized form is stable regardless of the
         // order the engine reports the mounts in — Mahler compares state via
         // serialized JSON, so reordering must not trigger reconfiguration.
@@ -657,9 +669,10 @@ impl std::fmt::Display for NetworkMode {
 }
 
 /// Bind mount propagation mode. Mirrors the compose `bind.propagation` setting.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
+    #[default]
     Private,
     Rprivate,
     Shared,
@@ -730,7 +743,11 @@ pub enum Mount {
         source: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         read_only: bool,
-        propagation: Option<BindPropagation>,
+        #[serde(default)]
+        propagation: BindPropagation,
+        /// Create the host source path if it does not exist
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        create_host_path: bool,
     },
     Tmpfs {
         target: String,
@@ -758,6 +775,49 @@ impl Mount {
             Self::Tmpfs { target, .. } => target,
             Self::Other { target, .. } => target,
         }
+    }
+
+    /// Parse a Docker bind spec (`source:target[:options]`) into a `Mount::Bind`.
+    ///
+    /// Used to read the legacy `HostConfig.Binds` list back from the engine.
+    /// Unknown options (SELinux labels, `nocopy`, …) are ignored: the engine
+    /// applies them at create time and they don't round-trip through this model.
+    fn try_from_bind_spec(spec: &str) -> Result<Self> {
+        let mut parts = spec.splitn(3, ':');
+        let source = parts.next().unwrap_or_default();
+        let target = parts
+            .next()
+            .ok_or_else(|| Error::from(format!("bind spec '{spec}' is missing a target")))?;
+        if source.is_empty() || target.is_empty() {
+            return Err(format!("bind spec '{spec}' has an empty source or target").into());
+        }
+
+        let mut read_only = false;
+        let mut propagation = None;
+        if let Some(opts) = parts.next() {
+            for opt in opts.split(',').filter(|o| !o.is_empty()) {
+                match opt {
+                    "ro" => read_only = true,
+                    "rw" => read_only = false,
+                    "private" => propagation = Some(BindPropagation::Private),
+                    "rprivate" => propagation = Some(BindPropagation::Rprivate),
+                    "shared" => propagation = Some(BindPropagation::Shared),
+                    "rshared" => propagation = Some(BindPropagation::Rshared),
+                    "slave" => propagation = Some(BindPropagation::Slave),
+                    "rslave" => propagation = Some(BindPropagation::Rslave),
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(Mount::Bind {
+            target: target.to_owned(),
+            source: source.to_owned(),
+            read_only,
+            propagation: propagation.unwrap_or_default(),
+            // bind mounts will create the host path by default
+            create_host_path: true,
+        })
     }
 }
 
@@ -794,11 +854,18 @@ impl From<Mount> for bollard::models::Mount {
                 source,
                 read_only,
                 propagation,
+                create_host_path,
             } => {
-                let bind_options = propagation.map(|p| MountBindOptions {
-                    propagation: Some(p.into()),
-                    ..Default::default()
-                });
+                let bind_options = if propagation != BindPropagation::default() || create_host_path
+                {
+                    Some(MountBindOptions {
+                        propagation: Some(propagation.into()),
+                        create_mountpoint: create_host_path.then_some(true),
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                };
                 bollard::models::Mount {
                     typ: Some(MountType::BIND),
                     target: Some(target),
@@ -860,15 +927,23 @@ impl TryFrom<bollard::models::Mount> for Mount {
             }
             Some(MountType::BIND) => {
                 let source = value.source.unwrap_or_default();
-                let propagation = value
+                let (propagation, create_host_path) = value
                     .bind_options
-                    .and_then(|o| o.propagation)
-                    .and_then(|p| BindPropagation::try_from(p).ok());
+                    .map(|o| {
+                        (
+                            o.propagation
+                                .and_then(|p| BindPropagation::try_from(p).ok())
+                                .unwrap_or_default(),
+                            o.create_mountpoint.unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or((BindPropagation::default(), false));
                 Ok(Mount::Bind {
                     target,
                     source,
                     read_only,
                     propagation,
+                    create_host_path,
                 })
             }
             Some(MountType::TMPFS) => {
@@ -1234,13 +1309,25 @@ mod tests {
     }
 
     fn inspect_with_mounts(mounts: Vec<EngineMount>) -> ContainerInspectResponse {
+        inspect_with(Some(mounts), None)
+    }
+
+    fn inspect_with_binds(binds: Vec<&str>) -> ContainerInspectResponse {
+        inspect_with(None, Some(binds.into_iter().map(String::from).collect()))
+    }
+
+    fn inspect_with(
+        mounts: Option<Vec<EngineMount>>,
+        binds: Option<Vec<String>>,
+    ) -> ContainerInspectResponse {
         ContainerInspectResponse {
             id: Some("cid".to_string()),
             name: Some("/svc".to_string()),
             image: Some("img".to_string()),
             created: Some("2026-01-01T00:00:00Z".to_string()),
             host_config: Some(HostConfig {
-                mounts: Some(mounts),
+                mounts,
+                binds,
                 ..Default::default()
             }),
             state: Some(bollard::models::ContainerState {
@@ -1560,6 +1647,90 @@ mod tests {
             ..Default::default()
         };
         let result: Result<LocalContainer> = inspect_with_mounts(vec![no_target]).try_into();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inspect_reads_binds_as_bind_mounts() {
+        let c: LocalContainer = inspect_with_binds(vec![
+            "/host/a:/container/a",
+            "/host/b:/container/b:ro",
+            "/host/c:/container/c:ro,rshared",
+        ])
+        .try_into()
+        .unwrap();
+        assert_eq!(c.config.volumes.len(), 3);
+        assert_eq!(
+            c.config.volumes[0],
+            Mount::Bind {
+                target: "/container/a".to_string(),
+                source: "/host/a".to_string(),
+                read_only: false,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
+            }
+        );
+        assert_eq!(
+            c.config.volumes[1],
+            Mount::Bind {
+                target: "/container/b".to_string(),
+                source: "/host/b".to_string(),
+                read_only: true,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
+            }
+        );
+        assert_eq!(
+            c.config.volumes[2],
+            Mount::Bind {
+                target: "/container/c".to_string(),
+                source: "/host/c".to_string(),
+                read_only: true,
+                propagation: BindPropagation::Rshared,
+                create_host_path: true,
+            }
+        );
+    }
+
+    #[test]
+    fn inspect_merges_mounts_and_binds_sorted_by_target() {
+        let response = inspect_with(
+            Some(vec![vol_mount("/c", "vol-c")]),
+            Some(vec!["/host/a:/a".to_string(), "/host/b:/b:ro".to_string()]),
+        );
+        let c: LocalContainer = response.try_into().unwrap();
+        let targets: Vec<&str> = c.config.volumes.iter().map(|m| m.target()).collect();
+        assert_eq!(targets, vec!["/a", "/b", "/c"]);
+    }
+
+    #[test]
+    fn inspect_ignores_unknown_bind_options() {
+        // SELinux labels and other engine-applied options are not modeled and
+        // must not cause the parse to fail.
+        let c: LocalContainer = inspect_with_binds(vec!["/h:/t:z,Z,nocopy,rw"])
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            c.config.volumes[0],
+            Mount::Bind {
+                target: "/t".to_string(),
+                source: "/h".to_string(),
+                read_only: false,
+                propagation: BindPropagation::Private,
+                create_host_path: true,
+            }
+        );
+    }
+
+    #[test]
+    fn inspect_fails_on_malformed_bind_spec() {
+        let result: Result<LocalContainer> = inspect_with_binds(vec!["/just-a-source"]).try_into();
+        assert!(result.is_err());
+
+        let result: Result<LocalContainer> = inspect_with_binds(vec![":/target"]).try_into();
+        assert!(result.is_err());
+
+        let result: Result<LocalContainer> = inspect_with_binds(vec!["/source:"]).try_into();
         assert!(result.is_err());
     }
 }

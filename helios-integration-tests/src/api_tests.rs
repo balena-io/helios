@@ -232,7 +232,10 @@ async fn test_set_app_target() {
             .await
             .unwrap();
 
-    assert_eq!(app, json!({"id": 0, "name": "my-app", "releases": {}}));
+    assert_eq!(
+        app,
+        json!({"id": 0, "name": "my-app", "locked": false, "lockfiles": [], "releases": {}})
+    );
 
     delete_app_and_wait(&client, TEST_APP_UUID).await;
 }

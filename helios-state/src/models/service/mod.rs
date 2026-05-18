@@ -204,14 +204,18 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     target: b.target,
                     source: b.source,
                     read_only: b.read_only,
-                    propagation: b.propagation.map(|p| match p {
-                        RemoteBindPropagation::Private => BindPropagation::Private,
-                        RemoteBindPropagation::Rprivate => BindPropagation::Rprivate,
-                        RemoteBindPropagation::Shared => BindPropagation::Shared,
-                        RemoteBindPropagation::Rshared => BindPropagation::Rshared,
-                        RemoteBindPropagation::Slave => BindPropagation::Slave,
-                        RemoteBindPropagation::Rslave => BindPropagation::Rslave,
-                    }),
+                    propagation: b
+                        .propagation
+                        .map(|p| match p {
+                            RemoteBindPropagation::Private => BindPropagation::Private,
+                            RemoteBindPropagation::Rprivate => BindPropagation::Rprivate,
+                            RemoteBindPropagation::Shared => BindPropagation::Shared,
+                            RemoteBindPropagation::Rshared => BindPropagation::Rshared,
+                            RemoteBindPropagation::Slave => BindPropagation::Slave,
+                            RemoteBindPropagation::Rslave => BindPropagation::Rslave,
+                        })
+                        .unwrap_or_default(),
+                    create_host_path: b.create_host_path,
                 },
                 RemoteMount::Tmpfs(t) => Mount::Tmpfs {
                     target: t.target,

@@ -174,12 +174,13 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
             "my-release-uuid",
             "my-app-uuid",
             seq!(
+                "take locks for app with uuid 'my-app-uuid'",
                 "stop service 'my-service' for release 'my-release-uuid'",
                 "remove container for service 'my-service' for release 'my-release-uuid'",
                 "install service 'my-service' for release 'my-release-uuid'",
                 "start service 'my-service' for release 'my-release-uuid'",
             ),
-        ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
     );
 }
 
@@ -248,8 +249,10 @@ fn it_finds_a_workflow_to_uninstall_service() {
             },
         }),
         seq!(
+            "take locks for app with uuid 'my-app-uuid'",
             "stop service 'service2' for release 'my-release-uuid'",
             "uninstall service 'service2' for release 'my-release-uuid'",
+            "release locks for app with uuid 'my-app-uuid'",
         ),
     );
 }
@@ -319,18 +322,15 @@ fn it_finds_a_workflow_to_remove_an_app() {
             "uuid": "my-device-uuid",
             "apps": {},
         }),
-        dag!(
-            seq!("remove network 'my-network' for app 'my-app-uuid'"),
-            seq!(
-                "stop service 'service1' for release 'my-release-uuid'",
-                "uninstall service 'service1' for release 'my-release-uuid'",
-            ),
-            seq!(
-                "stop service 'service2' for release 'my-release-uuid'",
-                "uninstall service 'service2' for release 'my-release-uuid'",
-            )
-        ) + seq!(
+        seq!(
+            "remove network 'my-network' for app 'my-app-uuid'",
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'service1' for release 'my-release-uuid'",
+            "uninstall service 'service1' for release 'my-release-uuid'",
+            "stop service 'service2' for release 'my-release-uuid'",
+            "uninstall service 'service2' for release 'my-release-uuid'",
             "remove release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'",
             "remove app with uuid 'my-app-uuid'",
         ),
     );
@@ -535,17 +535,23 @@ fn it_finds_a_workflow_for_updating_services() {
             + seq!(
                 "pull image 'registry2.balena-cloud.com/v2/newsvc4@sha256:b444444444444444444444444444444444444444444444444444444444444444'"
             )
-            + dag!(
+            + par!(
                 // all the operations below can happen concurrently
                 // uninstalls cannot happen until all images have been downloaded
-                seq!("install service 'service1' for release 'new-release'"),
-                seq!("install service 'service2' for release 'new-release'"),
-                seq!("install service 'service4b' for release 'new-release'"),
-                seq!(
-                    "stop service 'service1' for release 'old-release'",
-                    "uninstall service 'service1' for release 'old-release'"
-                ),
-                seq!("uninstall service 'service2' for release 'old-release'"),
+                "install service 'service1' for release 'new-release'",
+                "install service 'service2' for release 'new-release'",
+                "install service 'service4b' for release 'new-release'",
+                "uninstall service 'service2' for release 'old-release'",
+            )
+            + seq!(
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'service1' for release 'old-release'",
+                "uninstall service 'service1' for release 'old-release'"
+            )
+            + dag!(
+                seq!("start service 'service1' for release 'new-release'"),
+                seq!("start service 'service2' for release 'new-release'"),
+                seq!("start service 'service4b' for release 'new-release'"),
                 par!(
                     "remove data for 'service3' for release 'old-release'",
                     "migrate service 'service3' to release 'new-release'"
@@ -557,11 +563,11 @@ fn it_finds_a_workflow_for_updating_services() {
             )
             + par!(
                 "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "start service 'service1' for release 'new-release'",
-                "start service 'service2' for release 'new-release'",
-                "start service 'service4b' for release 'new-release'",
-                "update image metadata for service 'service3' of release 'new-release'",
+                "update image metadata for service 'service3' of release 'new-release'"
             )
-            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'",),
+            + seq!(
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "release locks for app with uuid 'my-app-uuid'"
+            ),
     );
 }

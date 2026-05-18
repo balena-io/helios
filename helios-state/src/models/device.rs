@@ -1,6 +1,7 @@
 use mahler::state::{Map, State};
 
-use crate::common_types::{ImageUri, OperatingSystem, Uuid};
+use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid};
+use crate::oci::{BindPropagation, Mount};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
@@ -60,13 +61,13 @@ impl Device {
 }
 
 impl DeviceTarget {
-    /// Adds system related environment variables to the target state
+    /// Adds system runtime related context  to the target state
     ///
-    /// Because these variables are in the target state, if they are modified externally, they
-    /// will also cause a service restart
+    /// Because this context is added in in the target state, if modified externally (e.g through a
+    /// helios restart), they will also cause a service restart
     ///
-    /// These variables will show on the current state returned by the API
-    pub fn add_environment_from_state(&mut self, device: &Device) {
+    /// This information will also show on the state returned by helios API
+    pub fn add_runtime_context(&mut self, device: &Device, host_runtime_dir: &HostRuntimeDir) {
         #[cfg(feature = "balenahup")]
         let (os_version, os_build) = if let Some(host) = &device.host {
             (Some(host.meta.to_string()), host.meta.build.clone())
@@ -74,13 +75,31 @@ impl DeviceTarget {
             (None, None)
         };
 
-        for app in self.apps.values_mut() {
+        for (app_uuid, app) in self.apps.iter_mut() {
+            let bind_source = host_runtime_dir
+                .join("locking")
+                .join(app_uuid.as_str())
+                .to_string_lossy()
+                .into_owned();
             for rel in app.releases.values_mut() {
                 for svc in rel.services.values_mut() {
                     svc.config.environment.insert(
                         "BALENA_DEVICE_UUID".to_string(),
                         Some(device.uuid.as_str().into()),
                     );
+
+                    // Mount the per-app runtime directory at /tmp/balena so
+                    // services can place files (e.g. update locks) that
+                    // helios reads from the host side. Overrides any
+                    // user-declared mount at the same target.
+                    svc.config.volumes.retain(|m| m.target() != "/tmp/balena");
+                    svc.config.volumes.push(Mount::Bind {
+                        target: "/tmp/balena".to_string(),
+                        source: bind_source.clone(),
+                        read_only: false,
+                        propagation: BindPropagation::Private,
+                        create_host_path: true,
+                    });
 
                     #[cfg(feature = "balenahup")]
                     if let Some(host_os_version) = &os_version {

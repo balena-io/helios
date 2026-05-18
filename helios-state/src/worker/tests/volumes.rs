@@ -371,6 +371,7 @@ fn it_finds_a_workflow_for_updating_a_volume_in_use_by_a_service() {
             "my-release-uuid",
             "my-app-uuid",
             seq!(
+                "take locks for app with uuid 'my-app-uuid'",
                 "stop service 'my-service' for release 'my-release-uuid'",
                 "uninstall service 'my-service' for release 'my-release-uuid'",
             ) + par!(
@@ -381,7 +382,7 @@ fn it_finds_a_workflow_for_updating_a_volume_in_use_by_a_service() {
                 "install service 'my-service' for release 'my-release-uuid'",
                 "start service 'my-service' for release 'my-release-uuid'",
             ),
-        ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
     );
 }
 
