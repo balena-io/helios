@@ -18,9 +18,9 @@ use tokio::{
 };
 use tower_http::trace::TraceLayer;
 use tracing::{
-    Span, debug_span,
+    Span,
     field::{Empty, display},
-    info, instrument,
+    info, info_span, instrument,
 };
 
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
@@ -143,7 +143,7 @@ pub async fn start(
     let app = app.layer(
         TraceLayer::new_for_http()
             .make_span_with(move |request: &Request<Body>| {
-                debug_span!(parent: &api_span, "request",
+                info_span!(parent: &api_span, "request",
                     method = %request.method(),
                     uri = %request.uri().path(),
                     version = ?request.version(),

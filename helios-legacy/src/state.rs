@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{debug, field, instrument, trace, warn};
+use tracing::{debug, field, info, instrument, trace, warn};
 
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
@@ -101,7 +101,7 @@ pub async fn trigger_update(
         "cancel": cancel
     });
 
-    debug!("calling legacy Supervisor");
+    info!("calling legacy Supervisor");
     let response = loop {
         match client.post(&update_url).json(&payload).send().await {
             Ok(res) if res.status().is_success() => break res,

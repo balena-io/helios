@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 use tracing_subscriber::{
     EnvFilter,
     fmt::{self, format::FmtSpan},
@@ -230,7 +230,7 @@ async fn start_supervisor(
 
         // Wait for sigterm
         _ = sigterm.recv() => {
-            debug!("Caught SIGTERM, exiting ...");
+            info!("Caught SIGTERM, exiting ...");
             Ok(())
         }
     }
