@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use super::labels::Labels;
 
 /// Target network as defined by the remote backend
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Network {
     #[serde(default)]
     pub driver: Option<String>,
@@ -20,7 +20,7 @@ pub struct Network {
     pub ipam: Option<NetworkIpam>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct NetworkIpam {
     #[serde(default)]
     pub driver: Option<String>,
@@ -30,7 +30,7 @@ pub struct NetworkIpam {
     pub options: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct IpamConfig {
     pub subnet: Option<String>,
     pub gateway: Option<String>,

@@ -69,7 +69,7 @@ async fn poll_remote(
     (value, req.opts, Instant::now() + next_poll(config))
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 struct RemoteTargetState(HashMap<Uuid, RemoteDeviceTarget>);
 
 /// An update request coming from the API.

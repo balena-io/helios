@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer};
 
 /// Per-network endpoint configuration for a service (without priority, which is consumed during
 /// deserialization to determine insertion order)
-#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct NetworkSettings {
     #[serde(default)]
@@ -78,7 +78,7 @@ impl NetworkSettingsWithPriority {
 /// `None` means "connect with default settings". Entries are ordered by descending `priority`
 /// (highest priority first), which determines the order in which the container connects to
 /// networks.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct NetworkingConfig(IndexMap<String, Option<NetworkSettings>>);
 
 impl Deref for NetworkingConfig {

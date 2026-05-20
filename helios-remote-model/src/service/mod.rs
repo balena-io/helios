@@ -23,7 +23,7 @@ pub use volumes::*;
 use super::labels::Labels;
 
 /// Target service as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct Service {
     pub id: u32,
     pub image: ImageUri,
@@ -39,7 +39,7 @@ pub struct Service {
 }
 
 // FIXME: add remaining fields
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Debug, Default)]
 pub struct ServiceComposition {
     #[serde(default)]
     pub cgroup: Option<Cgroup>,

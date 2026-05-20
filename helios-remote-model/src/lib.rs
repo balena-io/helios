@@ -25,7 +25,7 @@ use helios_util::types as common_types;
 use common_types::{ImageUri, Uuid};
 
 /// Target device as defined by the remote backend
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Device {
     pub name: String,
     pub apps: AppMap,
@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for Device {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct AppMap(HashMap<Uuid, App>);
 
 impl Deref for AppMap {
@@ -82,7 +82,7 @@ impl<'de> Deserialize<'de> for AppMap {
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize, Clone, Debug)]
+        #[derive(Deserialize, Debug)]
         struct AppTarget {
             pub id: u32,
             pub name: String,
@@ -166,13 +166,13 @@ impl<'de> Deserialize<'de> for AppMap {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum App {
     User(UserApp),
     Host(HostApp),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct HostApp {
     pub release_uuid: Uuid,
     pub image: ImageUri,
@@ -181,7 +181,7 @@ pub struct HostApp {
 }
 
 /// Target app as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct UserApp {
     pub id: u32,
     pub name: String,
@@ -189,7 +189,7 @@ pub struct UserApp {
     pub releases: ReleaseMap,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ReleaseMap(HashMap<Uuid, Release>);
 
 impl Deref for ReleaseMap {
@@ -231,7 +231,7 @@ impl<'de> Deserialize<'de> for ReleaseMap {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Release {
     pub services: HashMap<String, Service>,
     pub volumes: HashMap<String, Volume>,

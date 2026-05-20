@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer};
 /// supported. Other platform specific modes are not supported as they might break.
 /// The `service:{name}` mode will be supported once `depends_on` is implemented, and
 /// `container:{name}` is not supported — both are rejected on deserialization.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum NetworkMode {
     None,
     Host,

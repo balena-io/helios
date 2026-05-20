@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Deserializer};
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Labels(HashMap<String, String>);
 
 impl Deref for Labels {

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use std::ops::Deref;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Command(Vec<String>);
 
 impl Deref for Command {
