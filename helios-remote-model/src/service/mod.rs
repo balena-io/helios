@@ -6,6 +6,7 @@ use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
 mod command;
+mod healthcheck;
 mod network_mode;
 mod networks;
 mod restart_policy;
@@ -13,6 +14,7 @@ mod volumes;
 
 pub use cgroup::*;
 pub use command::*;
+pub use healthcheck::*;
 pub use network_mode::*;
 pub use networks::*;
 pub use restart_policy::*;
@@ -143,6 +145,9 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub volumes: VolumesConfig,
+
+    #[serde(default)]
+    pub healthcheck: Option<Healthcheck>,
 }
 
 fn validate_cpus(cpus: f64) -> Result<f64, String> {

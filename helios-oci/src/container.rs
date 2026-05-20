@@ -377,6 +377,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|c| c.domainname.take())
             .filter(|s| !s.is_empty());
+        let healthcheck = config
+            .as_mut()
+            .and_then(|c| c.healthcheck.take())
+            .map(Healthcheck::from);
         let hostname = config.as_mut().and_then(|c| c.hostname.take());
         let stop_grace_period = config.as_mut().and_then(|c| c.stop_timeout.take());
         let stop_signal = config.as_mut().and_then(|c| c.stop_signal.take());
@@ -423,6 +427,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_shares,
             domainname,
             environment,
+            healthcheck,
             hostname,
             init,
             labels,
@@ -559,6 +564,96 @@ fn is_zero(n: &i64) -> bool {
 
 fn non_zero(n: i64) -> Option<i64> {
     (n != 0).then_some(n)
+}
+
+/// Container healthcheck configuration. Durations are in nanoseconds to match
+/// the engine API.
+/// `start_interval` requires Docker Engine 25.0+ (API 1.44) or
+/// Podman 4.8+. Older daemons ignore unknown fields.
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct Healthcheck {
+    /// Test command. `["NONE"]` disables an inherited healthcheck. With
+    /// `["CMD", args...]` the args are exec'd directly. With
+    /// `["CMD-SHELL", command]` the command runs through the default shell.
+    /// An empty/`None` value means inherit from the image.
+    pub test: Option<Vec<String>>,
+
+    /// Interval between checks
+    pub interval: Option<i64>,
+
+    /// Time to wait for a probe to complete
+    pub timeout: Option<i64>,
+
+    /// Grace period after start before failures count
+    pub start_period: Option<i64>,
+
+    /// Interval between checks during the start period
+    pub start_interval: Option<i64>,
+
+    /// Consecutive failures needed to mark the container unhealthy
+    pub retries: Option<i64>,
+}
+
+impl Healthcheck {
+    /// True when every sub-field is unset — semantically equivalent to
+    /// "no healthcheck specified" at this layer.
+    pub fn is_empty(&self) -> bool {
+        matches!(
+            self,
+            Self {
+                test: None,
+                interval: None,
+                timeout: None,
+                start_period: None,
+                start_interval: None,
+                retries: None,
+            }
+        )
+    }
+}
+
+impl From<Healthcheck> for bollard::models::HealthConfig {
+    fn from(value: Healthcheck) -> Self {
+        let Healthcheck {
+            test,
+            interval,
+            timeout,
+            start_period,
+            start_interval,
+            retries,
+        } = value;
+        Self {
+            test,
+            interval,
+            timeout,
+            start_period,
+            start_interval,
+            retries,
+        }
+    }
+}
+
+impl From<bollard::models::HealthConfig> for Healthcheck {
+    fn from(value: bollard::models::HealthConfig) -> Self {
+        let bollard::models::HealthConfig {
+            test,
+            interval,
+            timeout,
+            start_period,
+            start_interval,
+            retries,
+        } = value;
+        Self {
+            test,
+            interval,
+            timeout,
+            start_period,
+            start_interval,
+            retries,
+        }
+    }
 }
 
 /// Docker compose restart policy for a container.
@@ -1082,6 +1177,9 @@ pub struct ContainerConfig {
     /// Filesystem mounts (volume, bind, tmpfs) indexed by target path.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<Mount>,
+
+    /// Container healthcheck. `None` means defer to the image's HEALTHCHECK
+    pub healthcheck: Option<Healthcheck>,
 }
 
 /// Compare configs treating networks as unordered (Docker inspect doesn't
@@ -1099,6 +1197,7 @@ impl PartialEq for ContainerConfig {
             && self.cpu_shares == other.cpu_shares
             && self.domainname == other.domainname
             && self.environment == other.environment
+            && self.healthcheck == other.healthcheck
             && self.hostname == other.hostname
             && self.init == other.init
             && self.labels == other.labels
@@ -1141,6 +1240,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares,
             domainname,
             environment,
+            healthcheck,
             hostname,
             init,
             labels,
@@ -1255,6 +1355,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cmd,
             domainname,
             env,
+            healthcheck: healthcheck.map(Into::into),
             hostname,
             labels: Some(labels),
             networking_config,
