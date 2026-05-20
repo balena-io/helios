@@ -714,6 +714,8 @@ fn migrate_service(
             .as_ref()
             .expect("docker resource should be available");
 
+        let tgt_image = svc.image.clone();
+
         let container = svc.oci.as_ref().expect("container must be available");
         let container_id = docker
             .container()
@@ -728,6 +730,9 @@ fn migrate_service(
             .await
             .context("failed to inspect container for service")?;
         *svc = Service::from(local_container);
+        // preserve the target image URI, this prevents the
+        // engine image sha from being used spuriously during comparison
+        svc.image = tgt_image;
 
         Ok(svc)
     })
