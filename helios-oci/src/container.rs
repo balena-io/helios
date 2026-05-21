@@ -484,12 +484,14 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .status
             .ok_or("container status should not be nil")?
             .into();
+        let exit_code = state.exit_code;
 
         let state = ContainerState {
             created,
             error: state.error,
             healthy,
             status,
+            exit_code,
         };
 
         Ok(Self {
@@ -542,6 +544,11 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+    /// Exit code of the container's main process, as reported by the engine.
+    /// The engine reports `0` for a container that has not exited (still running
+    /// or never started), so this is only a meaningful exit status once `status`
+    /// is `Stopped`.
+    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.
@@ -1537,6 +1544,32 @@ mod tests {
         assert!(!c.config.privileged);
         assert!(!c.config.read_only);
         assert!(!c.config.tty);
+    }
+
+    #[test]
+    fn inspect_captures_exit_code() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig::default()),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::EXITED),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Stopped);
+        assert_eq!(c.state.exit_code, Some(0));
+    }
+
+    #[test]
+    fn inspect_exit_code_is_none_when_absent() {
+        let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
+        assert_eq!(c.state.exit_code, None);
     }
 
     #[test]
