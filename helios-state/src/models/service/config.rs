@@ -13,6 +13,7 @@ const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
+const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 
@@ -53,6 +54,7 @@ macro_rules! impl_field_tracking {
 impl_field_tracking!(oci::ContainerConfig {
     cgroup_parent,
     command,
+    healthcheck,
     hostname,
     init,
     pids_limit,
@@ -64,6 +66,18 @@ impl_field_tracking!(oci::ContainerConfig {
     user,
     uts,
     working_dir,
+});
+
+// Engine merges the image's HEALTHCHECK fields into compose healthcheck
+// at container create time when we don't set them, so we need to track
+// which fields are explicitly set by helios.
+impl_field_tracking!(oci::Healthcheck {
+    test,
+    interval,
+    timeout,
+    start_period,
+    start_interval,
+    retries,
 });
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -98,6 +112,12 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         // this container
         let label_config_fields: HashSet<String> = labels
             .remove(LABEL_CONFIG_FIELDS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+
+        // Read the list of healthcheck subfields the composition set
+        let label_config_healthcheck: HashSet<String> = labels
+            .remove(LABEL_CONFIG_HEALTHCHECK)
             .and_then(|s| json::from_str(&s).ok())
             .unwrap_or_default();
 
@@ -166,6 +186,16 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         // with default values.
         config.remove_untracked(&label_config_fields);
 
+        // Remove untracked healthcheck subfields. If healthcheck: {},
+        // collapse to None to allow the service to inherit the image's
+        // HEALTHCHECK.
+        if let Some(hc) = config.healthcheck.as_mut() {
+            hc.remove_untracked(&label_config_healthcheck);
+            if hc.collect_tracked().is_empty() {
+                config.healthcheck = None;
+            }
+        }
+
         Self(config)
     }
 }
@@ -190,6 +220,18 @@ impl ServiceConfig {
         // the default unless overridden
         let label_config_fields_value = config
             .collect_tracked()
+            .into_iter()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+
+        // List of healthcheck subfields the composition set. Needed
+        // because the engine merges the image's HEALTHCHECK into service
+        // during container create for any unset subfields.
+        let label_config_healthcheck_value = config
+            .healthcheck
+            .as_ref()
+            .map(|hc| hc.collect_tracked())
+            .unwrap_or_default()
             .into_iter()
             .map(|s| json::Value::String(s.to_owned()))
             .collect::<json::Value>();
@@ -230,6 +272,11 @@ impl ServiceConfig {
         labels.insert(
             LABEL_CONFIG_FIELDS.to_string(),
             label_config_fields_value.to_string(),
+        );
+
+        labels.insert(
+            LABEL_CONFIG_HEALTHCHECK.to_string(),
+            label_config_healthcheck_value.to_string(),
         );
 
         // Set app and service metadata as labels when creating the container
@@ -303,6 +350,13 @@ mod tests {
             cpu_rt_runtime: 950_000,
             cpu_shares: 2048,
             domainname: Some("example.com".to_string()),
+            healthcheck: Some(oci::Healthcheck {
+                test: Some(vec!["CMD".to_string(), "true".to_string()]),
+                interval: Some(30_000_000_000),
+                timeout: Some(5_000_000_000),
+                retries: Some(3),
+                ..Default::default()
+            }),
             hostname: Some("my-host".to_string()),
             init: Some(true),
             mem_limit: 1073741824,
@@ -332,6 +386,7 @@ mod tests {
         assert_eq!(back.cpu_rt_runtime, original.cpu_rt_runtime);
         assert_eq!(back.cpu_shares, original.cpu_shares);
         assert_eq!(back.domainname, original.domainname);
+        assert_eq!(back.healthcheck, original.healthcheck);
         assert_eq!(back.hostname, original.hostname);
         assert_eq!(back.init, original.init);
         assert_eq!(back.mem_limit, original.mem_limit);
@@ -357,6 +412,10 @@ mod tests {
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
+            healthcheck: Some(oci::Healthcheck {
+                test: Some(vec!["CMD".to_string(), "image-default".to_string()]),
+                ..Default::default()
+            }),
             hostname: Some("a1b2c3d4e5f6".to_string()),
             init: Some(true),
             pids_limit: Some(100),
@@ -371,6 +430,7 @@ mod tests {
         };
         let svc = ServiceConfig::from(inspected);
         assert_eq!(svc.command, None);
+        assert_eq!(svc.healthcheck, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
         assert_eq!(svc.pids_limit, None);
@@ -380,5 +440,48 @@ mod tests {
         assert_eq!(svc.stop_signal, None);
         assert_eq!(svc.user, None);
         assert_eq!(svc.working_dir, None);
+    }
+
+    #[test]
+    fn drops_engine_inherited_healthcheck_subfields() {
+        let original = oci::ContainerConfig {
+            healthcheck: Some(oci::Healthcheck {
+                test: Some(vec!["CMD-SHELL".to_string(), "echo ok".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+
+        // Simulate the engine filling in fields defined in image HEALTHCHECK
+        let hc = with_labels.healthcheck.as_mut().unwrap();
+        hc.interval = Some(10_000_000_000);
+        hc.timeout = Some(3_000_000_000);
+        hc.start_period = Some(2_000_000_000);
+        hc.retries = Some(3);
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.healthcheck, original.healthcheck);
+    }
+
+    #[test]
+    fn collapses_healthcheck_with_no_tracked_subfields() {
+        // Target defines healthcheck: {} (valid yaml)
+        let original = oci::ContainerConfig {
+            healthcheck: Some(oci::Healthcheck::default()),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original);
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+
+        // Engine inherits image's full HEALTHCHECK
+        let hc = with_labels.healthcheck.as_mut().unwrap();
+        hc.test = Some(vec!["CMD-SHELL".to_string(), "from-image".to_string()]);
+        hc.interval = Some(10_000_000_000);
+
+        // No fields are tracked by helios
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.healthcheck, None);
     }
 }

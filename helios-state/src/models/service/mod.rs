@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
-    self, BindPropagation, Cgroup, ContainerConfig, DateTime, LocalContainer, Mount, NetworkMode,
-    NetworkSettings, RestartPolicy,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
+    NetworkMode, NetworkSettings, RestartPolicy,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, Cgroup as RemoteCgroup, Mount as RemoteMount,
@@ -276,6 +276,19 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 networks,
                 network_mode,
                 volumes,
+                healthcheck: composition.healthcheck.and_then(|h| {
+                    // If healthcheck: {}, collapse to None to allow
+                    // the service to inherit the image's HEALTHCHECK
+                    let hc = Healthcheck {
+                        test: h.test,
+                        interval: h.interval,
+                        timeout: h.timeout,
+                        start_period: h.start_period,
+                        start_interval: h.start_interval,
+                        retries: h.retries,
+                    };
+                    (!hc.is_empty()).then_some(hc)
+                }),
             }),
         }
     }
