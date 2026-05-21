@@ -1,4 +1,43 @@
 - commits:
+    - subject: Preserve target image URI when migrating a service
+      hash: 2ab15c4595567a89d6b16732ebd0f28217d9b0ff
+      body: |
+        `migrate_service` calls `Service::from(local_container)` after the
+        rename, which overwrites `svc.image` with the engine's resolved sha256
+        ID. If the image URI is identical between the old and new releases,
+        the planner does not emit `update image metadata`, so `finish_release`
+        runs next, sees svc.image (sha256) != tgt.image (URI), and fails with
+        "all services should have the correct configuration".
+
+        While the next apply does see an update image metadata step, this
+        behavior can be confusing as-is.
+
+        Preserve the target URI across the inspect so `svc.image` ends up
+        matching the target and no second pass is needed.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+    - subject: Add healthcheck support to service composition
+      hash: 704189056aba065f79d2831b7845b0b4b4b7ab07
+      body: |
+        - accept Compose-style shapes: string (CMD-SHELL), list with
+          CMD/CMD-SHELL/NONE verb, bare list (interpreted by Engine as
+          exec args), or `disable: true`
+        - empty object `healthcheck: {}` collapses to no healthcheck
+          so the engine inherits image's HEALTHCHECK
+        - Use LABEL_CONFIG_HEALTHCHECK to track compose healthcheck
+          subfields to distinguish from image-inherited healthcheck
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.25.1
+  title: ""
+  date: 2026-05-21T00:04:30.935Z
+- commits:
     - subject: Add /tmp/balena bind mount to services
       hash: 4168889e380d3040287638282ed718284446780e
       body: |
