@@ -50,6 +50,7 @@ pub struct Container {
     pub name: String,
     pub created: DateTime,
     pub status: ContainerStatus,
+    pub exit_code: Option<i64>,
 }
 
 impl Container {
@@ -59,6 +60,7 @@ impl Container {
             name: String::default(),
             created: DateTime::default(),
             status: ContainerStatus::Created,
+            exit_code: None,
         }
     }
 }
@@ -67,13 +69,17 @@ impl From<(&str, oci::ContainerState)> for Container {
     fn from((container_name, container_state): (&str, oci::ContainerState)) -> Self {
         let container_id = container_name.to_owned();
         let oci::ContainerState {
-            status, created, ..
+            status,
+            created,
+            exit_code,
+            ..
         } = container_state;
 
         Container {
             name: container_id,
             status: status.into(),
             created,
+            exit_code,
         }
     }
 }
