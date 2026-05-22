@@ -1,4 +1,45 @@
 - commits:
+    - subject: Set Authorization header for legacy supervisor requests
+      hash: ef1eb9691cbbded8fe7cce4716737859a747a403
+      body: >
+        Avoid leaking the token on the logs on failed request. Before this
+
+        change, the logs would read.
+
+
+        ```
+
+        WARN helios:seek:trigger_update: failed: error sending request for url
+        (http://10.114.104.1:48480/v1/update?apikey=XXX)
+
+        ```
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Reduce default log level to `info`
+      hash: 40a67bc077717253ef40e1ba7b2310d93e81d7b9
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Re-categorize log messages between info/debug
+      hash: 96dca7268c3a67ad028b2d5b3c87114b8a7f2760
+      body: |
+        Move informational messages to `info` level and non-critical information
+        to debug. Add some contextual information to some error messages.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.2
+  title: ""
+  date: 2026-05-22T15:26:39.820Z
+- commits:
     - subject: Preserve target image URI when migrating a service
       hash: 2ab15c4595567a89d6b16732ebd0f28217d9b0ff
       body: |
