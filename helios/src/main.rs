@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 use tracing_subscriber::{
     EnvFilter,
     fmt::{self, format::FmtSpan},
@@ -42,13 +42,8 @@ fn initialize_tracing() {
             // RUST_LOG
             EnvFilter::try_from_default_env().unwrap_or(
                 EnvFilter::default()
-                    .add_directive("debug".parse().unwrap())
-                    .add_directive("helios_store=warn".parse().unwrap())
-                    .add_directive("mahler=debug".parse().unwrap())
-                    .add_directive("hyper=error".parse().unwrap())
-                    .add_directive("reqwest=debug".parse().unwrap())
-                    .add_directive("zbus=error".parse().unwrap())
-                    .add_directive("bollard=error".parse().unwrap()),
+                    .add_directive("warn".parse().unwrap())
+                    .add_directive("helios=info".parse().unwrap()),
             ),
         )
         .with(
@@ -230,7 +225,7 @@ async fn start_supervisor(
 
         // Wait for sigterm
         _ = sigterm.recv() => {
-            debug!("Caught SIGTERM, exiting ...");
+            info!("Caught SIGTERM, exiting ...");
             Ok(())
         }
     }

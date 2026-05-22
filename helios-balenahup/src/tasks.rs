@@ -8,7 +8,7 @@ use mahler::{exception, job};
 use tracing::debug;
 
 use crate::common_types::{HostRuntimeDir, Uuid};
-use crate::oci::{self, Client as Docker};
+use crate::oci::{self, Client as Docker, WithContext};
 use crate::store::{self as store, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -128,7 +128,16 @@ fn install_hostapp_release(
 
         // Pull the docker image for the updater
         debug!("pull hostapp updater script from '{}'", release.updater);
-        docker.image().pull(&release.updater, None).await?;
+        docker
+            .image()
+            .pull(&release.updater, None)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to pull hostapp updater script from '{}",
+                    release.updater
+                )
+            })?;
 
         // create a `balenahup` container from the update image
         let id = container_helper

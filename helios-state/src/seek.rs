@@ -10,7 +10,7 @@ use tokio::sync::{
     watch::{Receiver, Sender},
 };
 use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{error, info, instrument, trace, warn};
 
 use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
@@ -241,18 +241,17 @@ async fn seek_target(
 
     while !interrupt.is_set() {
         let worker = worker.clone().initial_state(current_state.clone())?;
-        debug!("searching workflow");
 
-        // Show pending changes at debug level
-        // FIXME: changes here are likely to contain sensitive information
-        // like env-vars that we want to mask
-        if tracing::enabled!(tracing::Level::DEBUG) {
+        // Report the list of pending changes to the logs
+        if tracing::enabled!(tracing::Level::INFO) {
             let changes = worker.distance(target)?;
             if !changes.is_empty() {
-                debug!("pending changes:");
+                info!("searching workflow for pending state changes:");
                 for change in changes {
-                    debug!("- {}", logs::mask_sensitive_data(change));
+                    info!("- {}", logs::mask_sensitive_data(change));
                 }
+            } else {
+                info!("no pending state changes");
             }
         }
 
@@ -270,7 +269,6 @@ async fn seek_target(
             }
 
             if workflow.is_empty() {
-                debug!("nothing to do");
                 info!("target state applied");
                 if has_exceptions {
                     // no changes to make but there are exceptions so we return aborted
@@ -279,10 +277,10 @@ async fn seek_target(
                 return Ok(UpdateStatus::Done);
             } else {
                 info!(time = ?now.elapsed(), "workflow found");
-                if tracing::enabled!(tracing::Level::DEBUG) {
-                    debug!("will execute the following tasks:");
+                if tracing::enabled!(tracing::Level::INFO) {
+                    info!("will execute the following tasks:");
                     for line in workflow.to_string().lines() {
-                        debug!("{line}");
+                        info!("{line}");
                     }
                 }
 
