@@ -209,6 +209,10 @@ fn report_state(tx: &Sender<LocalState>, device: &Device, status: &UpdateStatus)
     }
 }
 
+/// Refresh the authorization list in the shared local state.
+///
+/// Should only be used for remote targets, local targets (via the helios API) cannot modify the
+/// authorization list
 fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) {
     // FIXME: re-enable reporting once user app support is more advanced.
     // At that point helios should be the only one reporting
@@ -225,7 +229,7 @@ fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) 
             #[cfg(not(feature = "balenahup"))]
             let host_keys: Vec<&Uuid> = Vec::new();
 
-            state.authorized_apps = app_keys.chain(host_keys).cloned().collect()
+            state.authorized_apps = app_keys.chain(host_keys).cloned().collect();
         });
     }
 }
@@ -432,8 +436,13 @@ pub async fn start_seek(
             }
 
             SeekAction::Apply(update_req) => {
-                // Update authorization list
-                if let Some(target) = &update_req.target.value() {
+                // Refresh authorization list from the remote target.
+                // Local targets don't carry this info.
+                if let TargetState::Remote {
+                    target: Some(target),
+                    ..
+                } = &update_req.target
+                {
                     report_authorized_apps(&state_tx, target);
                 }
 
