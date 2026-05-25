@@ -191,11 +191,17 @@ struct RequestState {
 
 impl RequestState {
     fn new(endpoint: String, config: RequestConfig) -> Self {
+        // TODO: we need to add a DNS resolver to support MDNS
+        let client = reqwest::Client::builder()
+            .pool_idle_timeout(Some(config.timeout))
+            .timeout(config.timeout)
+            .build()
+            .expect("client should initialize");
+
         // Use the min configured interval as initial backoff
         let current_backoff = config.min_interval;
         Self {
-            // TODO: we need to add a DNS resolver to support MDNS
-            client: reqwest::Client::new(),
+            client,
             endpoint,
             config,
             next_retry: None,
@@ -405,7 +411,6 @@ impl Get {
             .state
             .client
             .get(&self.state.endpoint)
-            .timeout(self.state.config.timeout)
             .header("Accept-Encoding", "br, gzip, deflate");
 
         if let Some(api_token) = &self.state.config.auth_token {
@@ -663,7 +668,6 @@ impl Patch {
             .patch(&state.endpoint)
             .header("Content-Type", "application/json")
             .header("Accept-Encoding", "br, gzip, deflate")
-            .timeout(state.config.timeout)
             .json(&state_to_send);
 
         if let Some(api_token) = &state.config.auth_token {
