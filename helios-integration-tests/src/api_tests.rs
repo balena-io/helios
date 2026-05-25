@@ -4,9 +4,7 @@ use bollard::config::RestartPolicyNameEnum;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use super::common::{
-    HELIOS_URL, clear_reports, prune_images, wait_for_report, wait_for_target_apply,
-};
+use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
 
 const TEST_APP_UUID: &str = "test-app";
 
@@ -243,7 +241,6 @@ async fn test_set_app_target() {
 #[tokio::test]
 async fn test_set_app_target_install_images() {
     prune_images().await;
-    clear_reports().await;
 
     let release_uuid = "my-release-uuid";
 
@@ -518,23 +515,7 @@ async fn test_set_app_target_install_images() {
     assert_eq!(tmpfs_opts.size_bytes, Some(65536));
     assert_eq!(tmpfs_opts.mode, Some(448));
 
-    // State report was sent with correct service statuses
-    let release_report = wait_for_report(TEST_APP_UUID, release_uuid, "done", 10).await;
-    assert_eq!(
-        release_report["services"]["service-one"]["status"],
-        "Running"
-    );
-    assert_eq!(
-        release_report["services"]["service-two"]["status"],
-        "Running"
-    );
-    assert_eq!(
-        release_report["services"]["service-three"]["status"],
-        "Running"
-    );
-
     // Teardown: remove app and confirm images are cleaned up
-    clear_reports().await;
     delete_app_and_wait(&client, TEST_APP_UUID).await;
     assert!(docker.inspect_image("ubuntu:latest").await.is_err());
     assert!(docker.inspect_image("alpine:latest").await.is_err());

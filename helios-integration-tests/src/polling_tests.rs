@@ -375,3 +375,183 @@ async fn test_hostos_update_retry_exhaustion() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_rejected_app_is_reported() {
+    let client = reqwest::Client::new();
+
+    const APP_UUID: &str = "rejected-app-uuid";
+    const RELEASE_UUID: &str = "c8b48659434e80a8b3adc0c5ad1e347a";
+
+    // A release with a malformed service `command` (unclosed quote) fails
+    // per-release deserialization in helios-remote-model and lands as a
+    // rejection rather than aborting the whole target.
+    let mut releases = serde_json::Map::new();
+    releases.insert(
+        RELEASE_UUID.to_string(),
+        json!({
+            "id": 7,
+            "services": {
+                "main": {
+                    "id": 3,
+                    "image_id": 4,
+                    "image": "registry:5000/test-rejected:latest",
+                    "composition": {
+                        "command": "echo 'hello world",
+                    }
+                }
+            }
+        }),
+    );
+    let app_obj = json!({
+        "id": 400,
+        "name": "rejected-app",
+        "releases": serde_json::Value::Object(releases),
+    });
+    let mut apps = serde_json::Map::new();
+    apps.insert(APP_UUID.to_string(), app_obj);
+    let device_target = json!({
+        "name": "test-device",
+        "apps": serde_json::Value::Object(apps),
+    });
+
+    clear_reports().await;
+
+    let res = client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&device_target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    // No hostapp in the target, so the overall apply aborts — same as the
+    // baseline user-app test. The rejection is reported independently.
+    let status = wait_for_target_apply().await;
+    assert_eq!(status, json!({"status": "aborted"}));
+
+    let release_report = wait_for_report(APP_UUID, RELEASE_UUID, "rejected", 10).await;
+    assert!(
+        release_report["services"]
+            .as_object()
+            .map(|m| m.is_empty())
+            .unwrap_or(false),
+        "rejected release should have no services, got: {release_report}"
+    );
+
+    let empty_target = json!({"name": "test-device", "apps": {}});
+    client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&empty_target)
+        .send()
+        .await
+        .unwrap();
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    wait_for_target_apply().await;
+
+    clear_reports().await;
+    client
+        .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .send()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_remote_poll_user_app_reports_done() {
+    prune_images().await;
+
+    let client = reqwest::Client::new();
+
+    const APP_UUID: &str = "report-app-uuid";
+    const RELEASE_UUID: &str = "ddeeff00112233445566778899aabbcc";
+
+    let mut releases = serde_json::Map::new();
+    releases.insert(
+        RELEASE_UUID.to_string(),
+        json!({
+            "id": 8,
+            "services": {
+                "main": {
+                    "id": 401,
+                    "image_id": 402,
+                    "image": "alpine:latest",
+                    "composition": {
+                        "command": ["sleep", "infinity"],
+                    }
+                }
+            }
+        }),
+    );
+    let app_obj = json!({
+        "id": 500,
+        "name": "report-app",
+        "releases": serde_json::Value::Object(releases),
+    });
+    let mut apps = serde_json::Map::new();
+    apps.insert(APP_UUID.to_string(), app_obj);
+    let device_target = json!({
+        "name": "test-device",
+        "apps": serde_json::Value::Object(apps),
+    });
+
+    clear_reports().await;
+
+    let res = client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&device_target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    // The remote target has no hostapp, so the overall apply converges
+    // to "aborted" (same pattern as the other polling tests). The user
+    // app still installs, and its per-release status reports as "done".
+    let status = wait_for_target_apply().await;
+    assert_eq!(status, json!({"status": "aborted"}));
+
+    let release_report = wait_for_report(APP_UUID, RELEASE_UUID, "done", 30).await;
+    assert_eq!(release_report["services"]["main"]["status"], "Running");
+
+    let empty_target = json!({"name": "test-device", "apps": {}});
+    client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&empty_target)
+        .send()
+        .await
+        .unwrap();
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    wait_for_target_apply().await;
+
+    clear_reports().await;
+    client
+        .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .send()
+        .await
+        .unwrap();
+}
