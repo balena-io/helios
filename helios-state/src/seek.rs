@@ -15,6 +15,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
 use crate::util::interrupt::Interrupt;
+use crate::util::locking::ForceAcquireLocks;
 use crate::util::logs;
 
 use super::config::Resources;
@@ -480,7 +481,9 @@ pub async fn start_seek(
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
-                    let worker = &worker;
+                    let worker = worker
+                        .clone()
+                        .resource(ForceAcquireLocks::from(update_req.opts.force));
                     let current_state = &mut current_state;
 
                     // If we are continuing a legacy apply we also set the next target
@@ -515,7 +518,7 @@ pub async fn start_seek(
 
                             // Look for a plan to the target
                             update_status = seek_target(
-                                worker,
+                                &worker,
                                 current_state,
                                 device_target,
                                 &interrupt,
