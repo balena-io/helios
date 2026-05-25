@@ -1,4 +1,19 @@
 - commits:
+    - subject: Configure HTTP request keep-alive to 59 seconds
+      hash: e0b255b34777d6064c055b99592252e961cc2e0c
+      body: |
+        This matches what the current supervisor is doing. The default
+        keep-alive was 90 seconds. This also configures request timeouts at the
+        client instead of per-request.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.3
+  title: ""
+  date: 2026-05-25T18:54:41.331Z
+- commits:
     - subject: Set Authorization header for legacy supervisor requests
       hash: ef1eb9691cbbded8fe7cce4716737859a747a403
       body: >
