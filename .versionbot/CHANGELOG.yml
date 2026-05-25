@@ -1,4 +1,47 @@
 - commits:
+    - subject: Enable run_task log messages
+      hash: b777aeb8c4c532f1d2abb53aaa4d4b73991d152f
+      body: >
+        PR #115 disabled `helios::seek::run_task` messages (see below). This
+
+        re-enables them as these provide valuable information of the workflow
+
+        runtime state.
+
+
+        ```
+
+        INFO helios:seek:run_task: starting task=start service 'data' for
+        release '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        INFO helios:seek:run_task: starting task=start service 'frontend' for
+        release '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        INFO helios:seek:run_task: starting task=start service 'proxy' for
+        release '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        INFO helios:seek:run_task: close time.busy=1.91ms time.idle=66.9ms
+        task=start service 'data' for release
+        '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        INFO helios:seek:run_task: close time.busy=1.47ms time.idle=84.4ms
+        task=start service 'proxy' for release
+        '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        INFO helios:seek:run_task: close time.busy=1.31ms time.idle=85.6ms
+        task=start service 'frontend' for release
+        '15c68e79b34d6e470a994012b217a25070ddd5e5'
+
+        ```
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.4
+  title: ""
+  date: 2026-05-25T22:53:26.777Z
+- commits:
     - subject: Configure HTTP request keep-alive to 59 seconds
       hash: e0b255b34777d6064c055b99592252e961cc2e0c
       body: |
