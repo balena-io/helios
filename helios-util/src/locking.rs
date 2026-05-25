@@ -77,6 +77,16 @@ impl LockFile {
 
         tracing::trace!("acquiring lock at {} (force={force})", path.display());
 
+        // When forcing, take an exclusive flock on the parent directory
+        // before touching `path`. This prevents two helios processes from stepping on each-other
+        let _dir_guard = if force {
+            let f = File::open(lock_dir)?;
+            f.lock()?;
+            Some(f)
+        } else {
+            None
+        };
+
         // If the path exists, try to acquire an exclusive lock on it if possible.
         // Fail with [`Error::WouldBlock`] for a non-helios lock unless using the `force`
         match Self::try_attach(path)? {
@@ -407,6 +417,49 @@ mod tests {
         let err = LockFile::create(&lock_path, true).unwrap_err();
         assert!(matches!(err, Error::WouldBlock), "got {err:?}");
         held.unlock();
+    }
+
+    #[test]
+    fn concurrent_force_acquires_do_not_overlap() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let dir = tempdir().unwrap();
+        let lock_path = dir.path().join("updates.lock");
+        // External file so every force-acquire goes through the install
+        // path (until the first one replaces it with a helios-owned file).
+        fs::write(&lock_path, b"not the tag").unwrap();
+
+        let held = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let lock_path = lock_path.clone();
+                let held = Arc::clone(&held);
+                let max_concurrent = Arc::clone(&max_concurrent);
+                thread::spawn(move || {
+                    if let Ok(handle) = LockFile::create(&lock_path, true) {
+                        let n = held.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_concurrent.fetch_max(n, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(10));
+                        held.fetch_sub(1, Ordering::SeqCst);
+                        handle.unlock();
+                    }
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        assert_eq!(
+            max_concurrent.load(Ordering::SeqCst),
+            1,
+            "more than one force-acquire held the lock simultaneously"
+        );
     }
 
     #[test]
