@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use mahler::state::{Map, State};
 
 use crate::common_types::Uuid;
-use crate::remote_model::UserApp as RemoteAppTarget;
+use crate::remote_model::{RejectedApp, UserApp as RemoteAppTarget};
 
 use super::release::Release;
 
@@ -28,6 +28,10 @@ pub struct App {
 
     /// App releases
     pub releases: Map<Uuid, Release>,
+
+    /// A rejected release uuid on the target state. This tells
+    /// the planner to abort operations the current app
+    pub rejected_release: Option<Uuid>,
 }
 
 impl From<App> for AppTarget {
@@ -43,6 +47,7 @@ impl From<App> for AppTarget {
             id,
             name,
             locked,
+            rejected_release: None,
             releases: releases
                 .into_iter()
                 .map(|(uuid, rel)| (uuid, rel.into()))
@@ -53,6 +58,22 @@ impl From<App> for AppTarget {
 
 pub type AppMap = Map<Uuid, App>;
 
+impl From<RejectedApp> for AppTarget {
+    fn from(app: RejectedApp) -> Self {
+        let RejectedApp {
+            id, name, release, ..
+        } = app;
+
+        AppTarget {
+            id,
+            name: Some(name),
+            locked: false,
+            releases: Map::new(),
+            rejected_release: Some(release),
+        }
+    }
+}
+
 impl From<RemoteAppTarget> for AppTarget {
     fn from(tgt: RemoteAppTarget) -> Self {
         let RemoteAppTarget { id, name, releases } = tgt;
@@ -61,6 +82,7 @@ impl From<RemoteAppTarget> for AppTarget {
             id,
             name: Some(name),
             locked: false,
+            rejected_release: None,
             releases: releases
                 .into_iter()
                 .map(|(r_uuid, rel)| (r_uuid, rel.into()))

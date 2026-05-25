@@ -172,6 +172,11 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 }
                 #[cfg(not(feature = "userapps"))]
                 RemoteAppTarget::User(_) => {}
+                #[cfg(feature = "userapps")]
+                RemoteAppTarget::Rejected(app) if !app.is_host => {
+                    userapps.insert(app_uuid, app.into());
+                }
+                _ => {}
             };
         }
 
@@ -222,5 +227,80 @@ mod tests {
         // this should not panic
         let _target: DeviceTarget =
             serde_json::from_value(serde_json::to_value(device).unwrap()).unwrap();
+    }
+
+    #[cfg(feature = "userapps")]
+    #[test]
+    fn rejected_user_app_is_included_in_target_with_rejected_release_set() {
+        // A rejected user app should land in `target.apps` with empty
+        // releases and the rejected release uuid set, so the planner can
+        // create the app locally and the report layer can surface it.
+        let remote: crate::remote_model::Device = serde_json::from_value(json!({
+            "name": "test-device",
+            "apps": {
+                "bad-app": {
+                    "id": 7,
+                    "name": "bad",
+                    "releases": {
+                        "bad-release": {
+                            "id": 1,
+                            "services": {
+                                "main": {
+                                    "id": 1,
+                                    "image_id": 1,
+                                    "image": "registry/img:1",
+                                    "composition": {
+                                        "command": "echo 'unterminated"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target: DeviceTarget = remote.into();
+        let app = target
+            .apps
+            .get(&Uuid::from("bad-app"))
+            .expect("rejected user app should be in the target");
+        assert!(app.releases.is_empty());
+        assert_eq!(app.rejected_release, Some(Uuid::from("bad-release")));
+    }
+
+    #[cfg(all(feature = "userapps", feature = "balenahup"))]
+    #[test]
+    fn rejected_host_app_is_dropped_from_target() {
+        // Rejected host apps are filtered out — the device keeps running
+        // its current host release and there is nothing to report against.
+        let remote: crate::remote_model::Device = serde_json::from_value(json!({
+            "name": "test-device",
+            "apps": {
+                "bad-host": {
+                    "id": 8,
+                    "name": "host",
+                    "is_host": true,
+                    "releases": {
+                        "bad-release": {
+                            "id": 2,
+                            "services": {
+                                "hostapp": {
+                                    "id": 1,
+                                    "image_id": 1,
+                                    "image": "registry/img:1",
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let target: DeviceTarget = remote.into();
+        assert!(target.apps.is_empty());
+        assert!(target.host.is_none());
     }
 }

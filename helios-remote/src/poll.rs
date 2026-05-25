@@ -13,7 +13,7 @@ use crate::util::request::{self, Get};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::model::Device as RemoteDeviceTarget;
+use super::model::{App as RemoteApp, Device as RemoteDeviceTarget};
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
@@ -244,6 +244,17 @@ async fn start_poll_with_reemit(
                     match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
                         Ok(RemoteTargetState(mut map)) => {
                             if let Some(remote_target) = map.remove(&uuid) {
+                                // Log per-app rejections; the rejected entries flow
+                                // through into the DeviceTarget so the planner can
+                                // create the app with `rejected_release` set.
+                                for (uuid, app) in remote_target.apps.iter() {
+                                    if let RemoteApp::Rejected(rej) = app {
+                                        warn!(
+                                            "invalid target release for app {uuid}: {}",
+                                            rej.reason,
+                                        );
+                                    }
+                                }
                                 let _ = seek_tx.send(SeekRequest {
                                     target: TargetState::Remote {
                                         target: Some(remote_target.into()),
