@@ -200,7 +200,9 @@ impl LockSet {
     }
 
     /// Try to acquire an exclusive lock on the given path, if the file exists and was created by
-    /// helios, then it just takes an exclusive lock on the file and stores the handle.
+    /// helios, then it just takes an exclusive lock on the file and stores the handle.  
+    ///
+    /// If an entry for the lock already exists on the set, the method returns without an error (idempotency).
     ///
     /// See [`LockFile::create`] for the semantics of `force`.
     ///
@@ -212,7 +214,7 @@ impl LockSet {
         let mut locks = self.locks.lock().unwrap_or_else(|p| p.into_inner());
 
         match locks.entry(path.clone()) {
-            Entry::Occupied(_) => Err(Error::WouldBlock),
+            Entry::Occupied(_) => Ok(()),
             Entry::Vacant(entry) => {
                 let lockfile = LockFile::create(path.as_ref(), force)?;
                 entry.insert(lockfile);
@@ -473,15 +475,13 @@ mod tests {
     }
 
     #[test]
-    fn lockset_try_lock_fails_when_path_already_in_set() {
+    fn lockset_try_lock_succeeds_when_path_already_in_set() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("a.lock");
 
         let set = LockSet::new();
         set.try_lock(path.clone(), false).unwrap();
-
-        let err = set.try_lock(path, false).unwrap_err();
-        assert!(matches!(err, Error::WouldBlock), "got {err:?}");
+        set.try_lock(path, false).unwrap();
     }
 
     #[test]
