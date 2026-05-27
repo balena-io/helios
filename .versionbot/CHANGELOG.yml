@@ -1,4 +1,82 @@
 - commits:
+    - subject: Update integration tests
+      hash: 44477041b0aa1ba13c62952654b89371b082b351
+      body: |
+        Adds a test to check that rejected releases are reported back to the
+        remote backend.
+
+        Also adds a new polling test to make sure services state is reported
+        correctly. This was done before as part of the api tests, but local api
+        can no longer change the authorization list.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Report rejected releases to remote backend
+      hash: 02638751e10088a1254563049c04a4e2c12f2416
+      body: |
+        Apps containing a non-null `rejected_release` property will be reported
+        with an additional release with `update_status` set to `rejected`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Update app tasks to set the rejected_release property
+      hash: dec6fc3684d634d6adcd1f9ff4849fad8d1b3728
+      body: |
+        This also adds an exception that prevents removing a release for an app
+        if the app has a rejected target release.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Validate target apps independently on helios-remote-model
+      hash: a6e122ad4f7eb17cddafd244fb5e8242db05ed3d
+      body: |
+        Adds a new `RejectedApp` type to `helios-remote-model` sub-crate. When
+        deserializing apps, it processes apps independently and if the App
+        release composition is not valid, then it marks it as a rejected app.
+
+        These apps can be created on the system state but existing releases will
+        not be removed for apps with a rejected target release.
+
+        The reason for rejecting these apps is only emitted as a warning log for
+        now.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Do not update app authorization list on local state
+      hash: e4a8d08f1c34973ac0b786708a954fd26f074c1f
+      body: |
+        This fixes a bug where an app could be created using the local API and
+        that app uuid would be added to the authorization list, resulting in a
+        401 from the backend.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove Clone from helios-remote-model types
+      hash: 9f94a02df95fde77b8abe1cf8c290ba58739c303
+      body: >
+        The target state types are only consumed once by the seek loop, so the
+
+        Clone bound was unused. This removes unnecessary code in the binal
+        binary.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.6
+  title: ""
+  date: 2026-05-27T21:48:39.021Z
+- commits:
     - subject: Make LockSet::try_lock idempotent
       hash: eff03f7635637b6d0f16993f7c15b6936741baa8
       body: >
