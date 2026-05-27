@@ -5,6 +5,7 @@
 //! the types are based  from https://github.com/balena-io/open-balena-api/blob/master/src/features/device-state/routes/state-get-v3.ts#L48
 
 use serde::Deserialize;
+use serde_json::Value;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -25,7 +26,7 @@ use helios_util::types as common_types;
 use common_types::{ImageUri, Uuid};
 
 /// Target device as defined by the remote backend
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Device {
     pub name: String,
     pub apps: AppMap,
@@ -53,7 +54,7 @@ impl<'de> Deserialize<'de> for Device {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct AppMap(HashMap<Uuid, App>);
 
 impl Deref for AppMap {
@@ -77,88 +78,43 @@ impl IntoIterator for AppMap {
         self.0.into_iter()
     }
 }
+
 impl<'de> Deserialize<'de> for AppMap {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize, Clone, Debug)]
-        struct AppTarget {
-            pub id: u32,
-            pub name: String,
-            #[serde(default)]
-            pub is_host: bool,
-            #[serde(default)]
-            pub releases: ReleaseMap,
-        }
+        // Parse each app's JSON lazily so a per-app deserialization error
+        // (bad service composition, bad release map, missing hostapp labels)
+        // can be captured as a rejection rather than aborting the whole device.
+        let raw: HashMap<Uuid, Value> = HashMap::deserialize(deserializer)?;
 
-        let remote_apps: HashMap<Uuid, AppTarget> = HashMap::deserialize(deserializer)?;
-
-        // validate that there is only one hostapp
-        if remote_apps.iter().filter(|(_, app)| app.is_host).count() > 1 {
+        // Duplicate hostapps are a device-level configuration problem. Peek
+        // at the raw `is_host` flags before per-app parsing so the check
+        // still fires if the apps would otherwise fail validation.
+        if raw
+            .values()
+            .filter(|v| v.get("is_host").and_then(Value::as_bool).unwrap_or(false))
+            .count()
+            > 1
+        {
             return Err(serde::de::Error::custom(
                 "only one target hostapp is allowed",
             ));
         }
 
-        let mut apps = HashMap::new();
-        for (app_uuid, app) in remote_apps {
-            let AppTarget {
-                id,
-                name,
-                releases,
-                is_host,
-            } = app;
-            if !is_host {
-                apps.insert(app_uuid, App::User(UserApp { id, name, releases }));
-            // Only select the hostapp if it has the appropriate metadata
-            } else if let Some((release_uuid, release)) = releases.into_iter().next() {
-                let hostapp = release.services.into_values().find(|svc| {
-                    svc.composition
-                        .labels
-                        .get("io.balena.image.class")
-                        .map(|value| value == "hostapp")
-                        .is_some()
-                });
-
-                // The target OS may be before v6.1.18 where the hostapp and board-rev
-                // labels were added. If that's the case we won't be able to update to it so
-                // we remove it from the target state
-                if let Some(svc) = hostapp {
-                    // merge top level labels with those in the composition
-                    let mut labels: HashMap<String, String> = svc
-                        .composition
-                        .labels
-                        .into_iter()
-                        .chain(svc.labels)
-                        .collect();
-
-                    // The hostapp must provide an updater artifact
-                    let updater = if let Some(updater) = labels.remove("io.balena.private.updater")
-                    {
-                        updater.parse().map_err(serde::de::Error::custom)?
-                    } else {
-                        return Err(serde::de::Error::custom(
-                            "the hostapp must provide an updater artifact reference",
-                        ));
-                    };
-
-                    if let Some(board_rev) = labels.remove("io.balena.private.hostapp.board-rev") {
-                        apps.insert(
-                            app_uuid,
-                            App::Host(HostApp {
-                                release_uuid,
-                                image: svc.image,
-                                board_rev,
-                                updater,
-                            }),
-                        );
-                    }
+        let mut apps: HashMap<Uuid, App> = HashMap::new();
+        for (app_uuid, value) in raw {
+            match parse_app(value) {
+                Ok(app) => {
+                    apps.insert(app_uuid, app);
                 }
-            } else {
-                return Err(serde::de::Error::custom(
-                    "the hostapp must have at least one target release",
-                ));
+                Err(ParseAppError::Reject(rejection)) => {
+                    apps.insert(app_uuid, App::Rejected(rejection));
+                }
+                Err(ParseAppError::Fatal(msg)) => {
+                    return Err(serde::de::Error::custom(msg));
+                }
             }
         }
 
@@ -166,13 +122,160 @@ impl<'de> Deserialize<'de> for AppMap {
     }
 }
 
-#[derive(Clone, Debug)]
+/// An app with an invalid target release
+#[derive(Debug, Clone)]
+pub struct RejectedApp {
+    pub id: u32,
+    pub name: String,
+    pub is_host: bool,
+    pub release: Uuid,
+    pub reason: String,
+}
+
+#[derive(Debug)]
 pub enum App {
     User(UserApp),
     Host(HostApp),
+    Rejected(RejectedApp),
 }
 
-#[derive(Clone, Debug)]
+/// Outcome of `parse_app` — either an accepted `App`, a per-app rejection
+/// keyed by a specific release uuid, or a fatal device-level error that
+/// should abort the whole `AppMap` deserialization.
+enum ParseAppError {
+    Reject(RejectedApp),
+    Fatal(String),
+}
+
+fn parse_app(value: Value) -> Result<App, ParseAppError> {
+    #[derive(Deserialize, Debug)]
+    struct AppRaw {
+        id: u32,
+        name: String,
+        #[serde(default)]
+        is_host: bool,
+        #[serde(default)]
+        releases: HashMap<Uuid, Value>,
+    }
+
+    // Stage 1: parse the app's top-level shape, leaving releases as raw JSON.
+    // A failure here is an input error from the backend, not a per-release
+    // content problem — abort the whole device deserialization.
+    let app = AppRaw::deserialize(value).map_err(|e| ParseAppError::Fatal(e.to_string()))?;
+
+    // Stage 2: enforce the single-release constraint and parse each release
+    // independently so a per-release failure carries its uuid.
+    if app.releases.len() > 1 {
+        return Err(ParseAppError::Fatal(
+            "target releases should only contain one release".to_string(),
+        ));
+    }
+
+    let mut releases: HashMap<Uuid, Release> = HashMap::new();
+    for (rel_uuid, rel_value) in app.releases {
+        match serde_path_to_error::deserialize::<_, Release>(rel_value) {
+            Ok(rel) => {
+                releases.insert(rel_uuid, rel);
+            }
+            Err(e) => {
+                // Invalid release content, the app is rejected
+                return Err(ParseAppError::Reject(RejectedApp {
+                    id: app.id,
+                    name: app.name,
+                    is_host: app.is_host,
+                    release: rel_uuid,
+                    reason: e.to_string(),
+                }));
+            }
+        }
+    }
+    let releases = ReleaseMap(releases);
+
+    if !app.is_host {
+        return Ok(App::User(UserApp {
+            id: app.id,
+            name: app.name,
+            releases,
+        }));
+    }
+
+    // Stage 3: hostapp metadata validation. An empty release map at this
+    // point is a shape problem (the backend sent a hostapp with no release).
+    // Everything else is content of a specific release and
+    // produces a per-app rejection tagged with that release's uuid.
+    let Some((release_uuid, release)) = releases.into_iter().next() else {
+        return Err(ParseAppError::Fatal(
+            "hostapp should have at least one target release".to_string(),
+        ));
+    };
+
+    let Some(svc) = release.services.into_values().find(|svc| {
+        svc.composition
+            .labels
+            .get("io.balena.image.class")
+            .map(|value| value == "hostapp")
+            .is_some()
+    }) else {
+        return Err(ParseAppError::Reject(RejectedApp {
+            id: app.id,
+            name: app.name,
+            is_host: app.is_host,
+            release: release_uuid,
+            reason: "hostapp should have a service with `io.balena.image.class=hostapp` label"
+                .to_string(),
+        }));
+    };
+
+    let mut labels: HashMap<String, String> = svc
+        .composition
+        .labels
+        .into_iter()
+        .chain(svc.labels)
+        .collect();
+
+    let updater = match labels.remove("io.balena.private.updater") {
+        Some(updater) => match updater.parse::<ImageUri>() {
+            Ok(u) => u,
+            Err(e) => {
+                return Err(ParseAppError::Reject(RejectedApp {
+                    id: app.id,
+                    name: app.name,
+                    is_host: app.is_host,
+                    release: release_uuid,
+                    reason: format!("invalid hostapp updater: {e}"),
+                }));
+            }
+        },
+        None => {
+            return Err(ParseAppError::Reject(RejectedApp {
+                id: app.id,
+                name: app.name,
+                is_host: app.is_host,
+                release: release_uuid,
+                reason: "hostapp missing `updater` label".to_string(),
+            }));
+        }
+    };
+
+    let Some(board_rev) = labels.remove("io.balena.private.hostapp.board-rev") else {
+        return Err(ParseAppError::Reject(RejectedApp {
+            id: app.id,
+            name: app.name,
+            is_host: app.is_host,
+            release: release_uuid,
+            reason: "hostapp missing `board_rev` label".to_string(),
+        }));
+    };
+
+    Ok(App::Host(HostApp {
+        release_uuid,
+        image: svc.image,
+        board_rev,
+        updater,
+    }))
+}
+
+#[derive(Debug)]
 pub struct HostApp {
     pub release_uuid: Uuid,
     pub image: ImageUri,
@@ -181,7 +284,7 @@ pub struct HostApp {
 }
 
 /// Target app as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct UserApp {
     pub id: u32,
     pub name: String,
@@ -189,7 +292,7 @@ pub struct UserApp {
     pub releases: ReleaseMap,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ReleaseMap(HashMap<Uuid, Release>);
 
 impl Deref for ReleaseMap {
@@ -231,7 +334,7 @@ impl<'de> Deserialize<'de> for ReleaseMap {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Release {
     pub services: HashMap<String, Service>,
     pub volumes: HashMap<String, Volume>,
@@ -376,11 +479,10 @@ mod tests {
 
         });
 
-        let apps = serde_json::from_value::<AppMap>(json);
-        assert!(
-            apps.is_err_and(
-                |e| e.to_string() == "the hostapp must have at least one target release"
-            )
+        let err = serde_json::from_value::<AppMap>(json).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "hostapp should have at least one target release",
         );
     }
 
@@ -412,11 +514,19 @@ mod tests {
 
         });
 
-        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
         assert_eq!(
-            err.to_string(),
-            "apps.?.releases.?.services.main.composition.command: missing closing quote"
-        )
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.command: missing closing quote",
+        );
     }
 
     #[test]
@@ -455,11 +565,19 @@ mod tests {
 
         });
 
-        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
         assert_eq!(
-            err.to_string(),
-            "apps.?.releases.?.services.main.composition.networks.my-net.aliases: invalid type: string \"my-alias\", expected a sequence"
-        )
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.networks.my-net.aliases: invalid type: string \"my-alias\", expected a sequence",
+        );
     }
 
     #[test]
@@ -499,11 +617,19 @@ mod tests {
             }
         });
 
-        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
         assert_eq!(
-            err.to_string(),
-            "apps.?.releases.?.services.main.composition.volumes[0].read_only: invalid type: string \"yes\", expected a boolean"
-        )
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.volumes[0].read_only: invalid type: string \"yes\", expected a boolean",
+        );
     }
 
     #[test]
@@ -536,11 +662,19 @@ mod tests {
 
         });
 
-        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
         assert_eq!(
-            err.to_string(),
-            "apps.?.releases.?.services.main.composition.environment.MY_VAR: invalid type: sequence, expected a boolean, number, or string"
-        )
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.environment.MY_VAR: invalid type: sequence, expected a boolean, number, or string",
+        );
     }
 
     #[test]
@@ -573,11 +707,80 @@ mod tests {
 
         });
 
-        let err = serde_json::from_value::<Device>(json).unwrap_err();
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
         assert_eq!(
-            err.to_string(),
-            "apps.?.releases.?.services.main.composition.labels.my-label: invalid type: integer `123`, expected a string"
-        )
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.labels.my-label: invalid type: integer `123`, expected a string",
+        );
+    }
+
+    #[test]
+    fn test_rejects_only_invalid_app_keeping_valid_ones() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "good-app": {
+                    "id": 1,
+                    "name": "good",
+                    "releases": {
+                        "rel-good": {
+                            "id": 10,
+                            "services": {
+                                "main": {
+                                    "id": 100,
+                                    "image_id": 200,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                }
+                            }
+                        }
+                    }
+                },
+                "bad-app": {
+                    "id": 2,
+                    "name": "bad",
+                    "releases": {
+                        "rel-bad": {
+                            "id": 11,
+                            "services": {
+                                "main": {
+                                    "id": 101,
+                                    "image_id": 201,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "command": "echo 'unterminated"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let device: Device = serde_json::from_value(json).unwrap();
+        assert_eq!(device.apps.len(), 2);
+        assert!(matches!(
+            device.apps.get(&Uuid::from("good-app")),
+            Some(App::User(_)),
+        ));
+        let rejection = match device.apps.get(&Uuid::from("bad-app")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("bad-app should be rejected, got {other:?}"),
+        };
+        assert_eq!(rejection.release, Uuid::from("rel-bad"));
+        assert!(
+            rejection.reason.contains("missing closing quote"),
+            "unexpected reason: {}",
+            rejection.reason,
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use mahler::exception;
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
 use mahler::job;
 use mahler::state::Map;
@@ -47,13 +48,19 @@ fn create_app(
 ) -> IO<App, store::Error> {
     enforce!(maybe_app.is_none(), "app already exists");
 
-    let AppTarget { id, name, .. } = tgt_app;
+    let AppTarget {
+        id,
+        name,
+        rejected_release,
+        ..
+    } = tgt_app;
     let app = maybe_app.create(App {
         id,
         name,
         locked: false,
         lockfiles: Vec::new(),
         releases: Map::new(),
+        rejected_release,
     });
 
     with_io(app, async move |app| {
@@ -80,6 +87,19 @@ fn remove_app(mut app: View<Option<App>>) -> View<Option<App>> {
         app.take();
     }
     app
+}
+
+/// Set or clear the app's rejected release flag.
+///
+/// The field is in-memory only — it tracks the target's rejection state
+/// so the planner can preserve the current release via an exception and
+/// so the report layer can surface the rejected release uuid.
+fn set_rejected_release(
+    mut current: View<Option<Uuid>>,
+    Target(target): Target<Option<Uuid>>,
+) -> View<Option<Uuid>> {
+    *current = target;
+    current
 }
 
 /// Update the local app id
@@ -1251,6 +1271,17 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             }),
         )
         .jobs(
+            "/apps/{app_uuid}/rejected_release",
+            [job::any(set_rejected_release).with_description(
+                |Args(uuid): Args<Uuid>, Target(commit): Target<Option<Uuid>>| {
+                    format!(
+                        "set rejected target release for app '{uuid}' to {}",
+                        commit.as_ref().map(|c| c.as_str()).unwrap_or("none")
+                    )
+                },
+            )],
+        )
+        .jobs(
             "/apps/{app_uuid}/releases/{commit}",
             [
                 job::create(create_release).with_description(
@@ -1382,5 +1413,19 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     )
                 },
             ),
+        )
+        .exception(
+            "/apps/{app_uuid}/releases/{commit}",
+            exception::delete(
+                |SystemTarget(device): SystemTarget<Device>,
+                 Args((app_uuid, _)): Args<(Uuid, Uuid)>| {
+                    device
+                        .apps
+                        .get(&app_uuid)
+                        .and_then(|t_app| t_app.rejected_release.as_ref())
+                        .is_some()
+                },
+            )
+            .with_description(|| "app has an invalid target release"),
         )
 }

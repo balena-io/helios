@@ -1,4 +1,4 @@
-use helios_state::models::{Device, ImageRef};
+use helios_state::models::{App, Device, ImageRef};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ enum ServiceStatus {
 #[derive(Clone, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateStatus {
-    // Rejected,
+    Rejected,
     Aborted,
     Downloading,
     Downloaded,
@@ -188,8 +188,13 @@ impl From<LocalState> for DeviceReport {
                 continue;
             }
 
-            let release_is_unique = app.releases.len() == 1;
-            for (rel_uuid, rel) in app.releases {
+            let App {
+                releases,
+                rejected_release,
+                ..
+            } = app;
+            let release_is_unique = releases.len() == 1;
+            for (rel_uuid, rel) in releases {
                 for (svc_name, svc) in rel.services {
                     let svc_img = if let ImageRef::Uri(img) = svc.image {
                         img
@@ -267,6 +272,22 @@ impl From<LocalState> for DeviceReport {
                         },
                     );
                 }
+            }
+
+            // If the app contains a `rejected_release` property, add the release with
+            // `update_status: "rejected"`. This is independent of any still running releases.
+            if let Some(rejected) = rejected_release {
+                let report = apps.entry(app_uuid).or_insert(AppReport {
+                    release_uuid: None,
+                    releases: HashMap::new(),
+                });
+                report.releases.insert(
+                    rejected,
+                    ReleaseReport {
+                        update_status: UpdateStatus::Rejected,
+                        services: HashMap::new(),
+                    },
+                );
             }
         }
 
@@ -591,6 +612,142 @@ mod tests {
 
         assert!(apps.contains_key(&Uuid::from("my-app")));
         assert!(!apps.contains_key(&Uuid::from("other-app")));
+    }
+
+    #[test]
+    fn it_reports_rejected_release_alongside_current() {
+        // A rejected app whose current release is still running. The report
+        // should keep the current release entry (with its real status) and
+        // add a rejected release entry next to it.
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {
+                "img-a": {
+                    "oci_id": "sha256:abc",
+                    "download_progress": 100,
+                }
+            },
+            "apps": {
+                "rejected-app": {
+                    "id": 1,
+                    "rejected_release": "bad-release",
+                    "releases": {
+                        "current-release": {
+                            "installed": true,
+                            "services": {
+                                "svc-a": {
+                                    "id": 1,
+                                    "image": "img-a",
+                                    "oci": {
+                                        "name": "current-release_svc-a",
+                                        "status": "running",
+                                        "created": "2026-02-01T20:39:15+00:00"
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("rejected-app")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let app = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .and_then(|apps| apps.get(&Uuid::from("rejected-app")))
+            .expect("rejected app should be in the report");
+
+        // Current release still reported with its actual status.
+        assert_eq!(app.release_uuid, Some(Uuid::from("current-release")));
+        let current = app
+            .releases
+            .get(&Uuid::from("current-release"))
+            .expect("current release entry should be preserved");
+        assert_eq!(current.update_status, UpdateStatus::Done);
+        assert!(current.services.contains_key("svc-a"));
+
+        // Rejected release reported alongside.
+        let rejected = app
+            .releases
+            .get(&Uuid::from("bad-release"))
+            .expect("rejected release entry should be emitted");
+        assert_eq!(rejected.update_status, UpdateStatus::Rejected);
+        assert!(rejected.services.is_empty());
+    }
+
+    #[test]
+    fn it_reports_never_installed_rejected_app() {
+        // A rejected app with no current release: emit an app entry with
+        // a single rejected release.
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {},
+            "apps": {
+                "never-installed": {
+                    "id": 1,
+                    "rejected_release": "bad-release",
+                    "releases": {}
+                }
+            }
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("never-installed")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let app = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .and_then(|apps| apps.get(&Uuid::from("never-installed")))
+            .expect("rejected app should be in the report");
+        assert_eq!(app.release_uuid, None);
+        assert_eq!(app.releases.len(), 1);
+        let release = app
+            .releases
+            .get(&Uuid::from("bad-release"))
+            .expect("rejected release should be present");
+        assert_eq!(release.update_status, UpdateStatus::Rejected);
+    }
+
+    #[test]
+    fn it_skips_unauthorized_rejected_apps() {
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {},
+            "apps": {
+                "unauthorized-app": {
+                    "id": 1,
+                    "rejected_release": "rel",
+                    "releases": {}
+                }
+            }
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: Vec::new(),
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let apps = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .expect("apps should be present");
+        assert!(apps.is_empty());
     }
 
     #[test]

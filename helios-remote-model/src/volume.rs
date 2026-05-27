@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use super::labels::Labels;
 
 /// Target volume as defined by the remote backend
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct Volume {
     #[serde(default)]
     pub driver: Option<String>,

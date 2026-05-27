@@ -57,6 +57,7 @@ async fn get_or_create_app<'a>(
                 locked: false,
                 lockfiles: Vec::new(),
                 releases: Map::new(),
+                rejected_release: None,
             },
         );
     }
@@ -113,6 +114,7 @@ pub async fn read(
                         locked: false,
                         lockfiles: Vec::new(),
                         releases: Map::new(),
+                        rejected_release: None,
                     },
                 );
             }
