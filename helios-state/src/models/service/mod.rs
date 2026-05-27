@@ -245,6 +245,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
                 domainname: composition.domainname,
                 environment,
+                extra_hosts: composition.extra_hosts.unwrap_or_default(),
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,

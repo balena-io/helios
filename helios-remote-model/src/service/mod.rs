@@ -137,6 +137,10 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub oom_score_adj: Option<i64>,
 
+    /// Extra `/etc/hosts` entries as a hostname -> IP map.
+    #[serde(default, deserialize_with = "deserialize_extra_hosts")]
+    pub extra_hosts: Option<HashMap<String, String>>,
+
     #[serde(default)]
     pub pids_limit: Option<i64>,
 
@@ -172,6 +176,45 @@ where
         .map(validate_cpus)
         .transpose()
         .map_err(serde::de::Error::custom)
+}
+
+/// Deserialize Compose `extra_hosts` from a list of `host:ip`/`host=ip`
+/// strings or a `host: ip` mapping into a hostname -> IP map.
+fn deserialize_extra_hosts<'de, D>(
+    deserializer: D,
+) -> Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ExtraHosts {
+        List(Vec<String>),
+        Map(HashMap<String, String>),
+    }
+
+    let Some(raw) = Option::<ExtraHosts>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let map = match raw {
+        ExtraHosts::Map(map) => map,
+        ExtraHosts::List(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                // The hostname can't contain `:` or `=`, so the first of either
+                // separates host from IP
+                let sep = entry.find([':', '=']).ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "entry `{entry}` must be in `host:ip` or `host=ip` form"
+                    ))
+                })?;
+                Ok((entry[..sep].to_string(), entry[sep + 1..].to_string()))
+            })
+            .collect::<Result<_, D::Error>>()?,
+    };
+
+    Ok(Some(map))
 }
 
 #[cfg(test)]
@@ -358,6 +401,52 @@ mod tests {
         assert_eq!(comp.pids_limit, Some(100));
         assert_eq!(comp.shm_size, Some(67108864));
         assert_eq!(comp.stop_grace_period, Some(30));
+    }
+
+    #[test]
+    fn composition_extra_hosts_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.extra_hosts, None);
+    }
+
+    #[test]
+    fn composition_extra_hosts_accepts_list_with_either_separator() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "extra_hosts": ["foo=127.0.0.1", "bar:8.8.8.8", "v6:2001:db8::1"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.extra_hosts,
+            Some(HashMap::from([
+                ("foo".to_string(), "127.0.0.1".to_string()),
+                ("bar".to_string(), "8.8.8.8".to_string()),
+                ("v6".to_string(), "2001:db8::1".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_extra_hosts_accepts_mapping() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "extra_hosts": {"foo": "127.0.0.1", "bar": "8.8.8.8"},
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.extra_hosts,
+            Some(HashMap::from([
+                ("foo".to_string(), "127.0.0.1".to_string()),
+                ("bar".to_string(), "8.8.8.8".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_extra_hosts_rejects_entry_without_separator() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "extra_hosts": ["noseparator"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("host:ip"), "{err}");
     }
 
     #[test]
