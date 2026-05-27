@@ -1,4 +1,49 @@
 - commits:
+    - subject: Make LockSet::try_lock idempotent
+      hash: eff03f7635637b6d0f16993f7c15b6936741baa8
+      body: >
+        This is the correct behavior, if the lock already exists on the set, a
+
+        new locking operation returns successfully since helios already has the
+        lock.
+
+
+        The previous implementation could cause issues if cancelling an apply an
+
+        operation after taking the locks but before releasing them, a new apply
+
+        would fail forever since locks were already in the lockset.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Flock the directory before force locking
+      hash: 1eccedbc55533020d0dd67a4f778a1f78e4ef044
+      body: |
+        This prevents two instances of helios stepping on each other if forcing
+        locks at the same time.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Allow to force acquire locks
+      hash: 6737c6ae82c398a44d01e64fa7ffc6be945b5ace
+      body: |
+        Poll requests triggered with `force: true` now tell the worker to force
+        acquire locks if taken by the user app. Locking will still fail if the
+        lock is being held by another helios process to prevent creating
+        inconsistent state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.5
+  title: ""
+  date: 2026-05-27T20:57:32.284Z
+- commits:
     - subject: Enable run_task log messages
       hash: b777aeb8c4c532f1d2abb53aaa4d4b73991d152f
       body: >
