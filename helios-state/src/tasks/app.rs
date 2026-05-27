@@ -7,6 +7,7 @@ use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
+use tracing::warn;
 
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
@@ -17,7 +18,7 @@ use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
-use crate::util::locking::{self, LockSet};
+use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
     any_images_are_pending_download, find_future_network, find_future_service, find_future_volume,
@@ -184,12 +185,17 @@ fn take_locks(
     mut app: View<App>,
     host_runtime_dir: Res<HostRuntimeDir>,
     locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
 ) -> IO<App, io::Error> {
     app.locked = true;
     with_io(app, async move |mut app| {
         let host_runtime_dir = host_runtime_dir
             .as_ref()
             .expect("host_runtime_dir resource should be available");
+        let force_acquire_locks = force_acquire_locks
+            .as_ref()
+            .expect("force_acquire_locks should be available")
+            .enabled();
 
         // resolve a lock file for each running service whose /tmp/balena bind
         // mount lives under the host runtime directory, grouping the services
@@ -217,11 +223,15 @@ fn take_locks(
                 acc
             });
 
+        if force_acquire_locks && !service_locks.is_empty() {
+            warn!("taking locks by force per-user request");
+        }
+
         let acquired = run_async(move || {
             let locks = locks.as_ref().expect("locks resource should be available");
             let mut acquired: Vec<PathBuf> = Vec::with_capacity(service_locks.len());
             for (lock_path, svc_names) in service_locks {
-                if let Err(e) = locks.try_lock(lock_path.clone()) {
+                if let Err(e) = locks.try_lock(lock_path.clone(), force_acquire_locks) {
                     for p in acquired {
                         let _ = locks.unlock(p);
                     }
@@ -1030,7 +1040,6 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
         let _ = svc.flush().await;
 
         // stop the container
-        // FIXME: this needs update locks
         docker
             .container()
             .stop(&container_id)
