@@ -897,6 +897,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "go-parse-duration"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "558b88954871f5e5b2af0e62e2e176c8bde7a6c2c4ed41b13d138d96da2e2cbd"
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1037,6 +1043,7 @@ dependencies = [
 name = "helios-remote-model"
 version = "0.25.7"
 dependencies = [
+ "go-parse-duration",
  "helios-util",
  "indexmap",
  "serde",

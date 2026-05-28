@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::duration::{DurationMicros, DurationSecs};
 use serde::{Deserialize, Deserializer};
 
 use crate::common_types::{Environment, ImageUri, Value};
@@ -54,10 +55,10 @@ pub struct ServiceComposition {
     pub cpuset: Option<String>,
 
     #[serde(default)]
-    pub cpu_rt_period: Option<i64>,
+    pub cpu_rt_period: Option<DurationMicros>,
 
     #[serde(default)]
-    pub cpu_rt_runtime: Option<i64>,
+    pub cpu_rt_runtime: Option<DurationMicros>,
 
     #[serde(default)]
     pub cpu_shares: Option<i64>,
@@ -110,7 +111,7 @@ pub struct ServiceComposition {
     pub shm_size: Option<i64>,
 
     #[serde(default)]
-    pub stop_grace_period: Option<i64>,
+    pub stop_grace_period: Option<DurationSecs>,
 
     #[serde(default)]
     pub stop_signal: Option<String>,
@@ -225,6 +226,20 @@ mod tests {
     fn composition_defaults_restart_to_always() {
         let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(comp.restart, RestartPolicy::Always);
+    }
+
+    #[test]
+    fn composition_parses_stop_grace_period_string() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"stop_grace_period": "15s"})).unwrap();
+        assert_eq!(comp.stop_grace_period.map(DurationSecs::to_i64), Some(15));
+    }
+
+    #[test]
+    fn composition_parses_stop_grace_period_int() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"stop_grace_period": 30})).unwrap();
+        assert_eq!(comp.stop_grace_period.map(DurationSecs::to_i64), Some(30));
     }
 
     #[test]
@@ -391,8 +406,14 @@ mod tests {
             "stop_grace_period": 30,
         }))
         .unwrap();
-        assert_eq!(comp.cpu_rt_period, Some(1000000));
-        assert_eq!(comp.cpu_rt_runtime, Some(950000));
+        assert_eq!(
+            comp.cpu_rt_period.map(DurationMicros::to_i64),
+            Some(1000000)
+        );
+        assert_eq!(
+            comp.cpu_rt_runtime.map(DurationMicros::to_i64),
+            Some(950000)
+        );
         assert_eq!(comp.cpu_shares, Some(2048));
         assert_eq!(comp.cpus, Some(1.5));
         assert_eq!(comp.mem_limit, Some(1073741824));
@@ -400,7 +421,35 @@ mod tests {
         assert_eq!(comp.oom_score_adj, Some(-500));
         assert_eq!(comp.pids_limit, Some(100));
         assert_eq!(comp.shm_size, Some(67108864));
-        assert_eq!(comp.stop_grace_period, Some(30));
+        assert_eq!(comp.stop_grace_period.map(DurationSecs::to_i64), Some(30));
+    }
+
+    #[test]
+    fn composition_number_fields_parse_cpu_rt_duration_strings() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cpu_rt_period": "1000000us",
+            "cpu_rt_runtime": "1s",
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.cpu_rt_period.map(DurationMicros::to_i64),
+            Some(1000000)
+        );
+        assert_eq!(
+            comp.cpu_rt_runtime.map(DurationMicros::to_i64),
+            Some(1000000)
+        );
+
+        let comp2: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cpu_rt_period": "900ms",
+            "cpu_rt_runtime": "200000ns",
+        }))
+        .unwrap();
+        assert_eq!(
+            comp2.cpu_rt_period.map(DurationMicros::to_i64),
+            Some(900000)
+        );
+        assert_eq!(comp2.cpu_rt_runtime.map(DurationMicros::to_i64), Some(200));
     }
 
     #[test]

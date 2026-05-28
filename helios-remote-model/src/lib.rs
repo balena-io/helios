@@ -11,11 +11,13 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+mod duration;
 mod labels;
 mod network;
 mod service;
 mod volume;
 
+pub use duration::{DurationMicros, DurationNanos, DurationSecs};
 pub use labels::*;
 pub use network::*;
 pub use service::*;
