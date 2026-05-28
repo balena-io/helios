@@ -944,6 +944,7 @@ name = "helios-legacy"
 version = "0.25.9"
 dependencies = [
  "axum",
+ "helios-oci",
  "helios-util",
  "mockito",
  "reqwest",

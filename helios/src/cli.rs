@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,9 +12,31 @@ fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     Ok(Duration::from_millis(millis))
 }
 
+/// Multicall root: the program name (`argv[0]` basename) selects the applet,
+/// busybox-style. Invoking the binary as `helios` runs the daemon; invoking it
+/// as `helios-legacy-takeover` (via symlink) runs the takeover migration.
 #[derive(Clone, Debug, Parser)]
-#[command(version, about, long_about = None)] // read from Cargo.toml
-pub struct Cli {
+#[command(multicall = true)]
+struct Cli {
+    #[command(subcommand)]
+    applet: Applet,
+}
+
+// Parsed once at startup and immediately destructured, so the size gap between
+// the daemon and takeover variants doesn't matter; boxing would also break the
+// clap `Subcommand` derive, which requires the inner type to impl `Args`.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, Subcommand)]
+pub enum Applet {
+    /// Run the helios daemon (invoked as `helios`).
+    #[command(version, about, long_about = None)]
+    Helios(DaemonArgs),
+    /// Take over the legacy supervisor (invoked as `helios-legacy-takeover`).
+    HeliosLegacyTakeover(TakeoverArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct DaemonArgs {
     /// Unique identifier for this device
     #[arg(env = "HELIOS_UUID", long = "uuid", value_name = "uuid")]
     pub uuid: Option<Uuid>,
@@ -176,6 +198,26 @@ pub struct Cli {
     pub provisioning_supervisor_version: Option<String>,
 }
 
-pub fn parse() -> Cli {
-    Parser::parse()
+#[derive(Clone, Debug, Args)]
+pub struct TakeoverArgs {
+    /// Value written verbatim to the supervisor's `apiEndpointOverride`
+    #[arg(long = "override-host", value_name = "url")]
+    pub host_override: String,
+
+    /// Value written verbatim to the supervisor's `listenPortOverride`
+    #[arg(long = "override-port", value_name = "port")]
+    pub port_override: u16,
+}
+
+impl From<TakeoverArgs> for helios_legacy::TakeoverConfig {
+    fn from(args: TakeoverArgs) -> Self {
+        Self {
+            host_override: args.host_override,
+            port_override: args.port_override,
+        }
+    }
+}
+
+pub fn parse() -> Applet {
+    Cli::parse().applet
 }

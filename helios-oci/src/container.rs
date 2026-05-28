@@ -5,6 +5,8 @@ use bollard::{
         ContainerInspectResponse, ContainerStateStatusEnum, EndpointIpamConfig, EndpointSettings,
         HealthStatusEnum, NetworkingConfig, RestartPolicyNameEnum,
     },
+    container::LogOutput,
+    exec::{CreateExecOptions, StartExecResults},
     models::{
         ContainerCreateBody, MountBindOptions, MountBindOptionsPropagationEnum, MountTmpfsOptions,
         MountType, MountVolumeOptions,
@@ -232,6 +234,82 @@ impl<N: Namespace> Container<'_, N> {
 
         Ok(archive)
     }
+
+    /// Run a command inside an existing container, returning its captured
+    /// output and exit code.
+    pub async fn exec(&self, id: &str, cmd: &[&str], env: &[&str]) -> Result<ExecOutput> {
+        let exec = self
+            .client
+            .inner()
+            .create_exec(
+                id,
+                CreateExecOptions {
+                    cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
+                    env: Some(env.iter().map(|s| s.to_string()).collect()),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| {
+                Error::from(e).context(format!("failed to create exec in container {id}"))
+            })?;
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+
+        if let StartExecResults::Attached { mut output, .. } = self
+            .client
+            .inner()
+            .start_exec(&exec.id, None)
+            .await
+            .map_err(|e| {
+                Error::from(e).context(format!("failed to start exec in container {id}"))
+            })?
+        {
+            while let Some(res) = output.next().await {
+                let chunk = res.map_err(|e| {
+                    Error::from(e)
+                        .context(format!("failed to read exec output from container {id}"))
+                })?;
+                match chunk {
+                    LogOutput::StdOut { message } => {
+                        stdout.push_str(&String::from_utf8_lossy(&message))
+                    }
+                    LogOutput::StdErr { message } => {
+                        stderr.push_str(&String::from_utf8_lossy(&message))
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let exit_code = self
+            .client
+            .inner()
+            .inspect_exec(&exec.id)
+            .await
+            .map_err(|e| {
+                Error::from(e).context(format!("failed to inspect exec in container {id}"))
+            })?
+            .exit_code
+            .ok_or_else(|| format!("failed to get exit code for exec in container {id}"))?;
+
+        Ok(ExecOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
+    }
+}
+
+/// Captured output of a command run via [`Container::exec`].
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i64,
 }
 
 // by ref in order to clone only what's necessary to build LocalImage.

@@ -24,7 +24,7 @@ use helios_util as util;
 use helios_util::types::Uuid;
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
-use crate::cli::Cli;
+use crate::cli::DaemonArgs;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use crate::oci::RegistryAuth;
 use crate::remote::{
@@ -60,10 +60,18 @@ fn initialize_tracing() {
 async fn main() -> Result<(), Box<dyn Error>> {
     initialize_tracing();
 
+    // Dispatch on the applet selected by argv[0] (busybox-style multicall).
+    let cli = match cli::parse() {
+        cli::Applet::HeliosLegacyTakeover(args) => {
+            let oci = oci::Client::connect().await?;
+            legacy::takeover(&oci, args.into()).await?;
+            return Ok(());
+        }
+        cli::Applet::Helios(args) => args,
+    };
+
     // make sure the runtime dir exists
     util::dirs::ensure_runtime_dir()?;
-
-    let cli = cli::parse();
 
     // Create a new configuration store instance
     let config_store = DocumentStore::with_root(config_dir()).await?;
@@ -264,7 +272,7 @@ where
 /// If `remote_config` is nil, then we aren't registered and need to provision.
 /// If `remote_config` is still nil after provisioning, then we'll run in "unmanaged" mode.
 async fn maybe_provision(
-    cli: &Cli,
+    cli: &DaemonArgs,
     config_store: &DocumentStore,
 ) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
     // Load our provisioning config, if one exists
