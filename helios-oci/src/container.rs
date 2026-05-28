@@ -274,6 +274,19 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cpu_shares.take())
             .unwrap_or(0);
+        // Engine reports each entry as `host:ip`; split on the first `:` so
+        // IPv6 addresses remain untouched.
+        let extra_hosts = host_config
+            .as_mut()
+            .and_then(|hc| hc.extra_hosts.take())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|entry| {
+                entry
+                    .split_once(':')
+                    .map(|(host, ip)| (host.to_string(), ip.to_string()))
+            })
+            .collect::<HashMap<_, _>>();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -427,6 +440,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_shares,
             domainname,
             environment,
+            extra_hosts,
             healthcheck,
             hostname,
             init,
@@ -1165,6 +1179,11 @@ pub struct ContainerConfig {
     /// Maximum number of process IDs allowed in the container
     pub pids_limit: Option<i64>,
 
+    /// Extra entries added to the container's `/etc/hosts`, each in the
+    /// engine's `host:ip` form.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub extra_hosts: HashMap<String, String>,
+
     /// Network endpoint configurations, ordered by connection priority.
     ///
     /// Mutually exclusive with `network_mode`.
@@ -1197,6 +1216,7 @@ impl PartialEq for ContainerConfig {
             && self.cpu_shares == other.cpu_shares
             && self.domainname == other.domainname
             && self.environment == other.environment
+            && self.extra_hosts == other.extra_hosts
             && self.healthcheck == other.healthcheck
             && self.hostname == other.hostname
             && self.init == other.init
@@ -1240,6 +1260,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares,
             domainname,
             environment,
+            extra_hosts,
             healthcheck,
             hostname,
             init,
@@ -1333,6 +1354,12 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_realtime_period: non_zero(cpu_rt_period),
             cpu_realtime_runtime: non_zero(cpu_rt_runtime),
             cpu_shares: non_zero(cpu_shares),
+            extra_hosts: (!extra_hosts.is_empty()).then(|| {
+                extra_hosts
+                    .into_iter()
+                    .map(|(host, ip)| format!("{host}:{ip}"))
+                    .collect()
+            }),
             init,
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
@@ -1687,6 +1714,63 @@ mod tests {
         assert_eq!(hc.oom_score_adj, Some(-500));
         assert_eq!(hc.pids_limit, Some(100));
         assert_eq!(hc.shm_size, Some(67108864));
+    }
+
+    #[test]
+    fn inspect_reads_extra_hosts() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                extra_hosts: Some(vec![
+                    "foo:127.0.0.1".to_string(),
+                    "bar:8.8.8.8".to_string(),
+                    "v6:2001:db8::1".to_string(),
+                    "other-v6:::1".to_string(),
+                ]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.extra_hosts,
+            HashMap::from([
+                ("foo".to_string(), "127.0.0.1".to_string()),
+                ("bar".to_string(), "8.8.8.8".to_string()),
+                ("v6".to_string(), "2001:db8::1".to_string()),
+                ("other-v6".to_string(), "::1".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_extra_hosts() {
+        let cfg = ContainerConfig {
+            extra_hosts: HashMap::from([
+                ("foo".to_string(), "127.0.0.1".to_string()),
+                ("bar".to_string(), "8.8.8.8".to_string()),
+            ]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        let mut hosts = hc.extra_hosts.unwrap();
+        hosts.sort();
+        assert_eq!(
+            hosts,
+            vec!["bar:8.8.8.8".to_string(), "foo:127.0.0.1".to_string()]
+        );
+
+        // An empty map should not emit an ExtraHosts entry on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().extra_hosts, None);
     }
 
     #[test]
