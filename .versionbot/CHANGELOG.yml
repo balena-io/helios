@@ -1,4 +1,19 @@
 - commits:
+    - subject: Support service.extra_hosts
+      hash: 9bb87e5202541069cbc4dde1a6783228bc15459f
+      body: |
+        Compose accepts entries as both host:ip and host=ip while
+        the engine expects host:ip, so = is converted to : if exists
+        during deserialization time at the remote-model layer.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.25.7
+  title: ""
+  date: 2026-05-28T00:17:10.965Z
+- commits:
     - subject: Update integration tests
       hash: 44477041b0aa1ba13c62952654b89371b082b351
       body: |
