@@ -1,4 +1,24 @@
 - commits:
+    - subject: Parse Compose duration strings using go-parse-duration
+      hash: 81878959351f4db344474af59dbde397f15f77df
+      body: >
+        - Accept Go/Compose duration strings (e.g. "1m30s") or bare ints for
+          healthcheck timings, stop_grace_period, and cpu_rt_period/runtime
+        - Add DurationNanos/DurationSecs/DurationMicros wrappers generated
+          by a duration! macro, each with a to_nanos/to_secs/to_micros conversion
+      footer:
+        See: https://docs.docker.com/reference/compose-file/extension/#specifying-durations
+        see: https://docs.docker.com/reference/compose-file/extension/#specifying-durations
+        Relates-to: balena-os/balena-supervisor#2525
+        relates-to: balena-os/balena-supervisor#2525
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.25.8
+  title: ""
+  date: 2026-05-29T17:49:11.508Z
+- commits:
     - subject: Support service.extra_hosts
       hash: 9bb87e5202541069cbc4dde1a6783228bc15459f
       body: |
