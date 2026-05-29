@@ -17,6 +17,7 @@ helios-util.workspace = true
 
 go-parse-duration.workspace = true
 indexmap.workspace = true
+parse-size.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true

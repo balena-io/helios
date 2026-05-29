@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::duration::{DurationMicros, DurationSecs};
 use serde::{Deserialize, Deserializer};
 
+use crate::byte_size::ByteSize;
 use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
@@ -90,10 +91,10 @@ pub struct ServiceComposition {
     pub labels: Labels,
 
     #[serde(default)]
-    pub mem_limit: Option<i64>,
+    pub mem_limit: Option<ByteSize>,
 
     #[serde(default)]
-    pub mem_reservation: Option<i64>,
+    pub mem_reservation: Option<ByteSize>,
 
     #[serde(default)]
     pub privileged: bool,
@@ -108,7 +109,7 @@ pub struct ServiceComposition {
     pub runtime: Option<String>,
 
     #[serde(default)]
-    pub shm_size: Option<i64>,
+    pub shm_size: Option<ByteSize>,
 
     #[serde(default)]
     pub stop_grace_period: Option<DurationSecs>,
@@ -416,11 +417,14 @@ mod tests {
         );
         assert_eq!(comp.cpu_shares, Some(2048));
         assert_eq!(comp.cpus, Some(1.5));
-        assert_eq!(comp.mem_limit, Some(1073741824));
-        assert_eq!(comp.mem_reservation, Some(536870912));
+        assert_eq!(comp.mem_limit.map(ByteSize::to_bytes), Some(1073741824));
+        assert_eq!(
+            comp.mem_reservation.map(ByteSize::to_bytes),
+            Some(536870912)
+        );
         assert_eq!(comp.oom_score_adj, Some(-500));
         assert_eq!(comp.pids_limit, Some(100));
-        assert_eq!(comp.shm_size, Some(67108864));
+        assert_eq!(comp.shm_size.map(ByteSize::to_bytes), Some(67108864));
         assert_eq!(comp.stop_grace_period.map(DurationSecs::to_i64), Some(30));
     }
 
@@ -450,6 +454,22 @@ mod tests {
             Some(900000)
         );
         assert_eq!(comp2.cpu_rt_runtime.map(DurationMicros::to_i64), Some(200));
+    }
+
+    #[test]
+    fn composition_byte_fields_parse_strings() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "mem_limit": "1g",
+            "mem_reservation": "512mb",
+            "shm_size": "64MiB",
+        }))
+        .unwrap();
+        assert_eq!(comp.mem_limit.map(ByteSize::to_bytes), Some(1073741824));
+        assert_eq!(
+            comp.mem_reservation.map(ByteSize::to_bytes),
+            Some(536870912)
+        );
+        assert_eq!(comp.shm_size.map(ByteSize::to_bytes), Some(67108864));
     }
 
     #[test]
