@@ -7,9 +7,9 @@ use crate::oci::{
     NetworkMode, NetworkSettings, RestartPolicy,
 };
 use crate::remote_model::{
-    BindPropagation as RemoteBindPropagation, Cgroup as RemoteCgroup, Mount as RemoteMount,
-    NetworkMode as RemoteNetworkMode, RestartPolicy as RemoteRestartPolicy,
-    Service as RemoteServiceTarget,
+    BindPropagation as RemoteBindPropagation, Cgroup as RemoteCgroup, DurationMicros,
+    DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
+    RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
 };
 
 use super::image::ImageRef;
@@ -240,8 +240,14 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 cgroup_parent: composition.cgroup_parent,
                 command,
                 cpuset: composition.cpuset,
-                cpu_rt_period: composition.cpu_rt_period.unwrap_or(0),
-                cpu_rt_runtime: composition.cpu_rt_runtime.unwrap_or(0),
+                cpu_rt_period: composition
+                    .cpu_rt_period
+                    .map(DurationMicros::to_i64)
+                    .unwrap_or(0),
+                cpu_rt_runtime: composition
+                    .cpu_rt_runtime
+                    .map(DurationMicros::to_i64)
+                    .unwrap_or(0),
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
                 domainname: composition.domainname,
                 environment,
@@ -267,7 +273,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 restart_policy,
                 runtime: composition.runtime,
                 shm_size: composition.shm_size,
-                stop_grace_period: composition.stop_grace_period,
+                stop_grace_period: composition.stop_grace_period.map(DurationSecs::to_i64),
                 stop_signal: composition.stop_signal,
                 tty: composition.tty,
                 user: composition.user,
@@ -282,10 +288,10 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     // the service to inherit the image's HEALTHCHECK
                     let hc = Healthcheck {
                         test: h.test,
-                        interval: h.interval,
-                        timeout: h.timeout,
-                        start_period: h.start_period,
-                        start_interval: h.start_interval,
+                        interval: h.interval.map(DurationNanos::to_i64),
+                        timeout: h.timeout.map(DurationNanos::to_i64),
+                        start_period: h.start_period.map(DurationNanos::to_i64),
+                        start_interval: h.start_interval.map(DurationNanos::to_i64),
                         retries: h.retries,
                     };
                     (!hc.is_empty()).then_some(hc)
