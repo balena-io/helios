@@ -7,7 +7,7 @@ use crate::oci::{
     NetworkMode, NetworkSettings, RestartPolicy,
 };
 use crate::remote_model::{
-    BindPropagation as RemoteBindPropagation, Cgroup as RemoteCgroup, DurationMicros,
+    BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
     DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
     RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
 };
@@ -255,8 +255,11 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,
-                mem_limit: composition.mem_limit.unwrap_or(0),
-                mem_reservation: composition.mem_reservation.unwrap_or(0),
+                mem_limit: composition.mem_limit.map(ByteSize::to_bytes).unwrap_or(0),
+                mem_reservation: composition
+                    .mem_reservation
+                    .map(ByteSize::to_bytes)
+                    .unwrap_or(0),
                 // Compose ships fractional CPU; engine takes nano-CPUs. The
                 // value is validated at deserialization time, so a plain cast
                 // is safe here. Round to nearest to avoid drift on values like
@@ -272,7 +275,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 read_only: composition.read_only,
                 restart_policy,
                 runtime: composition.runtime,
-                shm_size: composition.shm_size,
+                shm_size: composition.shm_size.map(ByteSize::to_bytes),
                 stop_grace_period: composition.stop_grace_period.map(DurationSecs::to_i64),
                 stop_signal: composition.stop_signal,
                 tty: composition.tty,
