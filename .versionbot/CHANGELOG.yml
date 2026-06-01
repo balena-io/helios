@@ -1,4 +1,23 @@
 - commits:
+    - subject: Parse Compose byte values using parse-size
+      hash: eb81b5d9db9861213c586463a0db2257c154a9ba
+      body: >
+        - Accept Compose/Docker byte-value strings such as "1g", "512mb",
+          "1.5GiB"  or bare ints for mem_limit, mem_reservation, and shm_size
+        - Add a ByteSize wrapper deserializing using parse-size crate in
+        1024-based
+          mode to match docker's RAMInBytes, with a to_bytes conversion
+      footer:
+        See: https://docs.docker.com/reference/compose-file/extension/#specifying-byte-values
+        see: https://docs.docker.com/reference/compose-file/extension/#specifying-byte-values
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.25.9
+  title: ""
+  date: 2026-06-01T22:05:41.872Z
+- commits:
     - subject: Parse Compose duration strings using go-parse-duration
       hash: 81878959351f4db344474af59dbde397f15f77df
       body: >
