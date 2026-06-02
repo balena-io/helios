@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
 
+pub use crate::oci::Health;
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck,
     LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
@@ -55,6 +56,8 @@ pub struct Container {
     pub created: DateTime,
     pub status: ContainerStatus,
     pub exit_code: Option<i64>,
+    #[serde(default)]
+    pub health: Health,
 }
 
 impl Container {
@@ -65,6 +68,7 @@ impl Container {
             created: DateTime::default(),
             status: ContainerStatus::Created,
             exit_code: None,
+            health: Health::None,
         }
     }
 }
@@ -76,6 +80,7 @@ impl From<(&str, oci::ContainerState)> for Container {
             status,
             created,
             exit_code,
+            health,
             ..
         } = container_state;
 
@@ -84,6 +89,7 @@ impl From<(&str, oci::ContainerState)> for Container {
             status: status.into(),
             created,
             exit_code,
+            health,
         }
     }
 }
