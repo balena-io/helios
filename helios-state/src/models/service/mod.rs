@@ -44,12 +44,37 @@ impl From<oci::ContainerStatus> for ContainerStatus {
     }
 }
 
+/// Container health as reported by the engine's healthcheck
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Health {
+    #[default]
+    None,
+    Starting,
+    Healthy,
+    Unhealthy,
+}
+
+impl From<oci::Health> for Health {
+    fn from(value: oci::Health) -> Self {
+        use oci::Health::*;
+        match value {
+            None => Self::None,
+            Starting => Self::Starting,
+            Healthy => Self::Healthy,
+            Unhealthy => Self::Unhealthy,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Container {
     pub name: String,
     pub created: DateTime,
     pub status: ContainerStatus,
     pub exit_code: Option<i64>,
+    #[serde(default)]
+    pub health: Health,
 }
 
 impl Container {
@@ -60,6 +85,7 @@ impl Container {
             created: DateTime::default(),
             status: ContainerStatus::Created,
             exit_code: None,
+            health: Health::None,
         }
     }
 }
@@ -71,6 +97,7 @@ impl From<(&str, oci::ContainerState)> for Container {
             status,
             created,
             exit_code,
+            health,
             ..
         } = container_state;
 
@@ -79,6 +106,7 @@ impl From<(&str, oci::ContainerState)> for Container {
             status: status.into(),
             created,
             exit_code,
+            health: health.into(),
         }
     }
 }

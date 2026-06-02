@@ -475,10 +475,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .context("container creation date should be a valid date")?;
 
         let state = value.state.ok_or("container state should not be nil")?;
-        let healthy = state
+        let health = state
             .health
             .and_then(|health| health.status)
-            .map(|status| status == HealthStatusEnum::HEALTHY)
+            .map(Health::from)
             .unwrap_or_default();
         let status = state
             .status
@@ -489,7 +489,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let state = ContainerState {
             created,
             error: state.error,
-            healthy,
+            health,
             status,
             exit_code,
         };
@@ -531,15 +531,35 @@ impl From<ContainerStateStatusEnum> for ContainerStatus {
     }
 }
 
+/// Container health as reported by the engine's healthcheck.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Health {
+    #[default]
+    None,
+    Starting,
+    Healthy,
+    Unhealthy,
+}
+
+impl From<HealthStatusEnum> for Health {
+    fn from(value: HealthStatusEnum) -> Self {
+        use HealthStatusEnum::*;
+        match value {
+            EMPTY | NONE => Health::None,
+            STARTING => Health::Starting,
+            HEALTHY => Health::Healthy,
+            UNHEALTHY => Health::Unhealthy,
+        }
+    }
+}
+
 /// Container state summary
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerState {
     /// The container runtime status
     pub status: ContainerStatus,
-    /// Container health status, `true` means the container
-    /// is healthy, `false` means the container health status is
-    /// undetermined
-    pub healthy: bool,
+    /// Container health as reported by the engine's healthcheck
+    pub health: Health,
     /// Container creation date
     pub created: DateTime,
     /// Last error message from the container
@@ -1570,6 +1590,41 @@ mod tests {
     fn inspect_exit_code_is_none_when_absent() {
         let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
         assert_eq!(c.state.exit_code, None);
+    }
+
+    #[test]
+    fn inspect_maps_health_status() {
+        let with_status = |status: HealthStatusEnum| ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig::default()),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                health: Some(bollard::models::Health {
+                    status: Some(status),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (status, expected) in [
+            (HealthStatusEnum::HEALTHY, Health::Healthy),
+            (HealthStatusEnum::UNHEALTHY, Health::Unhealthy),
+            (HealthStatusEnum::STARTING, Health::Starting),
+            (HealthStatusEnum::NONE, Health::None),
+        ] {
+            let c: LocalContainer = with_status(status).try_into().unwrap();
+            assert_eq!(c.state.health, expected);
+        }
+    }
+
+    #[test]
+    fn inspect_health_is_none_when_absent() {
+        let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
+        assert_eq!(c.state.health, Health::None);
     }
 
     #[test]
