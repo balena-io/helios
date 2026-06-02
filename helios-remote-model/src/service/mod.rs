@@ -8,6 +8,7 @@ use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
 mod command;
+mod depends_on;
 mod devices;
 mod healthcheck;
 mod network_mode;
@@ -20,6 +21,7 @@ mod volumes;
 
 pub use cgroup::*;
 pub use command::*;
+pub use depends_on::*;
 pub use devices::*;
 pub use healthcheck::*;
 pub use network_mode::*;
@@ -118,6 +120,9 @@ pub struct ServiceComposition {
     /// Custom DNS search domains, single string or list.
     #[serde(default, deserialize_with = "deserialize_string_or_list")]
     pub dns_search: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub depends_on: DependsOn,
 
     #[serde(default)]
     pub domainname: Option<String>,

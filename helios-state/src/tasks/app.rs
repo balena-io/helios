@@ -718,7 +718,11 @@ fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id, image, config, ..
+        id,
+        image,
+        config,
+        depends_on,
+        ..
     } = tgt;
     maybe_svc.create(Service {
         id,
@@ -727,6 +731,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         started: false,
         oci: None,
         config,
+        depends_on,
     })
 }
 
@@ -868,8 +873,12 @@ fn install_service(
         svc.installing = true;
         let _ = svc.flush().await;
 
-        let mut container_config =
-            std::mem::take(&mut svc.config).into_oci_config(svc.id, &svc_name, &app_uuid);
+        let mut container_config = std::mem::take(&mut svc.config).into_oci_config(
+            svc.id,
+            &svc_name,
+            &app_uuid,
+            &svc.depends_on,
+        );
 
         // Extract networks to connect later
         let mut networks = std::mem::take(&mut container_config.networks);
