@@ -188,6 +188,7 @@ pub fn service_matches_target(
     svc.image.is_same_artifact(&t_svc.image)
         && svc.config == t_svc.config
         && svc.started == t_svc.started
+        && svc.depends_on == t_svc.depends_on
         && linked_resources_can_migrate(
             device,
             t_device,

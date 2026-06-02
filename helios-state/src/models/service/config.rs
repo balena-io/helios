@@ -15,6 +15,7 @@ const LABEL_CONFIG_ANNOTATIONS: &str = "io.balena.private.config.annotations";
 const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
+pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 
@@ -223,6 +224,7 @@ impl ServiceConfig {
         svc_id: u32,
         svc_name: &str,
         app_uuid: &Uuid,
+        depends_on: &super::DependsOn,
     ) -> oci::ContainerConfig {
         let mut config = self.0;
 
@@ -307,6 +309,12 @@ impl ServiceConfig {
         labels.insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
         labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
         labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
+
+        if !depends_on.is_empty()
+            && let Ok(encoded) = json::to_string(depends_on)
+        {
+            labels.insert(LABEL_DEPENDS_ON.to_string(), encoded);
+        }
 
         let namespace = LocalNamespace::from(app_uuid.as_str());
 
@@ -399,7 +407,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
 
         let back = ServiceConfig::from(with_labels);
         assert_eq!(back.command, original.command);
@@ -476,7 +484,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
 
         // Simulate the engine attaching its own annotations to the container
         with_labels.annotations.insert(
@@ -493,7 +501,7 @@ mod tests {
         // Without a composition-defined annotation the tracking label is an
         // empty list, so engine-added annotations are dropped on read
         let svc = ServiceConfig(oci::ContainerConfig::default());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
         with_labels
             .annotations
             .insert("io.container.manager".to_string(), "libpod".to_string());
@@ -512,7 +520,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
 
         let back = ServiceConfig::from(with_labels);
         assert_eq!(back.ports, original.ports);
@@ -543,7 +551,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
 
         // Simulate the engine filling in fields defined in image HEALTHCHECK
         let hc = with_labels.healthcheck.as_mut().unwrap();
@@ -564,7 +572,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original);
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
 
         // Engine inherits image's full HEALTHCHECK
         let hc = with_labels.healthcheck.as_mut().unwrap();
