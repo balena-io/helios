@@ -571,3 +571,62 @@ fn it_finds_a_workflow_for_updating_services() {
             ),
     );
 }
+
+#[test]
+fn it_orders_service_start_by_depends_on() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": { "my-app-uuid": { "id": 1, "name": "my-app" } },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "db": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                "web": {
+                                    "id": 2,
+                                    "image": "alpine:latest",
+                                    "started": true,
+                                    "depends_on": {
+                                        "db": {"condition": "service_started", "restart": false, "required": true}
+                                    },
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'db' for release 'my-release-uuid'",
+                "initialize service 'web' for release 'my-release-uuid'",
+            )
+            + seq!("pull image 'alpine:latest'")
+            + par!(
+                "install service 'db' for release 'my-release-uuid'",
+                "install service 'web' for release 'my-release-uuid'",
+            )
+            // The installs parallelize, but the starts are serialized indicating
+            // service_started dependency being enforced.
+            + seq!(
+                "start service 'db' for release 'my-release-uuid'",
+                "start service 'web' for release 'my-release-uuid'",
+            )
+            + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
+    );
+}

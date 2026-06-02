@@ -23,9 +23,9 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    any_images_are_pending_download, find_future_network, find_future_service, find_future_volume,
-    find_installed_network, find_installed_service, find_installed_volume, service_matches_target,
-    services_need_stopping,
+    any_images_are_pending_download, dependencies_satisfied, find_future_network,
+    find_future_service, find_future_volume, find_installed_network, find_installed_service,
+    find_installed_volume, service_matches_target, services_need_stopping,
 };
 use super::image::create_image;
 
@@ -938,7 +938,7 @@ fn install_service(
 /// A service can be started if:
 /// - The container has been created and is not already running
 /// - If updating between releases, there is no equally named service from a previous release of the same app
-/// - Any service dependencies have been started/running/healthy (TODO)
+/// - Every `depends_on` dependency is satisfied per its condition
 ///
 /// These requirements may vary a little depending on the update strategy
 fn start_service_when_requirements_are_met(
@@ -953,6 +953,8 @@ fn start_service_when_requirements_are_met(
         || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
         // and any service from a previous release has already been installed
         && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none()
+        // and the service's dependencies are satisfied
+        && dependencies_satisfied(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
     {
         return Some(start_service.with_target(tgt_svc));
     }

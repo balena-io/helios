@@ -1,7 +1,7 @@
 use crate::common_types::Uuid;
 use crate::models::{
-    ContainerStatus, Device, DeviceTarget, ImageRef, Network, NetworkTarget, Service,
-    ServiceConfig, ServiceTarget, Volume, VolumeTarget,
+    ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health, ImageRef,
+    Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
 };
 use crate::oci::Mount;
 
@@ -19,6 +19,53 @@ pub fn find_installed_service<'a>(
             .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &service_name))
             .map(|(_, s)| s)
             .next()
+    })
+}
+
+/// Whether a dependency's current state satisfies a `depends_on` condition.
+fn condition_met(dep: &Service, condition: DependsOnCondition) -> bool {
+    match condition {
+        // The dependency has been started at least once
+        DependsOnCondition::ServiceStarted => dep.started,
+        // The dependency's healthcheck reports healthy
+        DependsOnCondition::ServiceHealthy => dep
+            .oci
+            .as_ref()
+            .is_some_and(|c| c.health == Health::Healthy),
+        // The dependency's container has exited with status 0
+        DependsOnCondition::ServiceCompletedSuccessfully => dep
+            .oci
+            .as_ref()
+            .is_some_and(|c| c.status == ContainerStatus::Stopped && c.exit_code == Some(0)),
+    }
+}
+
+/// Whether every `depends_on` entry of a service is satisfied by the current
+/// state of its dependencies in the same release. A `required` dependency must
+/// have reached its condition; an optional (`required: false`) dependency never
+/// blocks.
+///
+/// TODO: full Compose parity for optional dependencies (separate PR). Compose
+/// also *waits* for an optional dependency to resolve and warns if it fails;
+/// Helios does not wait for optional dependencies at all — the dependent starts
+/// immediately regardless of their outcome.
+pub fn dependencies_satisfied(
+    device: &Device,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+    depends_on: &DependsOn,
+) -> bool {
+    let services = device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(commit))
+        .map(|release| &release.services);
+
+    depends_on.iter().all(|(dep_name, spec)| {
+        !spec.required
+            || services
+                .and_then(|services| services.get(dep_name))
+                .is_some_and(|dep| condition_met(dep, spec.condition))
     })
 }
 
@@ -279,4 +326,108 @@ pub fn any_images_are_pending_download(
                 })
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::DependencySpec;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn device_with(services: serde_json::Value) -> Device {
+        serde_json::from_value(json!({
+            "uuid": "device-uuid",
+            "apps": {
+                "app-uuid": {
+                    "id": 1,
+                    "name": "app",
+                    "releases": {
+                        "rel-uuid": {
+                            "installed": true,
+                            "services": services,
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    /// Build a `depends_on` of `service_started` entries with the given
+    /// `(name, required)` pairs.
+    fn started_deps(entries: &[(&str, bool)]) -> DependsOn {
+        entries
+            .iter()
+            .map(|(name, required)| {
+                (
+                    name.to_string(),
+                    DependencySpec {
+                        condition: DependsOnCondition::ServiceStarted,
+                        restart: false,
+                        required: *required,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>()
+            .into()
+    }
+
+    fn check(device: &Device, deps: &DependsOn) -> bool {
+        dependencies_satisfied(device, &"app-uuid".into(), &"rel-uuid".into(), deps)
+    }
+
+    #[test]
+    fn empty_depends_on_is_satisfied() {
+        let device = device_with(json!({}));
+        assert!(check(&device, &DependsOn::default()));
+    }
+
+    #[test]
+    fn satisfied_when_required_dependency_is_met() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
+        }));
+        assert!(check(&device, &started_deps(&[("db", true)])));
+    }
+
+    #[test]
+    fn blocks_on_unmet_required_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": false, "config": {}},
+        }));
+        assert!(!check(&device, &started_deps(&[("db", true)])));
+    }
+
+    #[test]
+    fn proceeds_on_unmet_optional_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": false, "config": {}},
+        }));
+        assert!(check(&device, &started_deps(&[("db", false)])));
+    }
+
+    #[test]
+    fn blocks_when_a_required_dependency_is_unmet_even_if_an_optional_one_is_met() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
+            "cache": {"id": 2, "image": "alpine:latest", "started": false, "config": {}},
+        }));
+        assert!(!check(
+            &device,
+            &started_deps(&[("db", false), ("cache", true)])
+        ));
+    }
+
+    #[test]
+    fn missing_required_dependency_blocks() {
+        let device = device_with(json!({}));
+        assert!(!check(&device, &started_deps(&[("db", true)])));
+    }
+
+    #[test]
+    fn missing_optional_dependency_proceeds() {
+        let device = device_with(json!({}));
+        assert!(check(&device, &started_deps(&[("db", false)])));
+    }
 }
