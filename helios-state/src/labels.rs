@@ -15,3 +15,6 @@ pub(crate) const LABEL_VOLUME_NAME: &str = "io.balena.volume-name";
 
 /// Label storing the service id on managed resources
 pub(crate) const LABEL_SERVICE_ID: &str = "io.balena.service-id";
+
+/// Label storing the JSON-encoded `depends_on` map for a service container.
+pub(crate) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";

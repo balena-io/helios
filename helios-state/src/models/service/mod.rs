@@ -1,7 +1,7 @@
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::labels::LABEL_SERVICE_ID;
+use crate::labels::{LABEL_DEPENDS_ON, LABEL_SERVICE_ID};
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
     NetworkMode, NetworkSettings, RestartPolicy,
@@ -15,8 +15,10 @@ use crate::remote_model::{
 use super::image::ImageRef;
 
 mod config;
+mod depends_on;
 
 pub use config::*;
+pub use depends_on::*;
 
 /// The container runtime status. This is a simplified state over what the container engine returns
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
@@ -110,6 +112,10 @@ pub struct Service {
     /// Service configuration
     #[mahler(default)]
     pub config: ServiceConfig,
+
+    /// Ordering dependencies on other services in the same release.
+    #[mahler(default)]
+    pub depends_on: DependsOn,
 }
 
 impl From<Service> for ServiceTarget {
@@ -119,6 +125,7 @@ impl From<Service> for ServiceTarget {
             image,
             config,
             started,
+            depends_on,
             ..
         } = svc;
         ServiceTarget {
@@ -126,6 +133,7 @@ impl From<Service> for ServiceTarget {
             image,
             config,
             started,
+            depends_on,
         }
     }
 }
@@ -144,6 +152,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         // merge the composition labels with the top level service labels
         // giving priority to the latter
         let labels = composition.labels.into_iter().chain(labels).collect();
+
+        let depends_on: DependsOn = composition.depends_on.into();
 
         // merge the composition environment with the top level service environment
         // giving priority to the latter
@@ -235,6 +245,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             id,
             image: image.into(),
             started: true,
+            depends_on,
             config: ServiceConfig(ContainerConfig {
                 cgroup: composition
                     .cgroup
@@ -320,6 +331,15 @@ impl<N> From<LocalContainer<N>> for Service {
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
+        // Reconstruct depends_on from label. A malformed value
+        // is treated as absent.
+        let depends_on: DependsOn = container
+            .config
+            .labels
+            .remove(LABEL_DEPENDS_ON)
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
         let image = ImageRef::Id(container.image.clone());
         let container_summary = Container::from((container.name.as_str(), container.state.clone()));
 
@@ -337,6 +357,7 @@ impl<N> From<LocalContainer<N>> for Service {
             installing: false,
             started,
             config,
+            depends_on,
         }
     }
 }

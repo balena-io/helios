@@ -1087,4 +1087,42 @@ mod tests {
         let svc = release.services.get("my-service").unwrap();
         assert_eq!(svc.composition.volumes.iter().count(), 2);
     }
+
+    #[test]
+    fn test_release_accepts_depends_on_short_and_long_form() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {
+                    "id": 1, "image": "ubuntu:latest",
+                    "composition": {"depends_on": {"db": {"condition": "service_healthy"}}}
+                },
+                "db": {
+                    "id": 2, "image": "ubuntu:latest",
+                    "composition": {"depends_on": ["migrate"]}
+                },
+                "migrate": {"id": 3, "image": "ubuntu:latest"}
+            },
+            "volumes": {}, "networks": {}
+        }))
+        .unwrap();
+        assert_eq!(release.services.len(), 3);
+        assert_eq!(
+            release.services["web"]
+                .composition
+                .depends_on
+                .get("db")
+                .unwrap()
+                .condition,
+            DependsOnCondition::ServiceHealthy
+        );
+        assert_eq!(
+            release.services["db"]
+                .composition
+                .depends_on
+                .get("migrate")
+                .unwrap()
+                .condition,
+            DependsOnCondition::ServiceStarted
+        );
+    }
 }

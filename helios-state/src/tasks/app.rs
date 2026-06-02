@@ -11,6 +11,7 @@ use mahler::worker::{Uninitialized, Worker};
 use tracing::warn;
 
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
+use crate::labels::LABEL_DEPENDS_ON;
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
     ReleaseTarget, Service, ServiceTarget, Volume,
@@ -718,7 +719,11 @@ fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id, image, config, ..
+        id,
+        image,
+        config,
+        depends_on,
+        ..
     } = tgt;
     maybe_svc.create(Service {
         id,
@@ -727,6 +732,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         started: false,
         oci: None,
         config,
+        depends_on,
     })
 }
 
@@ -870,6 +876,15 @@ fn install_service(
 
         let mut container_config =
             std::mem::take(&mut svc.config).into_oci_config(svc.id, &svc_name, &app_uuid);
+
+        // record depends_on in container label
+        if !svc.depends_on.is_empty()
+            && let Ok(encoded) = serde_json::to_string(&svc.depends_on)
+        {
+            container_config
+                .labels
+                .insert(LABEL_DEPENDS_ON.to_string(), encoded);
+        }
 
         // Extract networks to connect later
         let mut networks = std::mem::take(&mut container_config.networks);
