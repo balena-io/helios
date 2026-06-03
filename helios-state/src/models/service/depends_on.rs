@@ -10,12 +10,25 @@ use crate::remote_model::{
 };
 
 /// Condition under which a `depends_on` dependency is considered satisfied.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Ord` gives a stable tiebreak when emitting await tasks for a dependency
+/// referenced under more than one condition.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum DependsOnCondition {
     ServiceStarted,
     ServiceHealthy,
     ServiceCompletedSuccessfully,
+}
+
+impl std::fmt::Display for DependsOnCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ServiceStarted => "service_started",
+            Self::ServiceHealthy => "service_healthy",
+            Self::ServiceCompletedSuccessfully => "service_completed_successfully",
+        })
+    }
 }
 
 impl From<RemoteDependsOnCondition> for DependsOnCondition {

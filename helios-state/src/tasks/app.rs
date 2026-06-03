@@ -12,19 +12,22 @@ use tracing::warn;
 
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
-    App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
-    ReleaseTarget, Service, ServiceTarget, Volume,
+    App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
+    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::oci::{
+    Client as Docker, ContainerStatus as OciContainerStatus, Error as OciError, LocalNamespace,
+    Mount, Namespace, WithContext,
+};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    any_images_are_pending_download, dependencies_satisfied, find_future_network,
-    find_future_service, find_future_volume, find_installed_network, find_installed_service,
-    find_installed_volume, service_matches_target, services_need_stopping,
+    any_images_are_pending_download, dependencies_satisfied, depends_on_condition_met,
+    find_future_network, find_future_service, find_future_volume, find_installed_network,
+    find_installed_service, find_installed_volume, service_matches_target, services_need_stopping,
 };
 use super::image::create_image;
 
@@ -940,20 +943,25 @@ fn start_service_when_requirements_are_met(
     SystemTarget(t_device): SystemTarget<Device>,
     Target(tgt_svc): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
-) -> Option<Task> {
-    // only start the service if
-    // no services need stopping or the app is already locked
-    if (!services_need_stopping(&app_uuid, &device, &t_device)
+) -> Vec<Task> {
+    // can't start while other services still need stopping unless the app is
+    // locked, or while a same-named service from a previous release is installed
+    let ready_to_start = (!services_need_stopping(&app_uuid, &device, &t_device)
         || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
-        // and any service from a previous release has already been installed
-        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none()
-        // and the service's dependencies are satisfied
-        && dependencies_satisfied(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
-    {
-        return Some(start_service.with_target(tgt_svc));
+        && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none();
+    if !ready_to_start {
+        return Vec::new();
     }
 
-    None
+    // dependencies satisfied: start the service
+    if dependencies_satisfied(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on) {
+        return vec![start_service.with_target(tgt_svc)];
+    }
+
+    // otherwise emit an await per unmet required health/completion dependency, so
+    // this service gates on its own conditions independently of other dependents
+    // of the same service
+    await_runtime_dependencies(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
 }
 
 /// Start the service if it is not running yet
@@ -1008,6 +1016,126 @@ fn start_service(
         svc.image = tgt_svc.image;
 
         Ok(svc)
+    })
+}
+
+/// Await tasks for the unmet required `service_healthy` /
+/// `service_completed_successfully` dependencies in `depends_on`.
+///
+/// Only started dependencies are awaited, so the `oci` subfield an await scopes
+/// to resolves. `service_started` and optional dependencies are never awaited.
+fn await_runtime_dependencies(
+    device: &Device,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+    depends_on: &DependsOn,
+) -> Vec<Task> {
+    let services = device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(rel_uuid))
+        .map(|rel| &rel.services);
+
+    // emit in a stable order so the plan is reproducible — `depends_on` is a
+    // HashMap whose iteration order is otherwise non-deterministic
+    let mut deps: Vec<_> = depends_on.iter().collect();
+    deps.sort_by(|a, b| a.0.cmp(b.0).then(a.1.condition.cmp(&b.1.condition)));
+
+    deps.into_iter()
+        // started deps are driven by their own start; optional deps never block
+        .filter(|(_, spec)| spec.required && spec.condition != DependsOnCondition::ServiceStarted)
+        // await only a started dependency that hasn't reached its condition yet
+        .filter(|(dep_name, spec)| {
+            services
+                .and_then(|s| s.get(*dep_name))
+                .is_some_and(|dep| dep.started && !depends_on_condition_met(dep, spec.condition))
+        })
+        .filter_map(|(dep_name, spec)| match spec.condition {
+            DependsOnCondition::ServiceHealthy => {
+                Some(await_healthy.with_arg("service_name", dep_name))
+            }
+            DependsOnCondition::ServiceCompletedSuccessfully => {
+                Some(await_completed.with_arg("service_name", dep_name))
+            }
+            DependsOnCondition::ServiceStarted => None,
+        })
+        .collect()
+}
+
+/// Wait for a started service container to report healthy. Scoped to the
+/// container's `oci/health` subfield.
+fn await_healthy(
+    health: View<Health>,
+    docker: Res<Docker>,
+    Args((_app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+) -> IO<Health, OciError> {
+    enforce!(
+        *health != Health::Healthy,
+        "service container should not be confirmed healthy yet"
+    );
+
+    let container_id = LocalNamespace::from(commit.as_str()).to_identifier(&service_name);
+    with_io(health, async move |health| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        loop {
+            let state = docker.container().inspect(&container_id).await?.state;
+            match state.health {
+                Health::Healthy => break,
+                Health::Unhealthy => return Err("service is unhealthy".into()),
+                Health::Starting | Health::None => {}
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        Ok(health)
+    })
+    .map(|mut health| {
+        *health = Health::Healthy;
+        health
+    })
+}
+
+/// Wait for a started service container to exit with status 0. Scoped to the
+/// container's `oci/status` subfield; `exit_code` is already `Some(0)` in the
+/// planning model, so setting `status = Stopped` satisfies the gate while the
+/// poll verifies the real exit code.
+fn await_completed(
+    status: View<ContainerStatus>,
+    docker: Res<Docker>,
+    Args((_app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
+) -> IO<ContainerStatus, OciError> {
+    enforce!(
+        *status != ContainerStatus::Stopped,
+        "service container should not be confirmed stopped yet"
+    );
+
+    let container_id = LocalNamespace::from(commit.as_str()).to_identifier(&service_name);
+    with_io(status, async move |status| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        loop {
+            let state = docker.container().inspect(&container_id).await?.state;
+            // exit code is only meaningful once the container has stopped
+            if state.status == OciContainerStatus::Stopped {
+                match state.exit_code {
+                    Some(0) => break,
+                    Some(code) => {
+                        return Err(format!("exited with error code {code}").into());
+                    }
+                    None => {}
+                }
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        Ok(status)
+    })
+    .map(|mut status| {
+        *status = ContainerStatus::Stopped;
+        status
     })
 }
 
@@ -1421,6 +1549,24 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(
                         "update image metadata for service '{service_name}' of release '{commit}'"
+                    )
+                },
+            ),
+        )
+        .job(
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}/oci/health",
+            job::none(await_healthy).with_description(
+                |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                    format!("wait until service '{service_name}' for release '{commit}' is healthy")
+                },
+            ),
+        )
+        .job(
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}/oci/status",
+            job::none(await_completed).with_description(
+                |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                    format!(
+                        "wait until service '{service_name}' for release '{commit}' has completed"
                     )
                 },
             ),
