@@ -1085,6 +1085,12 @@ fn await_healthy(
             match state.health {
                 Health::Healthy => break,
                 Health::Unhealthy => return Err("service is unhealthy".into()),
+                // a running container reporting no health has no healthcheck
+                // configured, so it can never become healthy. fail fast rather
+                // than poll forever, mirroring `evaluate_condition`
+                Health::None if state.status == OciContainerStatus::Running => {
+                    return Err("service has no healthcheck configured".into());
+                }
                 Health::Starting | Health::None => {}
             }
             tokio::time::sleep(POLL_INTERVAL).await;

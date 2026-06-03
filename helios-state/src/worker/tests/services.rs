@@ -1041,3 +1041,85 @@ fn it_orders_a_realistic_dependency_graph() {
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
+
+#[test]
+fn it_finds_no_workflow_when_a_dependency_condition_terminally_fails() {
+    init_tracing();
+    assert_no_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                // already exited non-zero, so
+                                // `service_completed_successfully` can never hold
+                                "migrate": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "started": true,
+                                    "oci": {
+                                        "name": "migrate_my-release-uuid",
+                                        "status": "stopped",
+                                        "exit_code": 137,
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                                "web": {
+                                    "id": 2,
+                                    "image": "alpine:latest",
+                                    "started": false,
+                                    "depends_on": {
+                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
+                                    },
+                                    "oci": {
+                                        "name": "web_my-release-uuid",
+                                        "status": "created",
+                                        "created": "2026-02-11T15:03:43Z",
+                                    },
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "migrate": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                "web": {
+                                    "id": 2,
+                                    "image": "alpine:latest",
+                                    "started": true,
+                                    "depends_on": {
+                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
+                                    },
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+    );
+}
