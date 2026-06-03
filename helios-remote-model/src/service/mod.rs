@@ -8,6 +8,7 @@ use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
 mod command;
+mod depends_on;
 mod healthcheck;
 mod network_mode;
 mod networks;
@@ -16,6 +17,7 @@ mod volumes;
 
 pub use cgroup::*;
 pub use command::*;
+pub use depends_on::*;
 pub use healthcheck::*;
 pub use network_mode::*;
 pub use networks::*;
@@ -70,6 +72,9 @@ pub struct ServiceComposition {
     /// the engine takes nano_cpus and would otherwise saturate silently.
     #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
+
+    #[serde(default)]
+    pub depends_on: DependsOn,
 
     #[serde(default)]
     pub domainname: Option<String>,

@@ -8,12 +8,13 @@ use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
+use crate::labels::LABEL_DEPENDS_ON;
 use crate::models::{
-    App, AppMap, AppTarget, Container, ContainerStatus, Device, ImageRef, Network, Release,
-    ReleaseTarget, Service, ServiceTarget, Volume,
+    App, AppMap, AppTarget, Container, ContainerStatus, DependsOnCondition, Device, Health,
+    ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
 use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
 use crate::store::{self, DocumentStore};
@@ -22,9 +23,9 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    any_images_are_pending_download, find_future_network, find_future_service, find_future_volume,
-    find_installed_network, find_installed_service, find_installed_volume, service_matches_target,
-    services_need_stopping,
+    any_images_are_pending_download, condition_met, dependencies_satisfied, find_future_network,
+    find_future_service, find_future_volume, find_installed_network, find_installed_service,
+    find_installed_volume, service_matches_target, services_need_stopping,
 };
 use super::image::create_image;
 
@@ -718,7 +719,11 @@ fn remove_volume(vol: View<Volume>) -> View<Option<Volume>> {
 /// Create the service in memory before initiating download
 fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>) -> View<Service> {
     let ServiceTarget {
-        id, image, config, ..
+        id,
+        image,
+        config,
+        depends_on,
+        ..
     } = tgt;
     maybe_svc.create(Service {
         id,
@@ -727,6 +732,9 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         started: false,
         oci: None,
         config,
+        depends_on,
+        healthy: false,
+        completed_successfully: false,
     })
 }
 
@@ -871,6 +879,15 @@ fn install_service(
         let mut container_config =
             std::mem::take(&mut svc.config).into_oci_config(svc.id, &svc_name, &app_uuid);
 
+        // record depends_on in container label
+        if !svc.depends_on.is_empty()
+            && let Ok(encoded) = serde_json::to_string(&svc.depends_on)
+        {
+            container_config
+                .labels
+                .insert(LABEL_DEPENDS_ON.to_string(), encoded);
+        }
+
         // Extract networks to connect later
         let mut networks = std::mem::take(&mut container_config.networks);
 
@@ -923,7 +940,7 @@ fn install_service(
 /// A service can be started if:
 /// - The container has been created and is not already running
 /// - If updating between releases, there is no equally named service from a previous release of the same app
-/// - Any service dependencies have been started/running/healthy (TODO)
+/// - Every `depends_on` dependency is satisfied per its condition
 ///
 /// These requirements may vary a little depending on the update strategy
 fn start_service_when_requirements_are_met(
@@ -938,6 +955,8 @@ fn start_service_when_requirements_are_met(
         || device.apps.get(&app_uuid).is_some_and(|app| app.locked))
         // and any service from a previous release has already been installed
         && find_installed_service(&device, &app_uuid, &rel_uuid, &svc_name).is_none()
+        // and the service's dependencies are satisfied
+        && dependencies_satisfied(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
     {
         return Some(start_service.with_target(tgt_svc));
     }
@@ -995,6 +1014,184 @@ fn start_service(
 
         *svc = Service::from(local_container);
         svc.image = tgt_svc.image;
+
+        Ok(svc)
+    })
+}
+
+/// Emit an await task for each runtime dependency (`service_healthy` or
+/// `service_completed_successfully`) that a not-yet-started service requires
+/// but which has not reached the required state yet.
+///
+/// `service_started` dependencies are not handled here but rather by their own start.
+///
+/// As in Docker Compose, a dependency that never reaches its condition
+/// (e.g. a `restart: always` service depended on with `service_completed_successfully`)
+/// simply leaves the dependent waiting. This is user error so is not handled by helios.
+fn await_runtime_dependencies(rel: View<Release>) -> Vec<Task> {
+    let services = &rel.services;
+
+    // Collect the (dependency, condition) pairs to await: the unmet required
+    // healthy/completed conditions of not-yet-started services, deduped.
+    let mut pending: Vec<(&String, DependsOnCondition)> = Vec::new();
+    for svc in services.values() {
+        // Only services still waiting to start drive a runtime wait
+        if svc.started {
+            continue;
+        }
+        for (dep_name, spec) in svc.depends_on.iter() {
+            // started dependencies are driven by their own start; optional
+            // dependencies never block
+            if !spec.required || spec.condition == DependsOnCondition::ServiceStarted {
+                continue;
+            }
+            let met = services
+                .get(dep_name)
+                .is_some_and(|dep| condition_met(dep, spec.condition));
+            let key = (dep_name, spec.condition);
+            if !met && !pending.contains(&key) {
+                pending.push(key);
+            }
+        }
+    }
+
+    // Emit in a stable order so the plan is reproducible — `depends_on` is a
+    // HashMap whose iteration order is otherwise non-deterministic. Tiebreak on
+    // the condition for a dependency awaited under more than one.
+    pending.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+
+    pending
+        .into_iter()
+        .filter_map(|(dep_name, condition)| match condition {
+            DependsOnCondition::ServiceHealthy => {
+                Some(await_healthy.with_arg("service_name", dep_name))
+            }
+            DependsOnCondition::ServiceCompletedSuccessfully => {
+                Some(await_completed.with_arg("service_name", dep_name))
+            }
+            DependsOnCondition::ServiceStarted => None,
+        })
+        .collect()
+}
+
+/// Wait for a started service container to report healthy, marking it ready so
+/// the planner can sequence dependents after it.
+fn await_healthy(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+    enforce!(
+        svc.started && !svc.healthy,
+        "service container should be started and not yet confirmed healthy"
+    );
+
+    svc.healthy = true;
+
+    poll_until(svc, docker, "health", health_outcome)
+}
+
+/// Classify an observed container against the `service_healthy` condition.
+fn health_outcome(c: &Container) -> AwaitOutcome {
+    match c.health {
+        Health::Healthy => AwaitOutcome::Satisfied,
+        Health::Unhealthy => AwaitOutcome::Failed("unhealthy".into()),
+        Health::Starting | Health::None => AwaitOutcome::Pending,
+    }
+}
+
+/// Wait for a started service container to exit with status 0, marking it ready
+/// so the planner can sequence dependents after it.
+fn await_completed(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciError> {
+    enforce!(
+        svc.started && !svc.completed_successfully,
+        "service container should be started and not yet confirmed completed"
+    );
+
+    svc.completed_successfully = true;
+
+    poll_until(svc, docker, "completion", completion_outcome)
+}
+
+/// Classify an observed container against the `service_completed_successfully`
+/// condition. The exit code is only meaningful once the container has stopped.
+fn completion_outcome(c: &Container) -> AwaitOutcome {
+    if c.status != ContainerStatus::Stopped {
+        return AwaitOutcome::Pending;
+    }
+    match c.exit_code {
+        Some(0) => AwaitOutcome::Satisfied,
+        Some(code) => AwaitOutcome::Failed(format!("exited with code {code}")),
+        None => AwaitOutcome::Failed("exited with an unknown code".into()),
+    }
+}
+
+/// Outcome of evaluating an awaited dependency's observed container state.
+#[derive(Debug, PartialEq)]
+enum AwaitOutcome {
+    /// The condition is met; the dependent may start.
+    Satisfied,
+    /// The dependency reached a terminal failure (e.g. unhealthy, non-zero
+    /// exit), so the condition can never be met — fail fast with the reason.
+    Failed(String),
+    /// Not satisfied yet; keep polling.
+    Pending,
+}
+
+/// Poll the engine until `evaluate` reports the condition satisfied; a `Failed`
+/// outcome fails the task rather than polling forever.
+fn poll_until(
+    svc: View<Service>,
+    docker: Res<Docker>,
+    awaiting: &'static str,
+    evaluate: impl Fn(&Container) -> AwaitOutcome + Send + 'static,
+) -> IO<Service, OciError> {
+    with_io(svc, async move |mut svc| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let container_id = svc
+            .oci
+            .as_ref()
+            .map(|c| c.name.clone())
+            .expect("container should be available");
+
+        // poll the engine every second.
+        // log poll status every 15s for observability.
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        const LOG_EVERY_POLLS: u32 = 15;
+        let mut polls: u32 = 0;
+
+        loop {
+            let local_container = docker
+                .container()
+                .inspect(&container_id)
+                .await
+                .with_context(|| {
+                    format!("failed to inspect container while awaiting {awaiting}")
+                })?;
+            let observed = Service::from(local_container);
+            let outcome = observed.oci.as_ref().map(&evaluate);
+            svc.oci = observed.oci;
+            match outcome {
+                Some(AwaitOutcome::Satisfied) => break,
+                Some(AwaitOutcome::Failed(reason)) => {
+                    return Err(
+                        format!("dependency failed while awaiting {awaiting}: {reason}").into(),
+                    );
+                }
+                Some(AwaitOutcome::Pending) | None => {}
+            }
+
+            polls += 1;
+            if polls.is_multiple_of(LOG_EVERY_POLLS)
+                && let Some(c) = svc.oci.as_ref()
+            {
+                info!(
+                    "still awaiting (status={:?}, health={:?})",
+                    c.status, c.health
+                );
+            }
+
+            let _ = svc.flush().await;
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
 
         Ok(svc)
     })
@@ -1299,6 +1496,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("finish release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
+                job::update(await_runtime_dependencies),
                 job::delete(remove_release).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("remove release '{commit}' for app with uuid '{uuid}'")
@@ -1372,6 +1570,16 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("start service '{service_name}' for release '{commit}'")
                     },
                 ),
+                job::none(await_healthy).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("await service '{service_name}' healthy for release '{commit}'")
+                    },
+                ),
+                job::none(await_completed).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!("await service '{service_name}' completed for release '{commit}'")
+                    },
+                ),
                 job::none(stop_service_when_requirements_are_met),
                 job::none(stop_service).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
@@ -1428,4 +1636,68 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             )
             .with_description(|| "app has an invalid target release"),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn container(status: ContainerStatus, exit_code: Option<i64>, health: Health) -> Container {
+        let mut c = Container::mock();
+        c.status = status;
+        c.exit_code = exit_code;
+        c.health = health;
+        c
+    }
+
+    #[test]
+    fn health_outcome_classifies_observed_health() {
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::Healthy)),
+            AwaitOutcome::Satisfied
+        );
+        // a failed healthcheck can never satisfy the condition: fail fast
+        assert_eq!(
+            health_outcome(&container(
+                ContainerStatus::Running,
+                None,
+                Health::Unhealthy
+            )),
+            AwaitOutcome::Failed("unhealthy".into())
+        );
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::Starting)),
+            AwaitOutcome::Pending
+        );
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::None)),
+            AwaitOutcome::Pending
+        );
+    }
+
+    #[test]
+    fn completion_outcome_classifies_exit_state() {
+        // exit code is not meaningful until the container has stopped
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Running, Some(0), Health::None)),
+            AwaitOutcome::Pending
+        );
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Stopped, Some(0), Health::None)),
+            AwaitOutcome::Satisfied
+        );
+        // a non-zero exit can never satisfy the condition: fail fast
+        assert_eq!(
+            completion_outcome(&container(
+                ContainerStatus::Stopped,
+                Some(137),
+                Health::None
+            )),
+            AwaitOutcome::Failed("exited with code 137".into())
+        );
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Stopped, None, Health::None)),
+            AwaitOutcome::Failed("exited with an unknown code".into())
+        );
+    }
 }

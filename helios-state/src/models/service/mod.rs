@@ -1,7 +1,7 @@
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::labels::LABEL_SERVICE_ID;
+use crate::labels::{LABEL_DEPENDS_ON, LABEL_SERVICE_ID};
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
     NetworkMode, NetworkSettings, RestartPolicy,
@@ -15,8 +15,10 @@ use crate::remote_model::{
 use super::image::ImageRef;
 
 mod config;
+mod depends_on;
 
 pub use config::*;
+pub use depends_on::*;
 
 /// The container runtime status. This is a simplified state over what the container engine returns
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
@@ -42,11 +44,37 @@ impl From<oci::ContainerStatus> for ContainerStatus {
     }
 }
 
+/// Container health as reported by the engine's healthcheck
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Health {
+    #[default]
+    None,
+    Starting,
+    Healthy,
+    Unhealthy,
+}
+
+impl From<oci::Health> for Health {
+    fn from(value: oci::Health) -> Self {
+        use oci::Health::*;
+        match value {
+            None => Self::None,
+            Starting => Self::Starting,
+            Healthy => Self::Healthy,
+            Unhealthy => Self::Unhealthy,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Container {
     pub name: String,
     pub created: DateTime,
     pub status: ContainerStatus,
+    pub exit_code: Option<i64>,
+    #[serde(default)]
+    pub health: Health,
 }
 
 impl Container {
@@ -56,6 +84,8 @@ impl Container {
             name: String::default(),
             created: DateTime::default(),
             status: ContainerStatus::Created,
+            exit_code: None,
+            health: Health::None,
         }
     }
 }
@@ -64,13 +94,19 @@ impl From<(&str, oci::ContainerState)> for Container {
     fn from((container_name, container_state): (&str, oci::ContainerState)) -> Self {
         let container_id = container_name.to_owned();
         let oci::ContainerState {
-            status, created, ..
+            status,
+            created,
+            exit_code,
+            health,
+            ..
         } = container_state;
 
         Container {
             name: container_id,
             status: status.into(),
             created,
+            exit_code,
+            health: health.into(),
         }
     }
 }
@@ -104,6 +140,23 @@ pub struct Service {
     /// Service configuration
     #[mahler(default)]
     pub config: ServiceConfig,
+
+    /// Ordering dependencies on other services in the same release.
+    #[mahler(default)]
+    pub depends_on: DependsOn,
+
+    /// `healthy` is ephemeral planning state set by `await_healthy`, not persisted,
+    /// and re-derived as `false` whenever current state is read from the engine.
+    /// Lets the planner gate `service_healthy` dependents deterministically.
+    #[mahler(internal, default)]
+    pub healthy: bool,
+
+    /// `completed_successfully` is ephemeral planning state set by `await_completed`,
+    /// not persisted, and re-derived as `false` whenever current state is read
+    /// from the engine.
+    /// Lets the planner gate `service_completed_successfully` dependents deterministically.
+    #[mahler(internal, default)]
+    pub completed_successfully: bool,
 }
 
 impl From<Service> for ServiceTarget {
@@ -113,6 +166,7 @@ impl From<Service> for ServiceTarget {
             image,
             config,
             started,
+            depends_on,
             ..
         } = svc;
         ServiceTarget {
@@ -120,6 +174,7 @@ impl From<Service> for ServiceTarget {
             image,
             config,
             started,
+            depends_on,
         }
     }
 }
@@ -138,6 +193,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         // merge the composition labels with the top level service labels
         // giving priority to the latter
         let labels = composition.labels.into_iter().chain(labels).collect();
+
+        let depends_on: DependsOn = composition.depends_on.into();
 
         // merge the composition environment with the top level service environment
         // giving priority to the latter
@@ -229,6 +286,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             id,
             image: image.into(),
             started: true,
+            depends_on,
             config: ServiceConfig(ContainerConfig {
                 cgroup: composition
                     .cgroup
@@ -314,6 +372,15 @@ impl<N> From<LocalContainer<N>> for Service {
             .and_then(|id| id.parse().ok())
             .unwrap_or(0);
 
+        // Reconstruct depends_on from label. A malformed value
+        // is treated as absent.
+        let depends_on: DependsOn = container
+            .config
+            .labels
+            .remove(LABEL_DEPENDS_ON)
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
         let image = ImageRef::Id(container.image.clone());
         let container_summary = Container::from((container.name.as_str(), container.state.clone()));
 
@@ -331,6 +398,9 @@ impl<N> From<LocalContainer<N>> for Service {
             installing: false,
             started,
             config,
+            depends_on,
+            healthy: false,
+            completed_successfully: false,
         }
     }
 }

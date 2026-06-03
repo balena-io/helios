@@ -13,7 +13,7 @@ pub use registry::RegistryAuth;
 
 mod container;
 pub use container::{
-    BindPropagation, Cgroup, Container, ContainerConfig, ContainerState, ContainerStatus,
+    BindPropagation, Cgroup, Container, ContainerConfig, ContainerState, ContainerStatus, Health,
     Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings, RestartPolicy,
 };
 

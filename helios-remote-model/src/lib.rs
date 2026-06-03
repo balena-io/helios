@@ -345,6 +345,54 @@ pub struct Release {
     pub networks: HashMap<String, Network>,
 }
 
+/// Validate the cross-service `depends_on` graph of a release.
+/// Every referenced service must exist and the graph must be acyclic.
+fn validate_depends_on(services: &HashMap<String, Service>) -> Result<(), String> {
+    for (svc_name, svc) in services {
+        for dep_name in svc.composition.depends_on.keys() {
+            if !services.contains_key(dep_name) {
+                return Err(format!(
+                    "service '{svc_name}' depends on undefined service '{dep_name}'"
+                ));
+            }
+        }
+    }
+
+    // `Visiting` marks a node on the current path
+    // `Done` marks a fully explored node.
+    enum Mark {
+        Visiting,
+        Done,
+    }
+
+    fn visit<'a>(
+        name: &'a str,
+        services: &'a HashMap<String, Service>,
+        marks: &mut HashMap<&'a str, Mark>,
+    ) -> Result<(), String> {
+        match marks.get(name) {
+            Some(Mark::Done) => return Ok(()),
+            Some(Mark::Visiting) => {
+                return Err(format!("circular depends_on involving service '{name}'"));
+            }
+            None => {}
+        }
+
+        marks.insert(name, Mark::Visiting);
+        for dep_name in services[name].composition.depends_on.keys() {
+            visit(dep_name, services, marks)?;
+        }
+        marks.insert(name, Mark::Done);
+        Ok(())
+    }
+
+    let mut marks: HashMap<&str, Mark> = HashMap::new();
+    for svc_name in services.keys() {
+        visit(svc_name, services, &mut marks)?;
+    }
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for Release {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -402,6 +450,9 @@ impl<'de> Deserialize<'de> for Release {
             }
         }
 
+        // Verify service dependencies are valid at the release level.
+        validate_depends_on(&raw.services).map_err(serde::de::Error::custom)?;
+
         // Add a default network to isolate app services
         if needs_default_net {
             raw.networks.entry("default".to_string()).or_default();
@@ -419,6 +470,63 @@ impl<'de> Deserialize<'de> for Release {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rejects_depends_on_undefined_service() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest", "composition": {"depends_on": ["ghost"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("undefined service"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_depends_on_cycle() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest", "composition": {"depends_on": ["b"]}},
+                "b": {"id": 2, "image": "alpine:latest", "composition": {"depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_depends_on_self_cycle() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest", "composition": {"depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_acyclic_depends_on_graph() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest", "composition": {"depends_on": ["db", "cache"]}},
+                "db": {"id": 2, "image": "alpine:latest", "composition": {"depends_on": ["migrate"]}},
+                "cache": {"id": 3, "image": "alpine:latest", "composition": {"depends_on": ["migrate"]}},
+                "migrate": {"id": 4, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+        assert_eq!(release.services.len(), 4);
+    }
 
     #[test]
     fn test_accepts_empty_releases() {
@@ -1086,5 +1194,43 @@ mod tests {
 
         let svc = release.services.get("my-service").unwrap();
         assert_eq!(svc.composition.volumes.iter().count(), 2);
+    }
+
+    #[test]
+    fn test_release_accepts_depends_on_short_and_long_form() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {
+                    "id": 1, "image": "ubuntu:latest",
+                    "composition": {"depends_on": {"db": {"condition": "service_healthy"}}}
+                },
+                "db": {
+                    "id": 2, "image": "ubuntu:latest",
+                    "composition": {"depends_on": ["migrate"]}
+                },
+                "migrate": {"id": 3, "image": "ubuntu:latest"}
+            },
+            "volumes": {}, "networks": {}
+        }))
+        .unwrap();
+        assert_eq!(release.services.len(), 3);
+        assert_eq!(
+            release.services["web"]
+                .composition
+                .depends_on
+                .get("db")
+                .unwrap()
+                .condition,
+            DependsOnCondition::ServiceHealthy
+        );
+        assert_eq!(
+            release.services["db"]
+                .composition
+                .depends_on
+                .get("migrate")
+                .unwrap()
+                .condition,
+            DependsOnCondition::ServiceStarted
+        );
     }
 }
