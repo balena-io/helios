@@ -27,6 +27,8 @@ pub fn find_installed_service<'a>(
 #[derive(Debug, PartialEq)]
 pub enum ConditionOutcome {
     Satisfied,
+    // terminal failure with reason
+    Failed(String),
     Pending,
 }
 
@@ -42,16 +44,27 @@ pub fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> Condi
                 Pending
             }
         }
-        DependsOnCondition::ServiceHealthy => match dep.oci.as_ref().map(|c| &c.health) {
-            Some(Health::Healthy) => Satisfied,
-            // starting, no healthcheck, or no container yet
-            _ => Pending,
-        },
+        DependsOnCondition::ServiceHealthy => {
+            match dep.oci.as_ref().map(|c| (&c.status, &c.health)) {
+                Some((_, Health::Healthy)) => Satisfied,
+                Some((_, Health::Unhealthy)) => Failed("unhealthy".to_owned()),
+                // a running container reporting no health has no healthcheck
+                // configured, which should fail fast in line with compose behavior
+                Some((ContainerStatus::Running, Health::None)) => {
+                    Failed("no healthcheck configured".to_owned())
+                }
+                // still starting, not yet running, or no container yet
+                _ => Pending,
+            }
+        }
         // A non-stopped container always reports exit code 0, so we
         // need to read the exit code in conjunction with stop status.
         DependsOnCondition::ServiceCompletedSuccessfully => {
             match dep.oci.as_ref().map(|c| (&c.status, c.exit_code)) {
                 Some((ContainerStatus::Stopped, Some(0))) => Satisfied,
+                Some((ContainerStatus::Stopped, Some(code))) => {
+                    Failed(format!("exited with code {code}"))
+                }
                 // running, or no container yet
                 _ => Pending,
             }
@@ -432,12 +445,25 @@ mod tests {
         let s = svc_with_oci(json!({"status": "running", "health": "healthy"}));
         assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Satisfied);
 
+        let s = svc_with_oci(json!({"status": "running", "health": "unhealthy"}));
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            ConditionOutcome::Failed("unhealthy".into())
+        );
+
         // still waiting on healthcheck outcome
         let s = svc_with_oci(json!({"status": "running", "health": "starting"}));
         assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
 
-        // no health reported yet
+        // no configured healthcheck fails fast at runtime
         let s = svc_with_oci(json!({"status": "running", "health": "none"}));
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            ConditionOutcome::Failed("no healthcheck configured".into())
+        );
+
+        // container still starting
+        let s = svc_with_oci(json!({"status": "created", "health": "none"}));
         assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
 
         // no container observed yet
@@ -453,6 +479,13 @@ mod tests {
         assert_eq!(
             evaluate_condition(&s, completed),
             ConditionOutcome::Satisfied
+        );
+
+        // failed due to non-zero exit
+        let s = svc_with_oci(json!({"status": "stopped", "exit_code": 137}));
+        assert_eq!(
+            evaluate_condition(&s, completed),
+            ConditionOutcome::Failed("exited with code 137".into())
         );
 
         // exit code is not meaningful until the container has stopped

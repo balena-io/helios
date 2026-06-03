@@ -1083,10 +1083,19 @@ fn await_healthy(
                 .inspect(&container_id)
                 .await
                 .with_context(|| "failed to inspect container while awaiting health".to_string())?;
-            match Container::from((container_id.as_str(), local.state)).health {
+            let observed = Container::from((container_id.as_str(), local.state));
+            match observed.health {
                 Health::Healthy => break,
                 Health::Unhealthy => {
                     return Err("dependency failed while awaiting health: unhealthy".into());
+                }
+                // a running container reporting no health has no healthcheck
+                // configured, so it can never become healthy. fail fast rather
+                // than poll forever, mirroring `evaluate_condition`
+                Health::None if observed.status == ContainerStatus::Running => {
+                    return Err(
+                        "dependency failed while awaiting health: no healthcheck configured".into(),
+                    );
                 }
                 Health::Starting | Health::None => {}
             }
