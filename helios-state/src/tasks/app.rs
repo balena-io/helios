@@ -1084,7 +1084,16 @@ fn await_healthy(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, Oci
 
     svc.healthy = true;
 
-    poll_until(svc, docker, "health", |c| c.health == Health::Healthy)
+    poll_until(svc, docker, "health", health_outcome)
+}
+
+/// Classify an observed container against the `service_healthy` condition.
+fn health_outcome(c: &Container) -> AwaitOutcome {
+    match c.health {
+        Health::Healthy => AwaitOutcome::Satisfied,
+        Health::Unhealthy => AwaitOutcome::Failed("unhealthy".into()),
+        Health::Starting | Health::None => AwaitOutcome::Pending,
+    }
 }
 
 /// Wait for a started service container to exit with status 0, marking it ready
@@ -1097,17 +1106,41 @@ fn await_completed(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, O
 
     svc.completed_successfully = true;
 
-    poll_until(svc, docker, "completion", |c| {
-        c.status == ContainerStatus::Stopped && c.exit_code == Some(0)
-    })
+    poll_until(svc, docker, "completion", completion_outcome)
 }
 
-/// Poll the engine until `is_satisfied` holds, logging poll status periodically.
+/// Classify an observed container against the `service_completed_successfully`
+/// condition. The exit code is only meaningful once the container has stopped.
+fn completion_outcome(c: &Container) -> AwaitOutcome {
+    if c.status != ContainerStatus::Stopped {
+        return AwaitOutcome::Pending;
+    }
+    match c.exit_code {
+        Some(0) => AwaitOutcome::Satisfied,
+        Some(code) => AwaitOutcome::Failed(format!("exited with code {code}")),
+        None => AwaitOutcome::Failed("exited with an unknown code".into()),
+    }
+}
+
+/// Outcome of evaluating an awaited dependency's observed container state.
+#[derive(Debug, PartialEq)]
+enum AwaitOutcome {
+    /// The condition is met; the dependent may start.
+    Satisfied,
+    /// The dependency reached a terminal failure (e.g. unhealthy, non-zero
+    /// exit), so the condition can never be met — fail fast with the reason.
+    Failed(String),
+    /// Not satisfied yet; keep polling.
+    Pending,
+}
+
+/// Poll the engine until `evaluate` reports the condition satisfied; a `Failed`
+/// outcome fails the task rather than polling forever.
 fn poll_until(
     svc: View<Service>,
     docker: Res<Docker>,
     awaiting: &'static str,
-    is_satisfied: impl Fn(&Container) -> bool + Send + 'static,
+    evaluate: impl Fn(&Container) -> AwaitOutcome + Send + 'static,
 ) -> IO<Service, OciError> {
     with_io(svc, async move |mut svc| {
         let docker = docker
@@ -1134,17 +1167,26 @@ fn poll_until(
                     format!("failed to inspect container while awaiting {awaiting}")
                 })?;
             let observed = Service::from(local_container);
-            let satisfied = observed.oci.as_ref().is_some_and(&is_satisfied);
+            let outcome = observed.oci.as_ref().map(&evaluate);
             svc.oci = observed.oci;
-            if satisfied {
-                break;
+            match outcome {
+                Some(AwaitOutcome::Satisfied) => break,
+                Some(AwaitOutcome::Failed(reason)) => {
+                    return Err(
+                        format!("dependency failed while awaiting {awaiting}: {reason}").into(),
+                    );
+                }
+                Some(AwaitOutcome::Pending) | None => {}
             }
 
             polls += 1;
             if polls.is_multiple_of(LOG_EVERY_POLLS)
                 && let Some(c) = svc.oci.as_ref()
             {
-                info!("still awaiting (status={:?}, health={:?})", c.status, c.health);
+                info!(
+                    "still awaiting (status={:?}, health={:?})",
+                    c.status, c.health
+                );
             }
 
             let _ = svc.flush().await;
@@ -1594,4 +1636,68 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             )
             .with_description(|| "app has an invalid target release"),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn container(status: ContainerStatus, exit_code: Option<i64>, health: Health) -> Container {
+        let mut c = Container::mock();
+        c.status = status;
+        c.exit_code = exit_code;
+        c.health = health;
+        c
+    }
+
+    #[test]
+    fn health_outcome_classifies_observed_health() {
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::Healthy)),
+            AwaitOutcome::Satisfied
+        );
+        // a failed healthcheck can never satisfy the condition: fail fast
+        assert_eq!(
+            health_outcome(&container(
+                ContainerStatus::Running,
+                None,
+                Health::Unhealthy
+            )),
+            AwaitOutcome::Failed("unhealthy".into())
+        );
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::Starting)),
+            AwaitOutcome::Pending
+        );
+        assert_eq!(
+            health_outcome(&container(ContainerStatus::Running, None, Health::None)),
+            AwaitOutcome::Pending
+        );
+    }
+
+    #[test]
+    fn completion_outcome_classifies_exit_state() {
+        // exit code is not meaningful until the container has stopped
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Running, Some(0), Health::None)),
+            AwaitOutcome::Pending
+        );
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Stopped, Some(0), Health::None)),
+            AwaitOutcome::Satisfied
+        );
+        // a non-zero exit can never satisfy the condition: fail fast
+        assert_eq!(
+            completion_outcome(&container(
+                ContainerStatus::Stopped,
+                Some(137),
+                Health::None
+            )),
+            AwaitOutcome::Failed("exited with code 137".into())
+        );
+        assert_eq!(
+            completion_outcome(&container(ContainerStatus::Stopped, None, Health::None)),
+            AwaitOutcome::Failed("exited with an unknown code".into())
+        );
+    }
 }
