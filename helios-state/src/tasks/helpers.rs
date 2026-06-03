@@ -22,22 +22,49 @@ pub fn find_installed_service<'a>(
     })
 }
 
-/// Whether a dependency's current state satisfies a `depends_on` condition.
-fn condition_met(dep: &Service, condition: DependsOnCondition) -> bool {
+/// Outcome of evaluating a dependency's observed container against a
+/// `depends_on` condition.
+#[derive(Debug, PartialEq)]
+pub enum ConditionOutcome {
+    Satisfied,
+    Pending,
+}
+
+/// Evaluate a dependency against a `depends_on` condition from its observed state.
+pub fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> ConditionOutcome {
+    use ConditionOutcome::*;
     match condition {
-        // The dependency has been started at least once
-        DependsOnCondition::ServiceStarted => dep.started,
-        // The dependency's healthcheck reports healthy
-        DependsOnCondition::ServiceHealthy => dep
-            .oci
-            .as_ref()
-            .is_some_and(|c| c.health == Health::Healthy),
-        // The dependency's container has exited with status 0
-        DependsOnCondition::ServiceCompletedSuccessfully => dep
-            .oci
-            .as_ref()
-            .is_some_and(|c| c.status == ContainerStatus::Stopped && c.exit_code == Some(0)),
+        // once the container leaves `created`, `started` stays true
+        DependsOnCondition::ServiceStarted => {
+            if dep.started {
+                Satisfied
+            } else {
+                Pending
+            }
+        }
+        DependsOnCondition::ServiceHealthy => match dep.oci.as_ref().map(|c| &c.health) {
+            Some(Health::Healthy) => Satisfied,
+            // starting, no healthcheck, or no container yet
+            _ => Pending,
+        },
+        // A non-stopped container always reports exit code 0, so we
+        // need to read the exit code in conjunction with stop status.
+        DependsOnCondition::ServiceCompletedSuccessfully => {
+            match dep.oci.as_ref().map(|c| (&c.status, c.exit_code)) {
+                Some((ContainerStatus::Stopped, Some(0))) => Satisfied,
+                // running, or no container yet
+                _ => Pending,
+            }
+        }
     }
+}
+
+/// Whether a dependency's current state satisfies a `depends_on` condition.
+pub fn condition_met(dep: &Service, condition: DependsOnCondition) -> bool {
+    matches!(
+        evaluate_condition(dep, condition),
+        ConditionOutcome::Satisfied
+    )
 }
 
 /// Whether every `depends_on` entry of a service is satisfied by its dependencies
@@ -351,16 +378,27 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a `depends_on` of `service_started` entries with the given
+    fn svc(value: serde_json::Value) -> Service {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn svc_with_oci(mut oci: serde_json::Value) -> Service {
+        let fields = oci.as_object_mut().unwrap();
+        fields.insert("name".into(), json!("c"));
+        fields.insert("created".into(), json!("2026-02-11T15:03:43Z"));
+        svc(json!({"id": 1, "image": "alpine:latest", "config": {}, "oci": oci}))
+    }
+
+    /// Build a `depends_on` of `condition` entries with the given
     /// `(name, required)` pairs.
-    fn add_started_deps(entries: &[(&str, bool)]) -> DependsOn {
+    fn deps(condition: DependsOnCondition, entries: &[(&str, bool)]) -> DependsOn {
         entries
             .iter()
             .map(|(name, required)| {
                 (
                     name.to_string(),
                     Dependency {
-                        condition: DependsOnCondition::ServiceStarted,
+                        condition,
                         restart: false,
                         required: *required,
                     },
@@ -370,8 +408,60 @@ mod tests {
             .into()
     }
 
+    fn add_started_deps(entries: &[(&str, bool)]) -> DependsOn {
+        deps(DependsOnCondition::ServiceStarted, entries)
+    }
+
     fn assert_dependencies_satisfied(device: &Device, deps: &DependsOn) -> bool {
         dependencies_satisfied(device, &"app-uuid".into(), &"rel-uuid".into(), deps)
+    }
+
+    #[test]
+    fn evaluate_condition_started() {
+        let started = DependsOnCondition::ServiceStarted;
+        let mut s = svc(json!({"id": 1, "image": "alpine:latest", "started": true, "config": {}}));
+        assert_eq!(evaluate_condition(&s, started), ConditionOutcome::Satisfied);
+        s.started = false;
+        assert_eq!(evaluate_condition(&s, started), ConditionOutcome::Pending);
+    }
+
+    #[test]
+    fn evaluate_condition_health() {
+        let healthy = DependsOnCondition::ServiceHealthy;
+
+        let s = svc_with_oci(json!({"status": "running", "health": "healthy"}));
+        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Satisfied);
+
+        // still waiting on healthcheck outcome
+        let s = svc_with_oci(json!({"status": "running", "health": "starting"}));
+        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+
+        // no health reported yet
+        let s = svc_with_oci(json!({"status": "running", "health": "none"}));
+        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+
+        // no container observed yet
+        let s = svc(json!({"id": 1, "image": "alpine:latest", "config": {}}));
+        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+    }
+
+    #[test]
+    fn evaluate_condition_completion() {
+        let completed = DependsOnCondition::ServiceCompletedSuccessfully;
+
+        let s = svc_with_oci(json!({"status": "stopped", "exit_code": 0}));
+        assert_eq!(
+            evaluate_condition(&s, completed),
+            ConditionOutcome::Satisfied
+        );
+
+        // exit code is not meaningful until the container has stopped
+        let s = svc_with_oci(json!({"status": "running", "exit_code": 0}));
+        assert_eq!(evaluate_condition(&s, completed), ConditionOutcome::Pending);
+
+        // no container observed yet
+        let s = svc(json!({"id": 1, "image": "alpine:latest", "config": {}}));
+        assert_eq!(evaluate_condition(&s, completed), ConditionOutcome::Pending);
     }
 
     #[test]
@@ -443,6 +533,69 @@ mod tests {
         assert!(assert_dependencies_satisfied(
             &device,
             &add_started_deps(&[("db", false)])
+        ));
+    }
+
+    #[test]
+    fn satisfied_when_required_healthy_dependency_is_confirmed() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
+                   "oci": {"name": "db", "created": "2026-02-11T15:03:43Z", "status": "running", "health": "healthy"}},
+        }));
+        assert!(assert_dependencies_satisfied(
+            &device,
+            &deps(DependsOnCondition::ServiceHealthy, &[("db", true)])
+        ));
+    }
+
+    #[test]
+    fn blocks_on_unconfirmed_required_healthy_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
+        }));
+        assert!(!assert_dependencies_satisfied(
+            &device,
+            &deps(DependsOnCondition::ServiceHealthy, &[("db", true)])
+        ));
+    }
+
+    #[test]
+    fn proceeds_on_unconfirmed_optional_healthy_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
+        }));
+        assert!(assert_dependencies_satisfied(
+            &device,
+            &deps(DependsOnCondition::ServiceHealthy, &[("db", false)])
+        ));
+    }
+
+    #[test]
+    fn satisfied_when_required_completed_dependency_is_confirmed() {
+        let device = device_with(json!({
+            "migrate": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
+                        "oci": {"name": "migrate", "created": "2026-02-11T15:03:43Z", "status": "stopped", "exit_code": 0}},
+        }));
+        assert!(assert_dependencies_satisfied(
+            &device,
+            &deps(
+                DependsOnCondition::ServiceCompletedSuccessfully,
+                &[("migrate", true)]
+            )
+        ));
+    }
+
+    #[test]
+    fn blocks_on_unconfirmed_required_completed_dependency() {
+        let device = device_with(json!({
+            "migrate": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
+        }));
+        assert!(!assert_dependencies_satisfied(
+            &device,
+            &deps(
+                DependsOnCondition::ServiceCompletedSuccessfully,
+                &[("migrate", true)]
+            )
         ));
     }
 }

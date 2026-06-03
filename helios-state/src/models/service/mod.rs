@@ -61,13 +61,18 @@ pub struct Container {
 }
 
 impl Container {
-    /// A mock container summary to use as part of planning tasks
+    /// A mock container summary to use as part of planning tasks.
+    ///
+    /// A freshly created container reports `exit_code` 0, so modelling it as
+    /// `Some(0)` keeps planning consistent with the real container
+    /// `start_service` observes at runtime, making an `await_completed` effect a
+    /// no-op in both so their patches match.
     pub fn mock() -> Self {
         Self {
             name: String::default(),
             created: DateTime::default(),
             status: ContainerStatus::Created,
-            exit_code: None,
+            exit_code: Some(0),
             health: Health::None,
         }
     }
