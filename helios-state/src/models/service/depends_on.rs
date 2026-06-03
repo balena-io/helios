@@ -10,7 +10,10 @@ use crate::remote_model::{
 };
 
 /// Condition under which a `depends_on` dependency is considered satisfied.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Ord` gives a stable tiebreak when emitting await tasks for a dependency
+/// referenced under more than one condition.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum DependsOnCondition {
     ServiceStarted,

@@ -144,6 +144,19 @@ pub struct Service {
     /// Ordering dependencies on other services in the same release.
     #[mahler(default)]
     pub depends_on: DependsOn,
+
+    /// `healthy` is ephemeral planning state set by `await_healthy`, not persisted,
+    /// and re-derived as `false` whenever current state is read from the engine.
+    /// Lets the planner gate `service_healthy` dependents deterministically.
+    #[mahler(internal, default)]
+    pub healthy: bool,
+
+    /// `completed_successfully` is ephemeral planning state set by `await_completed`,
+    /// not persisted, and re-derived as `false` whenever current state is read
+    /// from the engine.
+    /// Lets the planner gate `service_completed_successfully` dependents deterministically.
+    #[mahler(internal, default)]
+    pub completed_successfully: bool,
 }
 
 impl From<Service> for ServiceTarget {
@@ -386,6 +399,8 @@ impl<N> From<LocalContainer<N>> for Service {
             started,
             config,
             depends_on,
+            healthy: false,
+            completed_successfully: false,
         }
     }
 }
