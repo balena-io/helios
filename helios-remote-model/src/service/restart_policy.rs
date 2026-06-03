@@ -10,7 +10,7 @@ pub enum RestartPolicy {
     #[default]
     Always,
     OnFailure {
-        max_retries: Option<u32>,
+        max_retries: u32,
     },
     UnlessStopped,
 }
@@ -35,12 +35,11 @@ impl std::str::FromStr for RestartPolicy {
             "unless-stopped" => Ok(Self::UnlessStopped),
             _ if s.starts_with("on-failure") => {
                 let max_retries = if let Some(rest) = s.strip_prefix("on-failure:") {
-                    Some(
-                        rest.parse::<u32>()
-                            .map_err(|e| format!("invalid max retries in '{s}': {e}"))?,
-                    )
+                    rest.parse::<u32>()
+                        .map_err(|e| format!("invalid max retries in '{s}': {e}"))?
                 } else if s == "on-failure" {
-                    None
+                    // unlimited retries
+                    0
                 } else {
                     return Err(format!("invalid restart policy: '{s}'"));
                 };
@@ -79,18 +78,13 @@ mod tests {
     #[test]
     fn restart_policy_deserialize_on_failure() {
         let rp = deser_restart(serde_json::json!("on-failure")).unwrap();
-        assert_eq!(rp, RestartPolicy::OnFailure { max_retries: None });
+        assert_eq!(rp, RestartPolicy::OnFailure { max_retries: 0 });
     }
 
     #[test]
     fn restart_policy_deserialize_on_failure_with_retries() {
         let rp = deser_restart(serde_json::json!("on-failure:3")).unwrap();
-        assert_eq!(
-            rp,
-            RestartPolicy::OnFailure {
-                max_retries: Some(3)
-            }
-        );
+        assert_eq!(rp, RestartPolicy::OnFailure { max_retries: 3 });
     }
 
     #[test]

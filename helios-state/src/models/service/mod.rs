@@ -154,9 +154,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
         let restart_policy = match composition.restart {
             RemoteRestartPolicy::No => RestartPolicy::No,
             RemoteRestartPolicy::Always => RestartPolicy::Always,
-            RemoteRestartPolicy::OnFailure { max_retries } => {
-                RestartPolicy::OnFailure { max_retries }
-            }
+            RemoteRestartPolicy::OnFailure { max_retries } => RestartPolicy::OnFailure {
+                max_retries: Some(max_retries),
+            },
             RemoteRestartPolicy::UnlessStopped => RestartPolicy::UnlessStopped,
         };
 
