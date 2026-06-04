@@ -283,8 +283,11 @@ async fn test_remote_poll_hostos_update() {
 
     let status = wait_for_target_apply().await;
 
-    // we expectd an aborted state because it has to wait for the reboot
-    assert_eq!(status, json!({"status": "aborted"}));
+    assert_ne!(
+        status,
+        json!({"status": "aborted"}),
+        "Phase 2 removed the install-defer; the apply must no longer abort, got: {status}"
+    );
 
     let args_content = tokio::fs::read_to_string("/tmp/run/balenahup/args.txt")
         .await
@@ -314,11 +317,10 @@ async fn test_remote_poll_hostos_update() {
         args_content.contains(UPDATER_IMAGE),
         "args should contain updater image uri, got: {args_content}"
     );
-    // FIXME: this needs to be re-added once helios handles locks
-    // assert!(
-    //     args_content.contains("--no-reboot"),
-    //     "args should contain --no-reboot, got: {args_content}"
-    // );
+    assert!(
+        args_content.contains("--no-reboot"),
+        "args should contain --no-reboot (helios owns the reboot now), got: {args_content}"
+    );
 
     let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(
@@ -367,12 +369,46 @@ async fn test_remote_poll_hostos_update() {
         "overlay should exit 0 (deployed), got: {state:?}"
     );
 
-    // verify state report includes the hostapp with aborted status
-    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
-    assert_eq!(
-        release_report["services"]["hostapp"]["status"],
-        "Installing"
+    // Assert helios issued the coordinated reboot itself.
+    let mut reboot_observed = false;
+    for _ in 0..15 {
+        let out = tokio::process::Command::new("dbus-send")
+            .args([
+                "--system",
+                "--print-reply",
+                "--dest=org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.DBus.Properties.Get",
+                "string:org.freedesktop.login1.Manager",
+                "string:MockState",
+            ])
+            .output()
+            .await;
+        if let Ok(o) = out {
+            if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("rebooting") {
+                reboot_observed = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert!(
+        reboot_observed,
+        "helios should have issued the activation reboot via logind \
+         (org.freedesktop.login1.Manager.Reboot), flipping the mock's MockState \
+         to `rebooting`, but MockState never became `rebooting`"
     );
+
+    let _ = tokio::process::Command::new("dbus-send")
+        .args([
+            "--system",
+            "--print-reply",
+            "--dest=org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager.MockReset",
+        ])
+        .output()
+        .await;
 
     clear_reports().await;
     client
