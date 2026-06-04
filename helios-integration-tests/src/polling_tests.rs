@@ -8,6 +8,7 @@ use serde_json::json;
 const UPDATER_IMAGE: &str = "registry:5000/test-updater:latest";
 const FAILING_UPDATER_IMAGE: &str = "registry:5000/test-failing-updater:latest";
 const OVERLAY_IMAGE: &str = "registry:5000/test-overlay:latest";
+const FAILING_OVERLAY_IMAGE: &str = "registry:5000/test-failing-overlay:latest";
 
 use super::common::{
     HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, take_reboot_requested,
@@ -95,6 +96,47 @@ VOLUME /boot\n";
     let mut stream = docker.push_image("registry:5000/test-overlay", Some(push_opts), None);
     while let Some(result) = stream.next().await {
         result.expect("overlay image push failed");
+    }
+
+    prune_images().await;
+}
+
+/// Build and push an overlay image whose activation fails
+async fn build_failing_overlay_image(docker: &Docker) {
+    let dockerfile = b"FROM alpine:3.23\nVOLUME /boot\nRUN mkdir -p /hooks && printf '#!/bin/sh\\nexit 1\\n' > /hooks/start && chmod +x /hooks/start\n";
+
+    let mut tar_buf = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(dockerfile.len() as u64);
+    header.set_mode(0o644);
+    tar_buf
+        .append_data(&mut header, "Dockerfile", dockerfile.as_slice())
+        .unwrap();
+    let context_bytes = tar_buf.into_inner().unwrap();
+
+    let build_opts = BuildImageOptions {
+        t: Some(FAILING_OVERLAY_IMAGE.to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.build_image(
+        build_opts,
+        None,
+        Some(bollard::body_full(context_bytes.into())),
+    );
+    while let Some(result) = stream.next().await {
+        result.expect("failing overlay image build failed");
+    }
+
+    let push_opts = PushImageOptions {
+        tag: Some("latest".to_string()),
+        ..Default::default()
+    };
+
+    let mut stream =
+        docker.push_image("registry:5000/test-failing-overlay", Some(push_opts), None);
+    while let Some(result) = stream.next().await {
+        result.expect("failing overlay image push failed");
     }
 
     prune_images().await;
@@ -252,6 +294,17 @@ async fn test_remote_poll_hostos_update() {
                             "io.balena.update.requires-reboot": "1"
                         }
                     }
+                },
+                "extra-modules": {
+                    "id": 203,
+                    "image": OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "overlay",
+                            "io.balena.update.requires-reboot": "1"
+                        }
+                    }
                 }
             }
         }),
@@ -260,7 +313,7 @@ async fn test_remote_poll_hostos_update() {
         "id": 200,
         "name": "generic-aarch64",
         "is_host": true,
-        "releases": serde_json::Value::Object(releases)
+        "releases": serde_json::Value::Object(releases.clone())
     });
     let mut apps = serde_json::Map::new();
     apps.insert(APP_UUID.to_string(), app_obj);
@@ -333,19 +386,333 @@ async fn test_remote_poll_hostos_update() {
         "breadcrumb file should exist at {breadcrumb}"
     );
 
-    // The overlay container must have been created, run under the `extension`
-    // runtime, and exited 0 BEFORE the (balenahup-issued) reboot: helios gates
-    // the host install on every target overlay being deployed first.
-    // Release membership is encoded in the container name (the
-    // `{service}_{release_uuid}` LocalNamespace convention), not in a label.
-    let mut filters = std::collections::HashMap::new();
-    filters.insert(
-        "label".to_string(),
-        vec![
-            "io.balena.image.class=overlay".to_string(),
-            "io.balena.service-name=kernel-modules".to_string(),
-        ],
+    // Each target overlay container must have been created, run under the
+    // `extension` runtime, and exited 0 BEFORE the (balenahup) reboot
+    let mut overlay_volumes: Vec<(&str, String)> = Vec::new();
+    for service_name in ["kernel-modules", "extra-modules"] {
+        let mut filters = std::collections::HashMap::new();
+        filters.insert(
+            "label".to_string(),
+            vec![
+                "io.balena.image.class=overlay".to_string(),
+                format!("io.balena.service-name={service_name}"),
+            ],
+        );
+        filters.insert(
+            "name".to_string(),
+            vec![format!("{service_name}_{RELEASE_COMMIT}")],
+        );
+        let containers = docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            containers.len(),
+            1,
+            "exactly one '{service_name}' overlay container should be deployed, got: {containers:?}"
+        );
+        let inspect = docker
+            .inspect_container(containers[0].id.as_deref().unwrap(), None)
+            .await
+            .unwrap();
+        // Read the ext_* volume name off the container's own mount rather than
+        // recomputing it from the image id.
+        let boot_volume = inspect
+            .mounts
+            .as_ref()
+            .and_then(|mounts| {
+                mounts
+                    .iter()
+                    .find(|m| m.destination.as_deref() == Some("/boot"))
+            })
+            .and_then(|m| m.name.clone())
+            .unwrap_or_else(|| {
+                panic!("'{service_name}' overlay should mount a named volume at /boot")
+            });
+        overlay_volumes.push((service_name, boot_volume));
+
+        let state = inspect
+            .state
+            .expect("overlay container should have state");
+        assert_eq!(
+            state.status,
+            Some(ContainerStateStatusEnum::EXITED),
+            "'{service_name}' overlay container should have exited"
+        );
+        assert_eq!(
+            state.exit_code,
+            Some(0),
+            "'{service_name}' overlay should exit 0 (deployed), got: {state:?}"
+        );
+    }
+
+    // Each image-declared VOLUME must be backed by a named ext_* volume
+    // carrying the image's io.balena.image.* labels.
+    let all_volumes = docker
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await
+        .unwrap()
+        .volumes
+        .unwrap_or_default();
+
+    for (service_name, expected) in &overlay_volumes {
+        // The `ext_` prefix and `_boot` suffix are what the OS volume discovery
+        // matches on; the middle segment is the image content id.
+        assert!(
+            expected.starts_with(&format!("ext_{service_name}_")) && expected.ends_with("_boot"),
+            "overlay volume should follow the ext_<service>_<id>_<dest> convention, got '{expected}'"
+        );
+        let vol = all_volumes
+            .iter()
+            .find(|v| &v.name == expected)
+            .unwrap_or_else(|| {
+                let names: Vec<&str> = all_volumes.iter().map(|v| v.name.as_str()).collect();
+                panic!("expected volume '{expected}', have: {names:?}")
+            });
+
+        assert_eq!(
+            vol.labels.get("io.balena.image.class").map(String::as_str),
+            Some("overlay"),
+            "volume '{expected}' must carry the image class label"
+        );
+        assert_eq!(
+            vol.labels
+                .get("io.balena.image.kernel-version")
+                .map(String::as_str),
+            Some("6.1.0"),
+            "volume '{expected}' must carry the kernel-version label the sweep reads"
+        );
+        assert_eq!(
+            vol.labels
+                .get("io.balena.image.os-version")
+                .map(String::as_str),
+            Some("6.0.39"),
+            "volume '{expected}' must carry the os-version label the sweep reads"
+        );
+        assert!(
+            !vol.labels.contains_key("org.opencontainers.image.title"),
+            "only io.balena.image.* labels are copied, got: {:?}",
+            vol.labels
+        );
+    }
+
+    // Assert helios issued the coordinated reboot itself.
+    let mut reboot_observed = false;
+    for _ in 0..15 {
+        if take_reboot_requested().await {
+            reboot_observed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert!(
+        reboot_observed,
+        "helios should have issued the activation reboot via logind \
+         (org.freedesktop.login1.Manager.Reboot), flipping the mock's MockState \
+         to `rebooting`, but MockState never became `rebooting`"
     );
+
+    reset_mock_power_state().await;
+
+    let overlays_running = |rel: &serde_json::Value| {
+        ["kernel-modules", "extra-modules"]
+            .iter()
+            .all(|svc| rel["services"][svc]["status"] == "Running")
+    };
+    let release_report = wait_for_report_where(
+        APP_UUID,
+        RELEASE_COMMIT,
+        "applying changes",
+        overlays_running,
+        30,
+    )
+    .await;
+    assert_eq!(
+        release_report["services"]["hostapp"]["status"], "Installing",
+        "the hostapp never reaches meta.build in this harness, got: {release_report}"
+    );
+
+    // Drop one overlay from the target.
+    let mut reduced = releases.clone();
+    reduced
+        .get_mut(RELEASE_COMMIT)
+        .unwrap()
+        .get_mut("services")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("extra-modules");
+    let reduced_target = json!({
+        "name": "test-device",
+        "apps": {
+            APP_UUID: {
+                "id": 200,
+                "name": "generic-aarch64",
+                "is_host": true,
+                "releases": serde_json::Value::Object(reduced)
+            }
+        }
+    });
+
+    let res = client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&reduced_target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    wait_for_target_apply().await;
+
+    for (service_name, expected) in [("extra-modules", 0), ("kernel-modules", 1)] {
+        let mut filters = std::collections::HashMap::new();
+        filters.insert(
+            "name".to_string(),
+            vec![format!("{service_name}_{RELEASE_COMMIT}")],
+        );
+        let containers = docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            containers.len(),
+            expected,
+            "after dropping 'extra-modules' from the target, expected {expected} \
+             '{service_name}' container(s), got: {containers:?}"
+        );
+    }
+
+    // Removing an overlay must leave its ext_* volume behind.
+    let after = docker
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await
+        .unwrap()
+        .volumes
+        .unwrap_or_default();
+    let dropped_volume = &overlay_volumes
+        .iter()
+        .find(|(service_name, _)| *service_name == "extra-modules")
+        .expect("extra-modules volume name was captured above")
+        .1;
+    assert!(
+        after.iter().any(|v| &v.name == dropped_volume),
+        "removing an overlay must leave its ext_* volume '{dropped_volume}' for the OS to reap"
+    );
+
+    clear_reports().await;
+    client
+        .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .send()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_hostos_update_aborts_on_overlay_activation_failure() {
+    let docker = Docker::connect_with_defaults().unwrap();
+    build_test_updater_image(&docker).await;
+    build_failing_overlay_image(&docker).await;
+
+    let client = reqwest::Client::new();
+
+    const APP_UUID: &str = "test-hostapp-overlay-fail-uuid";
+    const RELEASE_COMMIT: &str = "0011223344556677889900aabbccddee";
+
+    let mut releases = serde_json::Map::new();
+    releases.insert(
+        RELEASE_COMMIT.to_string(),
+        json!({
+            "services": {
+                "hostapp": {
+                    "id": 401,
+                    "image": UPDATER_IMAGE,
+                    "labels": { "io.balena.private.updater": UPDATER_IMAGE },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "test-board-rev-fail"
+                    }}
+                },
+                "kernel-modules": {
+                    "id": 402,
+                    "image": FAILING_OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": { "labels": {
+                        "io.balena.image.class": "overlay",
+                        "io.balena.update.requires-reboot": "1"
+                    }}
+                }
+            }
+        }),
+    );
+    let app_obj = json!({
+        "id": 400,
+        "name": "generic-aarch64",
+        "is_host": true,
+        "releases": serde_json::Value::Object(releases)
+    });
+    let mut apps = serde_json::Map::new();
+    apps.insert(APP_UUID.to_string(), app_obj);
+    let device_target = json!({
+        "name": "test-device",
+        "apps": serde_json::Value::Object(apps)
+    });
+
+    clear_reports().await;
+
+    // Start from a clean reboot state so the negative reboot assertion below is
+    // not confused by a prior test's reboot.
+    reset_mock_power_state().await;
+
+    let res = client
+        .put(format!("{MOCK_REMOTE_URL}/mock/state"))
+        .json(&device_target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = client
+        .post(format!("{HELIOS_URL}/v1/update"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    // The overlay deploy is ordered before the hostapp install and the reboot,
+    // so a failed activation aborts the whole host update at that point.
+    let status = wait_for_target_apply().await;
+    assert_eq!(
+        status,
+        json!({"status": "aborted"}),
+        "a failed overlay activation must abort the host update, got: {status}"
+    );
+
+    // The install never ran, so no breadcrumb was written for this release.
+    let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
+    assert!(
+        tokio::fs::metadata(&breadcrumb).await.is_err(),
+        "breadcrumb must NOT exist at {breadcrumb}: install must not run when an overlay fails"
+    );
+
+    // The overlay must not have activated cleanly: helios leaves the container
+    // in place (so it derives Failed), and it must not be in the exited-0 state
+    // a successful one-shot activation would leave.
+    let mut filters = std::collections::HashMap::new();
     filters.insert(
         "name".to_string(),
         vec![format!("kernel-modules_{RELEASE_COMMIT}")],
@@ -361,41 +728,27 @@ async fn test_remote_poll_hostos_update() {
     assert_eq!(
         containers.len(),
         1,
-        "exactly one overlay container should be deployed, got: {containers:?}"
+        "the failed overlay container should be left in place, got: {containers:?}"
     );
     let inspect = docker
         .inspect_container(containers[0].id.as_deref().unwrap(), None)
         .await
         .unwrap();
     let state = inspect.state.expect("overlay container should have state");
-    assert_eq!(
-        state.status,
-        Some(ContainerStateStatusEnum::EXITED),
-        "overlay container should have exited"
-    );
-    assert_eq!(
-        state.exit_code,
-        Some(0),
-        "overlay should exit 0 (deployed), got: {state:?}"
-    );
-
-    // Assert helios issued the coordinated reboot itself.
-    let mut reboot_observed = false;
-    for _ in 0..15 {
-        if reboot_requested().await {
-            reboot_observed = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    let cleanly_deployed =
+        state.status == Some(ContainerStateStatusEnum::EXITED) && state.exit_code == Some(0);
     assert!(
-        reboot_observed,
-        "helios should have issued the activation reboot via logind \
-         (org.freedesktop.login1.Manager.Reboot), flipping the mock's MockState \
-         to `rebooting`, but MockState never became `rebooting`"
+        !cleanly_deployed,
+        "overlay activation must not have succeeded, got state: {state:?}"
     );
 
-    reset_mock_power_state().await;
+    // helios must NOT issue the coordinated reboot when the update aborts. The
+    // apply already converged to `aborted`, so a reboot would have fired during
+    // it; confirm the mock's reboot state was never tripped.
+    assert!(
+        !take_reboot_requested().await,
+        "helios must not reboot when an overlay activation fails"
+    );
 
     clear_reports().await;
     client
