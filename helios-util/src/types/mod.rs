@@ -28,3 +28,16 @@ impl Deref for HostRuntimeDir {
         &self.0
     }
 }
+
+/// Directory where the host state partition is mounted (e.g. /mnt/state),
+/// where the OS writes HUP rollback breadcrumbs.
+#[derive(Debug, Clone)]
+pub struct HostStateDir(pub PathBuf);
+
+impl Deref for HostStateDir {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}

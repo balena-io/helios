@@ -91,6 +91,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let state_config = StateConfig {
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
+        host_state_dir: cli
+            .host_state_dir
+            .unwrap_or_else(|| std::path::PathBuf::from("/mnt/state")),
     };
 
     let retry_interval = cli.local_retry_interval.unwrap_or(Duration::from_secs(30));

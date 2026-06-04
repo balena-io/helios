@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::common_types::{HostRuntimeDir, OperatingSystem, Uuid};
+use crate::common_types::{HostRuntimeDir, HostStateDir, OperatingSystem, Uuid};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, read};
@@ -12,6 +12,7 @@ use crate::util::dirs;
 pub struct StateConfig {
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
+    pub host_state_dir: PathBuf,
 }
 
 pub struct Resources {
@@ -19,6 +20,7 @@ pub struct Resources {
     pub(crate) registry_auth_client: Option<RegistryAuth>,
     pub(crate) local_store: DocumentStore,
     pub(crate) host_runtime_dir: HostRuntimeDir,
+    pub(crate) host_state_dir: HostStateDir,
 }
 
 #[derive(Debug, Error)]
@@ -48,14 +50,16 @@ pub async fn prepare(
     let StateConfig {
         host_os,
         host_runtime_dir,
+        host_state_dir,
     } = host_config;
 
-    let initial_state = read(&docker, &local_store, uuid, host_os).await?;
+    let initial_state = read(&docker, &local_store, uuid, host_os, &host_state_dir).await?;
     let runtime = Resources {
         docker,
         registry_auth_client,
         local_store,
         host_runtime_dir: HostRuntimeDir(host_runtime_dir),
+        host_state_dir: HostStateDir(host_state_dir),
     };
 
     Ok((runtime, initial_state))
