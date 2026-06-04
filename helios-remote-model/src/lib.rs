@@ -136,6 +136,7 @@ pub struct RejectedApp {
     pub reason: String,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum App {
     User(UserApp),
@@ -146,6 +147,7 @@ pub enum App {
 /// Outcome of `parse_app` — either an accepted `App`, a per-app rejection
 /// keyed by a specific release uuid, or a fatal device-level error that
 /// should abort the whole `AppMap` deserialization.
+#[derive(Debug)]
 enum ParseAppError {
     Reject(RejectedApp),
     Fatal(String),
@@ -213,13 +215,32 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         ));
     };
 
-    let Some(svc) = release.services.into_values().find(|svc| {
-        svc.composition
+    let mut hostapp_svc: Option<(String, Service)> = None;
+    let mut overlays: Vec<HostAppOverlay> = Vec::new();
+    for (svc_name, svc) in release.services.into_iter() {
+        match svc
+            .composition
             .labels
             .get("io.balena.image.class")
-            .filter(|value| *value == "hostapp")
-            .is_some()
-    }) else {
+            .map(String::as_str)
+        {
+            Some("hostapp") => hostapp_svc = Some((svc_name, svc)),
+            // The `io.balena.update.requires-reboot` label is reserved in the
+            // extension contract for future runtime-activated extensions. No
+            // such mechanism exists (mobynit applies overlays at boot only),
+            // so every overlay is treated as reboot-activated and the label
+            // is not read.
+            Some("overlay") => {
+                overlays.push(HostAppOverlay {
+                    name: svc_name,
+                    image: svc.image,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let Some((_, svc)) = hostapp_svc else {
         return Err(ParseAppError::Reject(RejectedApp {
             id: app.id,
             name: app.name,
@@ -278,6 +299,7 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
             board_rev,
             updater,
         },
+        overlays,
     }))
 }
 
@@ -286,6 +308,7 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
 pub struct HostRelease {
     pub release_uuid: Uuid,
     pub hostapp: HostApp,
+    pub overlays: Vec<HostAppOverlay>,
 }
 
 /// The rootfs component of a host OS release
@@ -294,6 +317,12 @@ pub struct HostApp {
     pub image: ImageUri,
     pub board_rev: String,
     pub updater: ImageUri,
+}
+
+#[derive(Debug)]
+pub struct HostAppOverlay {
+    pub name: String,
+    pub image: ImageUri,
 }
 
 /// Target app as defined by the remote backend
@@ -1503,6 +1532,77 @@ mod tests {
             err.to_string(),
             "service 'my-service' refers to undefined volume missing"
         );
+    }
+
+    #[test]
+    fn parses_and_sorts_hostapp_overlay_services() {
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": "registry2.balena-cloud.com/v2/aabbccddeeff00112233445566778899@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "labels": {},
+                    "composition": { "labels": {
+                        "io.balena.image.class": "overlay",
+                        "io.balena.update.requires-reboot": "1"
+                    }}
+                },
+                "a-modules": {
+                    "id": 203,
+                    "image": "registry2.balena-cloud.com/v2/00112233445566778899aabbccddeeff@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "labels": {},
+                    "composition": { "labels": {
+                        "io.balena.image.class": "overlay"
+                    }}
+                }
+            }}}
+        });
+        let app = parse_app(value).unwrap();
+        let App::Host(release) = app else {
+            panic!("expected hostapp")
+        };
+        // Order is not part of the contract: the state model keys overlays by
+        // name, so only the set matters.
+        let mut names: Vec<&str> = release.overlays.iter().map(|o| o.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["a-modules", "kernel-modules"]);
+    }
+
+    #[test]
+    fn parses_a_hostapp_release_without_overlays() {
+        // Every hostapp release built before overlays existed carries the
+        // hostapp service alone. That payload stays valid: it parses to a
+        // release with no overlays, never a rejection.
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                }
+            }}}
+        });
+        let app = parse_app(value).unwrap();
+        let App::Host(release) = app else {
+            panic!("expected hostapp")
+        };
+        assert_eq!(release.hostapp.board_rev, "rev-1");
+        assert!(release.overlays.is_empty());
     }
 
     #[test]
