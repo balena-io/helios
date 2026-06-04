@@ -15,8 +15,12 @@ use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
+use crate::overlays::{deploy_overlay, redeploy_overlay, remove_overlay};
+
 use super::BALENAHUP;
-use super::models::{Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget};
+use super::models::{
+    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
+};
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -67,6 +71,7 @@ fn init_hostapp_release(
             install_attempts: 0,
         },
         status,
+        overlays: mahler::state::Map::new(),
     };
 
     // set the host release with the details from the target
@@ -91,6 +96,7 @@ fn init_hostapp_release(
 fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
+    Target(tgt): Target<HostRelease>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
     host_runtime_dir: Res<HostRuntimeDir>,
@@ -100,6 +106,17 @@ fn install_hostapp_release(
         release.status == HostReleaseStatus::Created,
         "OS release already installed"
     );
+
+    // The install triggers the (balenahup) reboot, so every overlay the
+    // target wants must already be staged on disk before we install. The
+    // planner therefore orders deploy_overlay tasks ahead of this install.
+    let overlays_ready = tgt.overlays.keys().all(|name| {
+        release
+            .overlays
+            .get(name)
+            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
+    });
+    enforce!(overlays_ready, "overlays not yet deployed");
 
     // increase the install counter
     release.hostapp.install_attempts += 1;
@@ -348,6 +365,22 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 ),
             ],
         )
+        .jobs(
+            "/host/releases/{release_uuid}/overlays/{name}",
+            [
+                job::create(deploy_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("deploy overlay '{name}' for host OS release '{release_uuid}'")
+                    },
+                ),
+                job::update(redeploy_overlay),
+                job::delete(remove_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("remove overlay '{name}' for host OS release '{release_uuid}'")
+                    },
+                ),
+            ],
+        )
         .job(
             "/host",
             job::none(cleanup_hostapp).with_description(|| "clean-up host metadata and images"),
@@ -371,5 +404,21 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
             })
             .with_description(|| "too many failed installs, check device"),
+        )
+        // abort the release if an overlay failed to activate at the target image
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>, Target(tgt): Target<HostRelease>| {
+                tgt.overlays.iter().any(|(name, tgt_overlay)| {
+                    rel.overlays.get(name).is_some_and(|ov| {
+                        ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image
+                    })
+                })
+            })
+            .with_description(|Args(release_uuid): Args<String>| {
+                format!(
+                    "overlay activation failed for host OS release '{release_uuid}', check device"
+                )
+            }),
         )
 }

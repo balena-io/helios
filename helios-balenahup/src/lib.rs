@@ -1,8 +1,11 @@
 mod models;
+mod overlays;
 pub mod read;
 mod tasks;
 
-pub use models::{Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget};
+pub use models::{
+    Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget, Overlay, OverlayStatus,
+};
 pub use tasks::{HostCleanupError, cleanup_hostapp, with_hostapp_tasks};
 
 use helios_oci as oci;
