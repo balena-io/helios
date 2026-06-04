@@ -136,5 +136,10 @@ volumes:
       type: tmpfs
       o: ''
       device: tmpfs
+  state-partition:
+    driver_opts:
+      type: tmpfs
+      o: ''
+      device: tmpfs
   dind:
   registry:
