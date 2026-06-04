@@ -41,6 +41,50 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
 }
 
 #[test]
+fn it_deploys_overlays_before_installing_the_hostapp() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "class": "overlay",
+                                "requires_reboot": true,
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize host OS release 'target-release'")
+            + seq!("deploy overlay 'kernel-modules' for host OS release 'target-release'")
+            + seq!("install host OS release 'target-release'"),
+    );
+}
+
+#[test]
 fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
     init_tracing();
     assert_workflow(
