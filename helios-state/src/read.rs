@@ -81,7 +81,7 @@ pub async fn read(
     // Read the hostapp information from the local store
     #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
-        crate::balenahup::read::from_store(host, local_store).await?;
+        crate::balenahup::read::from_store(host, docker, local_store).await?;
     }
 
     // Read the state of images

@@ -50,7 +50,24 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
             image,
             board_rev,
             updater,
+            overlays,
         } = app;
+
+        let overlays = overlays
+            .into_iter()
+            .map(|ov| {
+                (
+                    ov.name,
+                    OverlayTarget {
+                        image: ov.image,
+                        class: ov.class,
+                        requires_reboot: ov.requires_reboot,
+                        // target: the overlay should be carried by the running kernel
+                        status: OverlayStatus::Active,
+                    },
+                )
+            })
+            .collect();
 
         let mut releases = Map::new();
         releases.insert(
@@ -62,6 +79,7 @@ impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
                 updater,
                 // the release should be running (target)
                 status: HostReleaseStatus::Running,
+                overlays,
             },
         );
 
@@ -82,6 +100,48 @@ pub enum HostReleaseStatus {
 
 impl State for HostReleaseStatus {
     type Target = Self;
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayStatus {
+    Absent,
+    Deployed,
+    Active,
+}
+
+impl State for OverlayStatus {
+    type Target = Self;
+}
+
+/// A hostapp overlay extension, versioned together with its host release.
+#[derive(State, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq))]
+pub struct Overlay {
+    pub image: ImageUri,
+
+    pub class: String,
+
+    pub requires_reboot: bool,
+
+    pub status: OverlayStatus,
+}
+
+impl From<Overlay> for OverlayTarget {
+    fn from(ov: Overlay) -> Self {
+        let Overlay {
+            image,
+            class,
+            requires_reboot,
+            status,
+        } = ov;
+        OverlayTarget {
+            image,
+            class,
+            requires_reboot,
+            status,
+        }
+    }
 }
 
 #[derive(State, Debug, Clone)]
@@ -109,6 +169,8 @@ pub struct HostRelease {
     /// The release is running/should be running
     pub status: HostReleaseStatus,
 
+    pub overlays: Map<String, Overlay>,
+
     /// How many installs have been attempted for this release
     #[mahler(internal)]
     pub install_attempts: usize,
@@ -122,6 +184,7 @@ impl From<HostRelease> for HostReleaseTarget {
             build,
             updater,
             status,
+            overlays,
             ..
         } = rel;
         HostReleaseTarget {
@@ -130,6 +193,7 @@ impl From<HostRelease> for HostReleaseTarget {
             build,
             updater,
             status,
+            overlays: overlays.into_iter().map(|(k, v)| (k, v.into())).collect(),
         }
     }
 }
