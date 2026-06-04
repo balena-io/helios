@@ -1,38 +1,15 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
-
 use mahler::extract::{Args, Res, Target, View};
 use mahler::task::prelude::*;
 
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
-use crate::util::locking::{self, ForceAcquireLocks, LockSet};
+use crate::util::locking::{self, ForceAcquireLocks, LockSet, find_update_locks};
 use crate::util::systemd;
 
 use super::models::{HostRelease, HostReleaseStatus, OverlayStatus};
-
-/// Collect helios per-service update-lock files under `dir`. A held one means a
-/// user service must not be disrupted, so the reboot must wait.
-///
-/// A missing `dir` means "no services yet" (`Ok` empty), but any
-/// other read error propagates so the caller DEFERS the reboot rather than
-/// assuming it is safe to tear down a possibly locked service. Symlinks are not
-/// followed (no recursion loops).
-fn find_update_locks(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in WalkDir::new(dir).follow_links(false) {
-        let entry = entry.map_err(io::Error::from)?;
-        if entry.file_type().is_file() && entry.file_name() == "updates.lock" {
-            out.push(entry.into_path());
-        }
-    }
-    Ok(out)
-}
 
 /// Returns the path of a user-held update lock that forbids disrupting its
 /// service, or `None` if every lock under `runtime_dir` is free.
@@ -143,25 +120,6 @@ pub(crate) enum RebootError {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn finds_nested_update_locks() {
-        let tmp = tempdir().unwrap();
-        let svc = tmp.path().join("app-uuid").join("svc");
-        std::fs::create_dir_all(&svc).unwrap();
-        std::fs::write(svc.join("updates.lock"), b"x").unwrap();
-        std::fs::write(tmp.path().join("not-a-lock"), b"x").unwrap();
-
-        let found = find_update_locks(tmp.path()).unwrap();
-        assert_eq!(found, vec![svc.join("updates.lock")]);
-    }
-
-    #[test]
-    fn returns_empty_for_missing_dir() {
-        assert!(find_update_locks(Path::new("/nonexistent/helios/xyz"))
-            .unwrap()
-            .is_empty());
-    }
 
     #[test]
     fn reports_a_user_lock_and_leaves_it_intact() {
