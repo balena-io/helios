@@ -36,6 +36,7 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
         seq!(
             "initialize host OS release 'target-release'",
             "install host OS release 'target-release'",
+            "reboot to activate host OS release 'target-release'",
         ),
     );
 }
@@ -128,7 +129,8 @@ fn it_deploys_overlays_before_installing_the_hostapp() {
         }),
         seq!("initialize host OS release 'target-release'")
             + seq!("deploy overlay 'kernel-modules' for host OS release 'target-release'")
-            + seq!("install host OS release 'target-release'"),
+            + seq!("install host OS release 'target-release'")
+            + seq!("reboot to activate host OS release 'target-release'"),
     );
 }
 
@@ -176,7 +178,8 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
             + par!(
                 "install host OS release 'new-release'",
                 "remove metadata for host OS release 'old-release'",
-            ),
+            )
+            + seq!("reboot to activate host OS release 'new-release'"),
     );
 }
 
@@ -229,7 +232,10 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                 }
             },
         }),
-        seq!("remove metadata for host OS release 'old-release'",),
+        par!(
+            "reboot to activate host OS release 'new-release'",
+            "remove metadata for host OS release 'old-release'",
+        ),
     );
 }
 
