@@ -35,6 +35,14 @@ pub struct Cli {
     )]
     pub host_runtime_dir: Option<PathBuf>,
 
+    /// Host OS state directory for HUP rollback breadcrumbs, e.g. "/mnt/state"
+    #[arg(
+        env = "HELIOS_HOST_STATE_DIR",
+        long = "host-state-dir",
+        value_name = "path"
+    )]
+    pub host_state_dir: Option<PathBuf>,
+
     /// Local API listen address
     #[arg(
         env = "HELIOS_LOCAL_API_ADDRESS",

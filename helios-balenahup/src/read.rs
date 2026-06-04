@@ -12,6 +12,9 @@ use crate::util::proc;
 use super::BALENAHUP;
 use super::models::{Host, HostRelease, HostReleaseStatus};
 
+const ROLLBACK_HEALTH_BREADCRUMB: &str = "rollback-health-breadcrumb";
+const ROLLBACK_ALTBOOT_BREADCRUMB: &str = "rollback-altboot-breadcrumb";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -29,6 +32,7 @@ pub async fn from_store(
     host: &mut Host,
     docker: &Docker,
     local_store: &DocumentStore,
+    host_state_dir: &std::path::Path,
 ) -> Result<(), Error> {
     // Read the hostapp information from the local store
     let host_releases_view = local_store.as_view().at("host/releases")?;
@@ -102,6 +106,16 @@ pub async fn from_store(
         if let Some(rel) = host.releases.get_mut(&Uuid::from(release_uuid)) {
             rel.overlays.insert(name, overlay);
         }
+    }
+
+    let hup_in_progress = tokio::fs::try_exists(host_state_dir.join(ROLLBACK_HEALTH_BREADCRUMB))
+        .await
+        .unwrap_or(false)
+        || tokio::fs::try_exists(host_state_dir.join(ROLLBACK_ALTBOOT_BREADCRUMB))
+            .await
+            .unwrap_or(false);
+    for rel in host.releases.values_mut() {
+        rel.hup_in_progress = hup_in_progress;
     }
 
     Ok(())

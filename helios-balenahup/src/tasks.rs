@@ -77,6 +77,7 @@ fn init_hostapp_release(
         status,
         overlays: mahler::state::Map::new(),
         install_attempts: 0,
+        hup_in_progress: false,
     };
 
     // set the host release with the details from the target
@@ -399,5 +400,12 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 rel.status == HostReleaseStatus::Created && rel.install_attempts > 3
             })
             .with_description(|| "too many failed installs, check device"),
+        )
+        // wait for an in-progress host OS update (the OS is validating a staged
+        // update and may still roll back); do not start more host work.
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>| rel.hup_in_progress)
+                .with_description(|| "host OS update in progress, waiting for validation"),
         )
 }

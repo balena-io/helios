@@ -174,6 +174,9 @@ pub struct HostRelease {
     /// How many installs have been attempted for this release
     #[mahler(internal)]
     pub install_attempts: usize,
+
+    #[mahler(internal, default)]
+    pub hup_in_progress: bool,
 }
 
 impl From<HostRelease> for HostReleaseTarget {
