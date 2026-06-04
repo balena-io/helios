@@ -247,6 +247,17 @@ async fn test_remote_poll_hostos_update() {
                             "io.balena.update.requires-reboot": "1"
                         }
                     }
+                },
+                "extra-modules": {
+                    "id": 203,
+                    "image": OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "overlay",
+                            "io.balena.update.requires-reboot": "1"
+                        }
+                    }
                 }
             }
         }),
@@ -328,46 +339,52 @@ async fn test_remote_poll_hostos_update() {
         "breadcrumb file should exist at {breadcrumb}"
     );
 
-    // The overlay container must have been created, run under the `extension`
-    // runtime, and exited 0 BEFORE the (balenahup-issued) reboot: helios gates
-    // the host install on every target overlay being deployed first.
-    let mut filters = std::collections::HashMap::new();
-    filters.insert(
-        "label".to_string(),
-        vec![
-            "io.balena.image.class=overlay".to_string(),
-            "io.balena.service-name=kernel-modules".to_string(),
-            format!("io.balena.private.hostapp.release={RELEASE_COMMIT}"),
-        ],
-    );
-    let containers = docker
-        .list_containers(Some(ListContainersOptions {
-            all: true,
-            filters: Some(filters),
-            ..Default::default()
-        }))
-        .await
-        .unwrap();
-    assert_eq!(
-        containers.len(),
-        1,
-        "exactly one overlay container should be deployed, got: {containers:?}"
-    );
-    let inspect = docker
-        .inspect_container(containers[0].id.as_deref().unwrap(), None)
-        .await
-        .unwrap();
-    let state = inspect.state.expect("overlay container should have state");
-    assert_eq!(
-        state.status,
-        Some(ContainerStateStatusEnum::EXITED),
-        "overlay container should have exited"
-    );
-    assert_eq!(
-        state.exit_code,
-        Some(0),
-        "overlay should exit 0 (deployed), got: {state:?}"
-    );
+    // Each target overlay container must have been created, run under the
+    // `extension` runtime, and exited 0 BEFORE the (balenahup-issued) reboot:
+    // helios gates the host install on EVERY target overlay being deployed
+    // first. Two overlays of the single class `overlay` prove generic N-overlay
+    // handling (both deploy, the install gate waits for both).
+    for service_name in ["kernel-modules", "extra-modules"] {
+        let mut filters = std::collections::HashMap::new();
+        filters.insert(
+            "label".to_string(),
+            vec![
+                "io.balena.image.class=overlay".to_string(),
+                format!("io.balena.service-name={service_name}"),
+                format!("io.balena.private.hostapp.release={RELEASE_COMMIT}"),
+            ],
+        );
+        let containers = docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            containers.len(),
+            1,
+            "exactly one '{service_name}' overlay container should be deployed, got: {containers:?}"
+        );
+        let inspect = docker
+            .inspect_container(containers[0].id.as_deref().unwrap(), None)
+            .await
+            .unwrap();
+        let state = inspect
+            .state
+            .expect("overlay container should have state");
+        assert_eq!(
+            state.status,
+            Some(ContainerStateStatusEnum::EXITED),
+            "'{service_name}' overlay container should have exited"
+        );
+        assert_eq!(
+            state.exit_code,
+            Some(0),
+            "'{service_name}' overlay should exit 0 (deployed), got: {state:?}"
+        );
+    }
 
     // Assert helios issued the coordinated reboot itself.
     let mut reboot_observed = false;
