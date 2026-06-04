@@ -669,6 +669,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             error: state.error,
             healthy,
             status,
+            exit_code: state.exit_code,
         };
 
         Ok(Self {
@@ -721,6 +722,7 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.
