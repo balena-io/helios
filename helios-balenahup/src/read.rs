@@ -8,11 +8,15 @@ use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::proc;
+use crate::util::systemd;
 
 use super::BALENAHUP;
 use super::models::{
     CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, overlay_from_container,
 };
+
+/// The systemd unit running the OS rollback validation after a HUP.
+const ROLLBACK_HEALTH_UNIT: &str = "rollback-health";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,6 +28,27 @@ pub enum Error {
 
     #[error(transparent)]
     IO(#[from] std::io::Error),
+}
+
+/// Whether the OS rollback validation is in progress
+fn validation_in_progress(unit: &systemd::UnitStatus) -> bool {
+    // no rollback machinery on this OS: nothing to wait for
+    if !unit.exists() {
+        return false;
+    }
+    // the validation script is running: the OS may still roll back
+    if unit.is_activating() {
+        return true;
+    }
+    // systemd has not evaluated the unit's condition yet this boot: too early
+    // to know whether a validation is pending, defer conservatively (resolves
+    // within seconds; polls re-trigger).
+    //
+    // Any other state means the condition was evaluated and the script is not
+    // running: "active" is a validation that succeeded this boot
+    // (RemainAfterExit), "failed" hands the outcome to the rollback machinery
+    // (altboot on next reboot).
+    unit.is_inactive() && !unit.conditions_evaluated()
 }
 
 /// Read the hostapp data from the store
@@ -108,5 +133,58 @@ pub async fn from_store(
         }
     }
 
+    // A helios-issued reboot during the validation window would trigger the
+    // OS rollback, so host work defers while the validation runs. The condition
+    // is device-global (one rollback-health unit), so it lives on the host.
+    host.os_validating = match systemd::unit_status(ROLLBACK_HEALTH_UNIT).await {
+        Ok(unit) => validation_in_progress(&unit),
+        Err(e) => {
+            tracing::warn!(
+                "could not query {ROLLBACK_HEALTH_UNIT}.service, assuming no rollback validation in progress: {e}"
+            );
+            false
+        }
+    };
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::systemd::UnitStatus;
+
+    fn unit(load: &str, active: &str, condition_ts: u64) -> UnitStatus {
+        UnitStatus::new(load, active, condition_ts)
+    }
+
+    #[test]
+    fn defers_while_the_validation_script_runs() {
+        assert!(validation_in_progress(&unit("loaded", "activating", 123)));
+    }
+
+    #[test]
+    fn defers_before_the_condition_is_evaluated_this_boot() {
+        assert!(validation_in_progress(&unit("loaded", "inactive", 0)));
+    }
+
+    #[test]
+    fn proceeds_on_a_normal_boot_without_breadcrumb() {
+        assert!(!validation_in_progress(&unit("loaded", "inactive", 42)));
+    }
+
+    #[test]
+    fn proceeds_after_a_successful_validation() {
+        assert!(!validation_in_progress(&unit("loaded", "active", 42)));
+    }
+
+    #[test]
+    fn proceeds_when_the_script_failed_and_altboot_owns_the_outcome() {
+        assert!(!validation_in_progress(&unit("loaded", "failed", 42)));
+    }
+
+    #[test]
+    fn proceeds_when_the_rollback_machinery_does_not_exist() {
+        assert!(!validation_in_progress(&unit("not-found", "inactive", 0)));
+    }
 }
