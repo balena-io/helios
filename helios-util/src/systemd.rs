@@ -79,6 +79,16 @@ trait Manager {
     ) -> zbus::Result<()>;
 }
 
+#[zbus::proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+trait Login1Manager {
+    /// Reboot method - `interactive` controls polkit interactivity.
+    fn reboot(&self, interactive: bool) -> zbus::Result<()>;
+}
+
 // systemd Service D-Bus interface
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Service",
@@ -389,5 +399,12 @@ pub async fn daemon_reload() -> Result<(), Error> {
 
     manager.reload().await?;
 
+    Ok(())
+}
+
+pub async fn reboot() -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = Login1ManagerProxy::new(&connection).await?;
+    manager.reboot(false).await?;
     Ok(())
 }
