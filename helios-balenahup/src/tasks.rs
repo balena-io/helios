@@ -23,6 +23,37 @@ use super::models::{
     Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
 };
 
+/// Whether the host is still validating this boot.
+///
+/// Every job under a release must refuse while this holds, or its work lands
+/// inside the rollback window. Tasks use `enforce!`, methods expand to nothing.
+pub(crate) fn host_is_validating(device: &Device) -> bool {
+    device
+        .host
+        .as_ref()
+        .is_some_and(|host| host.host_validating)
+}
+
+/// Wait for the host validation to finish before doing host work.
+///
+/// The task fails rather than blocking until the window closes, and the
+/// failure is what makes the wait work.
+/// Failing lands on the loop's recoverable path that re-reads
+/// the device state, so `Host::host_validating` is re-derived from the units,
+/// and re-plans. The device stays in `ApplyingChanges` until the window
+/// closes, and the retry interval sets the polling cadence.
+///
+/// The state change is still declared: the planner picks the task because it
+/// closes the gap on `/host/host_validating`, and only then does the IO run.
+fn await_host_validation(mut validating: View<bool>) -> IO<bool, HostUpdateError> {
+    enforce!(*validating, "the host is not validating anything");
+    *validating = false;
+
+    with_io(validating, async move |_| {
+        Err(HostUpdateError::HostValidating)
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
     #[error(transparent)]
@@ -36,6 +67,9 @@ enum HostUpdateError {
 
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+
+    #[error("host validation in progress")]
+    HostValidating,
 }
 
 /// Initialize the release
@@ -94,14 +128,18 @@ fn init_hostapp_release(
 /// Install the hostapp release
 ///
 /// Applies to `create(/host/releases/<commit>)`
+// mahler extractors, not a wide interface
+#[allow(clippy::too_many_arguments)]
 fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
     Target(tgt): Target<HostRelease>,
+    System(device): System<Device>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
+    enforce!(!host_is_validating(&device), "host validation in progress");
     // this task is only applicable if the release is not already running
     enforce!(
         release.status == HostReleaseStatus::Created,
@@ -239,8 +277,10 @@ fn update_script_uri(
     mut rel: View<HostRelease>,
     Target(tgt): Target<HostRelease>,
     Args(release_uuid): Args<String>,
+    System(device): System<Device>,
     store: Res<DocumentStore>,
 ) -> IO<HostRelease, store::Error> {
+    enforce!(!host_is_validating(&device), "host validation in progress");
     // do nothing if the release is not currently running
     enforce!(
         rel.status == HostReleaseStatus::Running,
@@ -388,6 +428,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     },
                 ),
             ],
+        )
+        .job(
+            "/host/host_validating",
+            job::update(await_host_validation)
+                .with_description(|| "wait for the host validation to finish"),
         )
         .job(
             "/host",

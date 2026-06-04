@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use mahler::extract::{Args, Res, Target, View};
+use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 
 use crate::util::dirs::runtime_dir;
@@ -9,7 +9,8 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet, find_update_locks};
 use crate::util::systemd;
 
-use super::models::{HostRelease, HostReleaseStatus, OverlayStatus};
+use super::models::{Device, HostRelease, HostReleaseStatus, OverlayStatus};
+use super::tasks::host_is_validating;
 
 /// Returns the path of a user-held update lock that forbids disrupting its
 /// service, or `None` if every lock under `runtime_dir` is free.
@@ -51,9 +52,11 @@ pub(crate) fn reboot_to_activate(
     mut release: View<HostRelease>,
     Args(_release_uuid): Args<String>,
     Target(tgt): Target<HostRelease>,
+    System(device): System<Device>,
     locks: Res<LockSet>,
     force_acquire_locks: Res<ForceAcquireLocks>,
 ) -> IO<HostRelease, RebootError> {
+    enforce!(!host_is_validating(&device), "host validation in progress");
     enforce!(
         release.status == HostReleaseStatus::Installed
             || (release.status == HostReleaseStatus::Running
