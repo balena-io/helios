@@ -423,4 +423,25 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 )
             }),
         )
+        // wait for an in-progress host OS update (the OS is validating a staged
+        // update and may still roll back); do not start more host work.
+        //
+        // TODO: an exception is not a defer: the apply reports `aborted` and is
+        // not retried, so host work skipped here waits for the next target
+        // change, the daily poll re-emit, or a manual update (up to 24h after
+        // the validation finishes). Revisit with the reboot control work item
+        // (public id 4536), whose blocking top-level reboot task should model
+        // the wait instead of excepting it.
+        .exception(
+            "/host/releases/{release_uuid}",
+            // The validation window is a device-global condition, so the guard
+            // reads the host-level flag rather than a per-release copy: this
+            // also defers a release that first appears in the target during the
+            // window (its `create` writes harmless metadata, but the `install`
+            // and reboot it would otherwise chain are held off).
+            exception::update(|System(device): System<Device>| {
+                device.host.is_some_and(|host| host.os_validating)
+            })
+            .with_description(|| "host OS update in progress, waiting for validation"),
+        )
 }

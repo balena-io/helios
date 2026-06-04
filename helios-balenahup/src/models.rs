@@ -38,6 +38,14 @@ pub struct Host {
     /// device may be in-between releases, in which case there may still be clean-up steps to
     /// perform.
     pub releases: Map<Uuid, HostRelease>,
+
+    /// Whether the running OS release is still on trial: the rollback
+    /// validation has not finished, so the OS may yet roll back. This is a
+    /// device-global condition (a single `rollback-health` unit), derived fresh
+    /// on every read; a helios-issued reboot during the window would trigger
+    /// the rollback, so all host work defers while it is set.
+    #[mahler(internal, default)]
+    pub os_validating: bool,
 }
 
 impl Host {
@@ -45,6 +53,7 @@ impl Host {
         Host {
             meta,
             releases: Map::new(),
+            os_validating: false,
         }
     }
 }
@@ -283,6 +292,7 @@ impl From<HostRelease> for HostReleaseTarget {
             hostapp,
             status,
             overlays,
+            ..
         } = rel;
         HostReleaseTarget {
             app,
