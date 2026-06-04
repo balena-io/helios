@@ -10,8 +10,8 @@ const FAILING_UPDATER_IMAGE: &str = "registry:5000/test-failing-updater:latest";
 const OVERLAY_IMAGE: &str = "registry:5000/test-overlay:latest";
 
 use super::common::{
-    HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, wait_for_report,
-    wait_for_target_apply,
+    HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, take_reboot_requested,
+    reset_mock_power_state, wait_for_report, wait_for_report_where, wait_for_target_apply,
 };
 
 async fn build_test_updater_image(docker: &Docker) {
@@ -288,8 +288,11 @@ async fn test_remote_poll_hostos_update() {
 
     let status = wait_for_target_apply().await;
 
-    // we expectd an aborted state because it has to wait for the reboot
-    assert_eq!(status, json!({"status": "aborted"}));
+    assert_ne!(
+        status,
+        json!({"status": "aborted"}),
+        "a hostapp update with overlays must plan and apply without aborting, got: {status}"
+    );
 
     let args_content = tokio::fs::read_to_string("/tmp/run/balenahup/args.txt")
         .await
@@ -319,11 +322,10 @@ async fn test_remote_poll_hostos_update() {
         args_content.contains(UPDATER_IMAGE),
         "args should contain updater image uri, got: {args_content}"
     );
-    // FIXME: this needs to be re-added once helios handles locks
-    // assert!(
-    //     args_content.contains("--no-reboot"),
-    //     "args should contain --no-reboot, got: {args_content}"
-    // );
+    assert!(
+        args_content.contains("--no-reboot"),
+        "args should contain --no-reboot (helios owns the reboot now), got: {args_content}"
+    );
 
     let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(
@@ -377,12 +379,23 @@ async fn test_remote_poll_hostos_update() {
         "overlay should exit 0 (deployed), got: {state:?}"
     );
 
-    // verify state report includes the hostapp with aborted status
-    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
-    assert_eq!(
-        release_report["services"]["hostapp"]["status"],
-        "Installing"
+    // Assert helios issued the coordinated reboot itself.
+    let mut reboot_observed = false;
+    for _ in 0..15 {
+        if reboot_requested().await {
+            reboot_observed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert!(
+        reboot_observed,
+        "helios should have issued the activation reboot via logind \
+         (org.freedesktop.login1.Manager.Reboot), flipping the mock's MockState \
+         to `rebooting`, but MockState never became `rebooting`"
     );
+
+    reset_mock_power_state().await;
 
     clear_reports().await;
     client
@@ -547,6 +560,22 @@ async fn test_rejected_app_is_reported() {
         release_report["services"]
             .as_object()
             .map(|m| m.is_empty())
+    // A failed activation is terminal and must surface as such to the API:
+    // Dead, not a status that reads as work still in progress. This is the
+    // only place the Failed to Dead mapping is exercised end to end.
+    let release_report = wait_for_report_where(
+        APP_UUID,
+        RELEASE_COMMIT,
+        "aborted",
+        |rel| rel["services"]["kernel-modules"]["status"] == "Dead",
+        30,
+    )
+    .await;
+    assert_eq!(
+        release_report["services"]["kernel-modules"]["status"], "Dead",
+        "a failed overlay activation must report as Dead, got: {release_report}"
+    );
+
             .unwrap_or(false),
         "rejected release should have no services, got: {release_report}"
     );
