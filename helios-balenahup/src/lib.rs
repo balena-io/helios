@@ -1,6 +1,7 @@
 mod models;
 mod overlays;
 pub mod read;
+mod reboot;
 mod tasks;
 
 pub use models::{

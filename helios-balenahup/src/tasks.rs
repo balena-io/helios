@@ -16,6 +16,7 @@ use crate::util::systemd;
 use crate::util::tar;
 
 use crate::overlays::{deploy_overlay, redeploy_overlay, remove_overlay};
+use crate::reboot::reboot_to_activate;
 
 use super::BALENAHUP;
 use super::models::{
@@ -107,9 +108,12 @@ fn install_hostapp_release(
         "OS release already installed"
     );
 
-    // The install triggers the (balenahup) reboot, so every overlay the
-    // target wants must already be staged on disk before we install. The
-    // planner therefore orders deploy_overlay tasks ahead of this install.
+    // Stage every overlay before committing to the install. The reboot has its
+    // own check, so this is not about ordering the activation; it is about not
+    // installing a hostapp that a failing overlay will then abort. The install
+    // cannot be undone and this task only runs from `Created`, so a release
+    // installed alongside a failed overlay would sit at `Installed` with no way
+    // forward short of a reboot.
     let overlays_ready = tgt.overlays.keys().all(|name| {
         release
             .overlays
@@ -200,8 +204,7 @@ fn install_hostapp_release(
                 release_uuid.as_str(),
                 "--target-image-uri",
                 release.hostapp.image.as_str(),
-                // FIXME: this needs to be re-added after helios handles update-locks
-                // "--no-reboot"
+                "--no-reboot",
             ])
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
@@ -353,6 +356,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("install host OS release '{release_uuid}'")
                     },
                 ),
+                job::update(reboot_to_activate).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("reboot to activate host OS release '{release_uuid}'")
+                    },
+                ),
                 job::update(update_script_uri).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("update metadata for host OS release '{release_uuid}'")
@@ -391,13 +399,7 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             exception::delete(|| true)
                 .with_description(|| "target host release is invalid or missing"),
         )
-        // ignore requests to update the host if it has already been installed (we are waiting for
-        // a reboot) or we reached the number of install attempts
-        .exception(
-            "/host/releases/{release_uuid}",
-            exception::update(|rel: View<HostRelease>| rel.status == HostReleaseStatus::Installed)
-                .with_description(|| "update needs a reboot to complete"),
-        )
+        // ignore requests to update the host if we reached the number of install attempts
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
