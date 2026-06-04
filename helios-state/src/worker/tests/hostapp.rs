@@ -41,6 +41,54 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
 }
 
 #[test]
+fn it_deploys_and_activates_overlays_without_install_when_already_running_the_target() {
+    // Fresh flash whose rootfs IS the target release (current meta.build ==
+    // target build): the release needs no balenahup install, but its
+    // reboot-requiring overlay must still be deployed and activated with a
+    // single coordinated reboot.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "class": "overlay",
+                                "requires_reboot": true,
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("initialize host OS release 'target-release'")
+            + seq!("deploy overlay 'kernel-modules' for host OS release 'target-release'")
+            + seq!("reboot to activate host OS release 'target-release'"),
+    );
+}
+
+#[test]
 fn it_deploys_overlays_before_installing_the_hostapp() {
     init_tracing();
     assert_workflow(
