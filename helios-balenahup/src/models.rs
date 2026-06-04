@@ -45,9 +45,11 @@ impl From<Host> for HostTarget {
 
 impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
     fn from((app_uuid, rel): (Uuid, RemoteHostReleaseTarget)) -> Self {
+        // overlays are parsed from the target but not modeled yet
         let RemoteHostReleaseTarget {
             release_uuid,
             hostapp,
+            ..
         } = rel;
 
         let mut releases = Map::new();
