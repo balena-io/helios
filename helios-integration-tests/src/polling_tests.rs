@@ -1,11 +1,13 @@
 use bollard::Docker;
-use bollard::query_parameters::{BuildImageOptions, PushImageOptions};
+use bollard::config::ContainerStateStatusEnum;
+use bollard::query_parameters::{BuildImageOptions, ListContainersOptions, PushImageOptions};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
 
 const UPDATER_IMAGE: &str = "registry:5000/test-updater:latest";
 const FAILING_UPDATER_IMAGE: &str = "registry:5000/test-failing-updater:latest";
+const OVERLAY_IMAGE: &str = "registry:5000/test-overlay:latest";
 
 use super::common::{
     HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, wait_for_report,
@@ -50,6 +52,46 @@ async fn build_test_updater_image(docker: &Docker) {
     }
 
     // remove leftover images after build
+    prune_images().await;
+}
+
+/// Build and push a minimal hostapp overlay test image.
+async fn build_overlay_image(docker: &Docker) {
+    let dockerfile = b"FROM alpine:3.23\nVOLUME /boot\n";
+
+    let mut tar_buf = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(dockerfile.len() as u64);
+    header.set_mode(0o644);
+    tar_buf
+        .append_data(&mut header, "Dockerfile", dockerfile.as_slice())
+        .unwrap();
+    let context_bytes = tar_buf.into_inner().unwrap();
+
+    let build_opts = BuildImageOptions {
+        t: Some(OVERLAY_IMAGE.to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.build_image(
+        build_opts,
+        None,
+        Some(bollard::body_full(context_bytes.into())),
+    );
+    while let Some(result) = stream.next().await {
+        result.expect("overlay image build failed");
+    }
+
+    let push_opts = PushImageOptions {
+        tag: Some("latest".to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.push_image("registry:5000/test-overlay", Some(push_opts), None);
+    while let Some(result) = stream.next().await {
+        result.expect("overlay image push failed");
+    }
+
     prune_images().await;
 }
 
@@ -169,6 +211,7 @@ async fn test_remote_poll_user_app() {
 async fn test_remote_poll_hostos_update() {
     let docker = Docker::connect_with_defaults().unwrap();
     build_test_updater_image(&docker).await;
+    build_overlay_image(&docker).await;
 
     let client = reqwest::Client::new();
 
@@ -191,6 +234,17 @@ async fn test_remote_poll_hostos_update() {
                         "labels": {
                             "io.balena.image.class": "hostapp",
                             "io.balena.private.hostapp.board-rev": "test-board-rev-123"
+                        }
+                    }
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "overlay",
+                            "io.balena.update.requires-reboot": "1"
                         }
                     }
                 }
@@ -270,6 +324,47 @@ async fn test_remote_poll_hostos_update() {
     assert!(
         tokio::fs::metadata(&breadcrumb).await.is_ok(),
         "breadcrumb file should exist at {breadcrumb}"
+    );
+
+    // The overlay container must have been created, run under the `extension`
+    // runtime, and exited 0 BEFORE the (balenahup-issued) reboot: helios gates
+    // the host install on every target overlay being deployed first.
+    let mut filters = std::collections::HashMap::new();
+    filters.insert(
+        "label".to_string(),
+        vec![
+            "io.balena.image.class=overlay".to_string(),
+            "io.balena.service-name=kernel-modules".to_string(),
+            format!("io.balena.private.hostapp.release={RELEASE_COMMIT}"),
+        ],
+    );
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(filters),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        containers.len(),
+        1,
+        "exactly one overlay container should be deployed, got: {containers:?}"
+    );
+    let inspect = docker
+        .inspect_container(containers[0].id.as_deref().unwrap(), None)
+        .await
+        .unwrap();
+    let state = inspect.state.expect("overlay container should have state");
+    assert_eq!(
+        state.status,
+        Some(ContainerStateStatusEnum::EXITED),
+        "overlay container should have exited"
+    );
+    assert_eq!(
+        state.exit_code,
+        Some(0),
+        "overlay should exit 0 (deployed), got: {state:?}"
     );
 
     // verify state report includes the hostapp with aborted status
