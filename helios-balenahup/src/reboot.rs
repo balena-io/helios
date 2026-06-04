@@ -1,38 +1,15 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
-
 use mahler::extract::{Args, Res, View};
 use mahler::task::prelude::*;
 
 use crate::common_types::HostRuntimeDir;
 use crate::util::fs::run_async;
-use crate::util::locking::{self, ForceAcquireLocks, LockSet};
+use crate::util::locking::{self, find_update_locks, ForceAcquireLocks, LockSet};
 use crate::util::systemd;
 
 use super::models::{HostRelease, HostReleaseStatus, OverlayStatus};
-
-/// Collect helios per-service update-lock files under `dir`. A held one means a
-/// user service must not be disrupted, so the reboot must wait.
-///
-/// Fails CLOSED: a missing `dir` means "no services yet" (`Ok` empty), but any
-/// other read error propagates so the caller DEFERS the reboot rather than
-/// assuming it is safe to tear down a possibly-locked service. Symlinks are not
-/// followed (no recursion loops).
-fn find_update_locks(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in WalkDir::new(dir).follow_links(false) {
-        let entry = entry.map_err(io::Error::from)?;
-        if entry.file_type().is_file() && entry.file_name() == "updates.lock" {
-            out.push(entry.into_path());
-        }
-    }
-    Ok(out)
-}
 
 /// Returns the path of a user-held update lock that forbids rebooting, or
 /// `None` if it is safe to reboot. With `force`, externally-held locks are
@@ -142,28 +119,3 @@ pub enum RebootError {
     Systemd(#[from] systemd::Error),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finds_nested_update_locks() {
-        let tmp = std::env::temp_dir().join(format!("helios-reboot-test-{}", std::process::id()));
-        let svc = tmp.join("app-uuid").join("svc");
-        std::fs::create_dir_all(&svc).unwrap();
-        std::fs::write(svc.join("updates.lock"), b"x").unwrap();
-        std::fs::write(tmp.join("not-a-lock"), b"x").unwrap();
-
-        let found = find_update_locks(&tmp).unwrap();
-        assert_eq!(found, vec![svc.join("updates.lock")]);
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn returns_empty_for_missing_dir() {
-        assert!(find_update_locks(Path::new("/nonexistent/helios/xyz"))
-            .unwrap()
-            .is_empty());
-    }
-}

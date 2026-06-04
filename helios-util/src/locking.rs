@@ -7,7 +7,30 @@ use std::sync::Mutex;
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::linkat;
 
+use walkdir::WalkDir;
+
 use super::fs::{ensure_exists, safe_create_tempfile};
+
+/// Filename of a balena update lock. Written by the lock acquirer
+/// (`take_locks`) and discovered by the reboot gate -- single source of truth.
+pub const UPDATE_LOCK_FILENAME: &str = "updates.lock";
+
+/// Collect update-lock files under `dir`. Fails CLOSED: a missing `dir` is an
+/// empty `Ok`, but any other read error propagates so callers can refuse to
+/// proceed on an uncertain scan. Symlinks are not followed.
+pub fn find_update_locks(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in WalkDir::new(dir).follow_links(false) {
+        let entry = entry.map_err(std::io::Error::from)?;
+        if entry.file_type().is_file() && entry.file_name() == UPDATE_LOCK_FILENAME {
+            out.push(entry.into_path());
+        }
+    }
+    Ok(out)
+}
 
 /// a tag to identify locally vs externally created lockfiles.
 /// Big-endian encoding of the sum of the ASCII byte values of "balena"
@@ -261,6 +284,27 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::thread;
     use tempfile::tempdir;
+
+    #[test]
+    fn finds_nested_update_locks() {
+        let tmp = std::env::temp_dir().join(format!("helios-reboot-test-{}", std::process::id()));
+        let svc = tmp.join("app-uuid").join("svc");
+        std::fs::create_dir_all(&svc).unwrap();
+        std::fs::write(svc.join(UPDATE_LOCK_FILENAME), b"x").unwrap();
+        std::fs::write(tmp.join("not-a-lock"), b"x").unwrap();
+
+        let found = find_update_locks(&tmp).unwrap();
+        assert_eq!(found, vec![svc.join(UPDATE_LOCK_FILENAME)]);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn returns_empty_for_missing_dir() {
+        assert!(find_update_locks(Path::new("/nonexistent/helios/xyz"))
+            .unwrap()
+            .is_empty());
+    }
 
     #[test]
     fn acquire_creates_lockfile_with_tag() {
