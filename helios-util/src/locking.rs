@@ -248,6 +248,11 @@ impl LockSet {
         }
         Ok(())
     }
+
+    pub fn holds(&self, path: &Path) -> bool {
+        let locks = self.locks.lock().unwrap_or_else(|p| p.into_inner());
+        locks.contains_key(path)
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +274,21 @@ mod tests {
         assert_eq!(contents, TAG.to_vec());
 
         handle.unlock();
+    }
+
+    #[test]
+    fn holds_reflects_set_membership() {
+        let dir = tempdir().unwrap();
+        let lock_path = dir.path().join("updates.lock");
+
+        let set = LockSet::new();
+        assert!(!set.holds(&lock_path));
+
+        set.try_lock(lock_path.clone(), false).unwrap();
+        assert!(set.holds(&lock_path));
+
+        set.unlock(lock_path.clone()).unwrap();
+        assert!(!set.holds(&lock_path));
     }
 
     #[test]
