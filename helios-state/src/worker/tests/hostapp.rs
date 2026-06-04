@@ -783,9 +783,10 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
 #[test]
 fn it_waits_while_the_os_release_is_being_validated() {
     init_tracing();
-    // The in-progress exception defers the only divergent work (the install)
-    // and there is nothing to clean up, so the planner returns an empty plan.
-    assert_empty_workflow(
+    // The in-progress exception defers the only divergent work (the install),
+    // leaving the wait itself as the whole plan. It fails at run time, which is
+    // what brings the apply back once the window closes.
+    assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
@@ -827,6 +828,7 @@ fn it_waits_while_the_os_release_is_being_validated() {
                 }
             }
         }),
+        seq!("wait for the host validation to finish"),
     );
 }
 
@@ -834,9 +836,11 @@ fn it_waits_while_the_os_release_is_being_validated() {
 fn it_defers_installing_a_new_target_release_while_validation_runs() {
     init_tracing();
     // A release that first appears in the target during the validation window
-    // must not be installed or rebooted (the guard is device-global). The
-    // metadata `create` is harmless and still runs, so the plan initializes the
-    // release and stops there: no install, no reboot mid-validation.
+    // must not be installed or rebooted (the guard is device-global). The wait
+    // heads the plan, so the install and the reboot behind it are unreachable:
+    // the wait fails and the workflow stops there. They are planned at all only
+    // because the planner simulates the wait succeeding, which is what puts
+    // them in the right order for the retry that follows.
     assert_workflow(
         json!({
             "name": "device-name",
@@ -868,7 +872,12 @@ fn it_defers_installing_a_new_target_release_while_validation_runs() {
                 }
             }
         }),
-        seq!("initialize host OS release 'new-release'"),
+        seq!(
+            "wait for the host validation to finish",
+            "initialize host OS release 'new-release'",
+            "install host OS release 'new-release'",
+            "reboot to activate host OS release 'new-release'"
+        ),
     );
 }
 

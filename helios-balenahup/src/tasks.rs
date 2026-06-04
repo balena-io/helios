@@ -23,6 +23,31 @@ use super::models::{
     Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
 };
 
+/// Whether the host is still validating this boot.
+fn host_validating(System(device): System<Device>) -> bool {
+    device.host.is_some_and(|host| host.host_validating)
+}
+
+/// Wait for the host validation to finish before doing host work.
+///
+/// The task fails rather than blocking until the window closes, and the
+/// failure is what makes the wait work.
+/// Failing lands on the loop's recoverable path that re-reads
+/// the device state, so `Host::host_validating` is re-derived from the units,
+/// and re-plans. The device stays in `ApplyingChanges` until the window
+/// closes, and the retry interval sets the polling cadence.
+///
+/// The state change is still declared: the planner picks the task because it
+/// closes the gap on `/host/host_validating`, and only then does the IO run.
+fn await_host_validation(mut validating: View<bool>) -> IO<bool, HostUpdateError> {
+    enforce!(*validating, "the host is not validating anything");
+    *validating = false;
+
+    with_io(validating, async move |_| {
+        Err(HostUpdateError::HostValidating)
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
     #[error(transparent)]
@@ -36,6 +61,9 @@ enum HostUpdateError {
 
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+
+    #[error("host validation in progress")]
+    HostValidating,
 }
 
 /// Initialize the release
@@ -390,6 +418,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             ],
         )
         .job(
+            "/host/host_validating",
+            job::update(await_host_validation)
+                .with_description(|| "wait for the host validation to finish"),
+        )
+        .job(
             "/host",
             job::none(cleanup_hostapp).with_description(|| "clean-up host metadata and images"),
         )
@@ -422,5 +455,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     "overlay activation failed for host OS release '{release_uuid}', check device"
                 )
             }),
+        )
+        // Hold off host work while the host validates this boot.
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(host_validating)
+                .with_description(|| "host validation in progress, waiting for it to finish"),
         )
 }

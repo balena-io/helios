@@ -44,6 +44,10 @@ pub struct Host {
     /// device may be in-between releases, in which case there may still be clean-up steps to
     /// perform.
     pub releases: Map<Uuid, HostRelease>,
+
+    /// Whether the host is still validating what this boot brought up
+    #[mahler(default)]
+    pub host_validating: bool,
 }
 
 impl Host {
@@ -51,6 +55,7 @@ impl Host {
         Host {
             meta,
             releases: Map::new(),
+            host_validating: false,
         }
     }
 }
@@ -60,6 +65,8 @@ impl From<Host> for HostTarget {
         let Host { releases, .. } = app;
         HostTarget {
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
+            // A target never asks for a validation in flight
+            host_validating: false,
         }
     }
 }
@@ -103,7 +110,11 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
             },
         );
 
-        HostTarget { releases }
+        HostTarget {
+            releases,
+            // Nor does a remote target
+            host_validating: false,
+        }
     }
 }
 
@@ -359,6 +370,7 @@ impl From<HostRelease> for HostReleaseTarget {
             hostapp,
             status,
             overlays,
+            ..
         } = rel;
         HostReleaseTarget {
             app,
