@@ -41,6 +41,16 @@ trait Manager {
     fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
 }
 
+#[zbus::proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+trait Login1Manager {
+    /// Reboot method - `interactive` controls polkit interactivity.
+    fn reboot(&self, interactive: bool) -> zbus::Result<()>;
+}
+
 // systemd Service D-Bus interface
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Service",
@@ -249,5 +259,12 @@ pub async fn stop(unit: &str) -> Result<(), Error> {
     // Stop the unit with replace mode to cancel any pending jobs
     let _ = manager.stop_unit(&full_unit_name, "replace").await;
 
+    Ok(())
+}
+
+pub async fn reboot() -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = Login1ManagerProxy::new(&connection).await?;
+    manager.reboot(false).await?;
     Ok(())
 }
