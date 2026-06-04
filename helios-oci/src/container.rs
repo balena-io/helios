@@ -149,6 +149,28 @@ impl<N: Namespace> Container<'_, N> {
         }
     }
 
+    /// Block until the container exits and return its exit code.
+    ///
+    /// bollard reports a non-zero exit as `DockerContainerWaitError` rather than
+    /// a normal stream item, so both encodings are normalized back to the exit
+    /// code here and the caller decides what a non-zero code means.
+    pub async fn wait(&self, id: &str) -> Result<i64> {
+        let mut stream = self
+            .client
+            .inner()
+            .wait_container(id, None::<bollard::query_parameters::WaitContainerOptions>);
+        match stream.next().await {
+            Some(Ok(resp)) => Ok(resp.status_code),
+            Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => Ok(code),
+            Some(Err(e)) => {
+                Err(Error::from(e).context(format!("failed to wait for container '{id}'")))
+            }
+            None => Err(Error::from(format!(
+                "container '{id}' exited without a wait status"
+            ))),
+        }
+    }
+
     /// Stop the container with the given name
     pub async fn stop(&self, name: &str) -> Result<()> {
         match self.client.inner().stop_container(name, None).await {
