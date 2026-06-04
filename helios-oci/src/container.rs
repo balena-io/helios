@@ -490,6 +490,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             error: state.error,
             healthy,
             status,
+            exit_code: state.exit_code,
         };
 
         Ok(Self {
@@ -542,6 +543,7 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.
@@ -1917,5 +1919,20 @@ mod tests {
 
         let result: Result<LocalContainer> = inspect_with_binds(vec!["/source:"]).try_into();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn inspect_captures_exit_code_and_created() {
+        let mut resp = inspect_with_mounts(vec![]);
+        resp.state = Some(bollard::models::ContainerState {
+            status: Some(ContainerStateStatusEnum::EXITED),
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        resp.created = Some("2026-01-01T00:00:00Z".to_string());
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Stopped);
+        assert_eq!(c.state.exit_code, Some(0));
+        let _: std::time::SystemTime = c.state.created.as_system_time();
     }
 }
