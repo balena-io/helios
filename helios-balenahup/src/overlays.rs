@@ -1,4 +1,4 @@
-use mahler::extract::{Args, Res, Target, View};
+use mahler::extract::{Args, Res, System, Target, View};
 use mahler::task::prelude::*;
 use tracing::debug;
 
@@ -9,7 +9,8 @@ use crate::oci::{
 use crate::util::fs::run_async;
 use crate::util::proc;
 
-use super::models::{Overlay, OverlayStatus, OverlayTarget, overlay_labels};
+use super::models::{Device, Overlay, OverlayStatus, OverlayTarget, overlay_labels};
+use super::tasks::host_is_validating;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OverlayError {
@@ -28,9 +29,11 @@ pub(crate) fn deploy_overlay(
     overlay: View<Option<Overlay>>,
     Args((release_uuid, name)): Args<(String, String)>,
     Target(tgt): Target<Overlay>,
+    System(device): System<Device>,
     docker: Res<Docker>,
     registry_auth: Res<RegistryAuth>,
 ) -> IO<Overlay, OverlayError> {
+    enforce!(!host_is_validating(&device), "host validation in progress");
     // Optimistic in-memory state: the planner treats the overlay as Deployed.
     let overlay = overlay.create(Overlay {
         image: tgt.image.clone(),
@@ -160,7 +163,12 @@ pub(crate) fn remove_overlay(
 pub(crate) fn redeploy_overlay(
     overlay: View<Overlay>,
     Target(tgt): Target<Overlay>,
+    System(device): System<Device>,
 ) -> Option<Task> {
+    if host_is_validating(&device) {
+        return None;
+    }
+
     let diverged = overlay.image != tgt.image
         || overlay.status == OverlayStatus::Stale
         || overlay.runtime != tgt.runtime;
