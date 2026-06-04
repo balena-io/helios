@@ -7,6 +7,7 @@ pub mod interrupt;
 pub mod json;
 pub mod locking;
 pub mod logs;
+pub mod proc;
 pub mod rand;
 pub mod request;
 pub mod systemd;
