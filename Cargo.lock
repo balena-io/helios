@@ -1042,6 +1042,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "walkdir",
  "zbus",
 ]
 
