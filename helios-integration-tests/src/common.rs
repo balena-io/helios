@@ -102,3 +102,50 @@ pub async fn prune_images() {
         }))
         .await;
 }
+
+// mock-systemd-bus replaces logind with a stub that records the requested power
+// action in a `MockState` property instead of actually rebooting the container.
+// The stub mutates its state field directly and never emits PropertiesChanged, so
+// `emits_changed_signal = "false"` keeps zbus from caching a stale value.
+#[zbus::proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+pub trait MockLogin1 {
+    /// Reset the recorded power state back to "ready".
+    fn mock_reset(&self) -> zbus::Result<()>;
+
+    /// "ready" | "rebooting" | "off".
+    #[zbus(property(emits_changed_signal = "false"))]
+    fn mock_state(&self) -> zbus::Result<String>;
+}
+
+/// Connect to the mock logind on the system bus.
+pub async fn mock_logind() -> MockLogin1Proxy<'static> {
+    let connection = zbus::Connection::system()
+        .await
+        .expect("connect to the mock system bus");
+    MockLogin1Proxy::new(&connection)
+        .await
+        .expect("build mock logind proxy")
+}
+
+/// Reset the mock's recorded power state so a later reboot assertion is not
+/// confused by an earlier test.
+pub async fn reset_mock_power_state() {
+    mock_logind()
+        .await
+        .mock_reset()
+        .await
+        .expect("reset mock power state");
+}
+
+/// Whether helios has asked logind to reboot since the last reset, resetting
+/// the mock as a side effect.
+pub async fn take_reboot_requested() -> bool {
+    let mock = mock_logind().await;
+    let requested = mock.mock_state().await.as_deref() == Ok("rebooting");
+    mock.mock_reset().await.expect("reset mock power state");
+    requested
+}
