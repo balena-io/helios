@@ -847,6 +847,9 @@ pub enum Mount {
         nocopy: bool,
         /// Subpath inside the volume to mount
         subpath: Option<String>,
+        /// Labels to apply to the volume when the engine auto-creates it.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        labels: HashMap<String, String>,
     },
     Bind {
         target: String,
@@ -941,11 +944,13 @@ impl From<Mount> for bollard::models::Mount {
                 read_only,
                 nocopy,
                 subpath,
+                labels,
             } => {
-                let volume_options = if nocopy || subpath.is_some() {
+                let volume_options = if nocopy || subpath.is_some() || !labels.is_empty() {
                     Some(MountVolumeOptions {
                         no_copy: nocopy.then_some(true),
                         subpath,
+                        labels: (!labels.is_empty()).then_some(labels),
                         ..Default::default()
                     })
                 } else {
@@ -1024,16 +1029,23 @@ impl TryFrom<bollard::models::Mount> for Mount {
         match value.typ {
             Some(MountType::VOLUME) => {
                 let source = value.source.unwrap_or_default();
-                let (nocopy, subpath) = value
+                let (nocopy, subpath, labels) = value
                     .volume_options
-                    .map(|o| (o.no_copy.unwrap_or_default(), o.subpath))
-                    .unwrap_or((false, None));
+                    .map(|o| {
+                        (
+                            o.no_copy.unwrap_or_default(),
+                            o.subpath,
+                            o.labels.unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or((false, None, HashMap::new()));
                 Ok(Mount::Volume {
                     target,
                     source,
                     read_only,
                     nocopy,
                     subpath,
+                    labels,
                 })
             }
             Some(MountType::BIND) => {
@@ -1567,6 +1579,56 @@ mod tests {
         assert_eq!(hc.init, None);
         assert_eq!(hc.privileged, Some(false));
         assert_eq!(hc.readonly_rootfs, Some(false));
+    }
+
+    #[test]
+    fn volume_mount_labels_map_to_engine_volume_options() {
+        // A labelled volume mount must carry its labels into the engine's
+        // VolumeOptions so the auto-created volume is tagged for later cleanup.
+        let labels = HashMap::from([("io.balena.extension".to_string(), "kmod".to_string())]);
+        let cfg = ContainerConfig {
+            volumes: vec![Mount::Volume {
+                target: "/mnt".to_string(),
+                source: "ext-vol".to_string(),
+                read_only: false,
+                nocopy: false,
+                subpath: None,
+                labels: labels.clone(),
+            }],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let mounts = body.host_config.unwrap().mounts.unwrap();
+        let vo = mounts[0]
+            .volume_options
+            .as_ref()
+            .expect("volume_options should be set when labels are present");
+        assert_eq!(vo.labels.as_ref(), Some(&labels));
+    }
+
+    #[test]
+    fn inspect_reads_volume_labels() {
+        // Inspecting an existing container must round-trip the volume labels
+        // recorded on its VolumeOptions back into the Mount::Volume model.
+        let labels = HashMap::from([("io.balena.extension".to_string(), "kmod".to_string())]);
+        let mount = EngineMount {
+            typ: Some(MountType::VOLUME),
+            target: Some("/mnt".to_string()),
+            source: Some("ext-vol".to_string()),
+            read_only: Some(false),
+            volume_options: Some(MountVolumeOptions {
+                labels: Some(labels.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = inspect_with_mounts(vec![mount]).try_into().unwrap();
+        match &c.config.volumes[0] {
+            Mount::Volume {
+                labels: got_labels, ..
+            } => assert_eq!(got_labels, &labels),
+            other => panic!("expected Mount::Volume, got {other:?}"),
+        }
     }
 
     #[test]
