@@ -1074,6 +1074,9 @@ pub enum Mount {
         nocopy: bool,
         /// Subpath inside the volume to mount
         subpath: Option<String>,
+        /// Labels to apply to the volume when the engine auto-creates it.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        labels: HashMap<String, String>,
     },
     Bind {
         target: String,
@@ -1168,11 +1171,13 @@ impl From<Mount> for bollard::models::Mount {
                 read_only,
                 nocopy,
                 subpath,
+                labels,
             } => {
-                let volume_options = if nocopy || subpath.is_some() {
+                let volume_options = if nocopy || subpath.is_some() || !labels.is_empty() {
                     Some(MountVolumeOptions {
                         no_copy: nocopy.then_some(true),
                         subpath,
+                        labels: (!labels.is_empty()).then_some(labels),
                         ..Default::default()
                     })
                 } else {
@@ -1251,16 +1256,23 @@ impl TryFrom<bollard::models::Mount> for Mount {
         match value.typ {
             Some(MountType::VOLUME) => {
                 let source = value.source.unwrap_or_default();
-                let (nocopy, subpath) = value
+                let (nocopy, subpath, labels) = value
                     .volume_options
-                    .map(|o| (o.no_copy.unwrap_or_default(), o.subpath))
-                    .unwrap_or((false, None));
+                    .map(|o| {
+                        (
+                            o.no_copy.unwrap_or_default(),
+                            o.subpath,
+                            o.labels.unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or((false, None, HashMap::new()));
                 Ok(Mount::Volume {
                     target,
                     source,
                     read_only,
                     nocopy,
                     subpath,
+                    labels,
                 })
             }
             Some(MountType::BIND) => {

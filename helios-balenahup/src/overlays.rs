@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use mahler::extract::{Args, Res, Target, View};
 use mahler::task::prelude::*;
 use tracing::debug;
@@ -9,6 +11,15 @@ use crate::oci::{
 
 use super::models::{Overlay, OverlayStatus, overlay_labels};
 
+/// Prefix of the image labels copied onto the `ext_*` volumes at deploy time.
+///
+/// A volume carries no labels of its own, and the OS sweep
+/// (`balena-extension-manager cleanup --stale-os`) selects on them: it skips
+/// any volume without `io.balena.image.class=overlay`, then decides staleness
+/// from `kernel-version`, `kernel-abi-id` and `os-version`. An unlabelled
+/// volume is therefore never collected, so copying these is what keeps the
+/// `ext_*` volumes from accumulating one per overlay version.
+const IMAGE_LABEL_PREFIX: &str = "io.balena.image.";
 /// The Docker runtime that runs overlay activation hooks and exits 0.
 const OVERLAY_RUNTIME: &str = "extension";
 
@@ -69,6 +80,15 @@ pub(crate) fn deploy_overlay(
         // Resolve a content-stable id for the ext_* volume name
         let content_digest = image.digest().cloned().unwrap_or_else(|| img.id.clone());
 
+        let image_labels: HashMap<String, String> = img
+            .config
+            .labels
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(k, _)| k.starts_with(IMAGE_LABEL_PREFIX))
+            .collect();
+
         let volumes: Vec<Mount> = img
             .config
             .volumes
@@ -79,6 +99,7 @@ pub(crate) fn deploy_overlay(
                 read_only: false,
                 nocopy: false,
                 subpath: None,
+                labels: image_labels.clone(),
             })
             .collect();
 
