@@ -13,6 +13,7 @@ use crate::oci::{
 
 use super::models::{Overlay, OverlayStatus};
 
+const IMAGE_LABEL_PREFIX: &str = "io.balena.image.";
 /// `io.balena.image.class` — marks an overlay service.
 pub(crate) const CLASS_LABEL: &str = "io.balena.image.class";
 /// Value of `CLASS_LABEL` for overlays handled in Phase 1. The `class` field is
@@ -96,6 +97,15 @@ pub(crate) fn deploy_overlay(
         // Back each image-declared VOLUME with a named `ext_*` volume so the
         // override survives container reap and OS volume-discovery finds it.
         let img = docker.image().inspect(image.as_str()).await?;
+        let image_labels: HashMap<String, String> = img
+            .config
+            .labels
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(k, _)| k.starts_with(IMAGE_LABEL_PREFIX))
+            .collect();
+
         let volumes: Vec<Mount> = img
             .config
             .volumes
@@ -106,6 +116,7 @@ pub(crate) fn deploy_overlay(
                 read_only: false,
                 nocopy: false,
                 subpath: None,
+                labels: image_labels.clone(),
             })
             .collect();
 
