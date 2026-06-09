@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
-use tracing::{Level, debug, error, info, trace, warn};
+use tracing::{Level, debug, info, trace, warn};
 use tracing_subscriber::{
     EnvFilter,
-    fmt::{format::FmtSpan, layer as fmt_layer, writer::MakeWriterExt},
+    fmt::{self, format::FmtSpan, layer as fmt_layer, writer::MakeWriterExt},
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
@@ -121,7 +121,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[instrument(name = "helios", skip_all, err)]
 async fn start_supervisor(
     uuid: Uuid,
     state_config: StateConfig,
