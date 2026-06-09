@@ -45,19 +45,15 @@ LABEL org.opencontainers.image.description="Balena's on device agent"
 LABEL org.opencontainers.image.licenses=APACHE-2.0
 
 # Install release dependencies
-RUN apk add --update --no-cache \
-	libstdc++ jq dbus socat
-
-# Install docker v28 since docker v29 no longer supports 
-# the balena-engine API 1.41
-RUN apk add --no-cache \
-  --repositories-file /dev/null \
-  --repository https://dl-cdn.alpinelinux.org/alpine/v3.22/main \
-  --repository https://dl-cdn.alpinelinux.org/alpine/v3.22/community \
-  "docker-cli<29"
+# socat is used for the healthcheck and also for exposing the
+# socket to a local port
+RUN apk add --update --no-cache socat libstdc++
 
 COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/$HELIOS_BUILD/helios /usr/bin
+
+# busybox-style multicall: argv[0] == helios-legacy-takeover runs the migration
+RUN ln -s helios /usr/bin/helios-legacy-takeover
 
 VOLUME /config/helios
 VOLUME /cache/helios

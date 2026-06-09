@@ -64,9 +64,18 @@ if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   export HELIOS_REMOTE_API_KEY
 fi
 
-# Setup the Supervisor
-dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-. "$dir/setup-supervisor.sh"
+# Set up the legacy Supervisor proxy and hand over via the takeover applet.
+legacy_port=${HELIOS_LEGACY_PORT:-48480}
+unset HELIOS_LEGACY_PORT
+if [ -n "$BALENA_SUPERVISOR_API_KEY" ] && [ -n "$BALENA_SUPERVISOR_HOST" ] && [ -n "$BALENA_SUPERVISOR_PORT" ]; then
+  export HELIOS_LEGACY_API_ENDPOINT="http://${BALENA_SUPERVISOR_HOST}:${legacy_port}"
+  export HELIOS_LEGACY_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
+
+  # One-shot migration, busybox-style (argv[0] selects the applet).
+  helios-legacy-takeover \
+    --override-host "http://127.0.0.1:${BALENA_SUPERVISOR_PORT}" \
+    --override-port "${legacy_port}"
+fi
 
 # Make variables available for the new process
 export HELIOS_REMOTE_POLL_INTERVAL_MS

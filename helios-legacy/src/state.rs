@@ -15,7 +15,7 @@ pub enum StateUpdateError {
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
 
-    #[error("Operation was interrupted")]
+    #[error("operation was interrupted")]
     Interrupted,
 }
 

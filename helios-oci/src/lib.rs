@@ -14,7 +14,7 @@ pub use registry::RegistryAuth;
 mod container;
 pub use container::{
     BindPropagation, Cgroup, Container, ContainerConfig, ContainerState, ContainerStatus,
-    Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings, RestartPolicy,
+    ExecOutput, Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings, RestartPolicy,
 };
 
 mod datetime;
@@ -36,13 +36,14 @@ pub struct Client(Docker);
 
 impl Client {
     /// Connect to the daemon based on the `DOCKER_HOST` environment variable.
+    ///
+    /// Negotiates the API version against the daemon so we step down to the
+    /// engine's supported version (e.g. on older balenaEngine builds) instead
+    /// of pinning bollard's compiled-in default. `negotiate_version` is itself
+    /// a `/version` round-trip, so it also doubles as the connectivity check.
     pub async fn connect() -> Result<Self> {
-        let inner = Docker::connect_with_defaults()?;
-
-        // Bollard doesn't actually connect with the `connect_*` call.
-        // Do a /ping to ensure we can connect before proceeding.
-        inner
-            .ping()
+        let inner = Docker::connect_with_defaults()?
+            .negotiate_version()
             .await
             .map_err(Error::with_context("failed to connect to daemon"))?;
 

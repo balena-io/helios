@@ -5,14 +5,27 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("failed to start transient unit: {0}")]
-    StartUnit(String),
+    #[error("failed to start transient unit {0}")]
+    TransientUnitStart(String),
     #[error("stream terminated unexpectedly")]
     StreamEnded,
     #[error("command failed with code: {0}")]
     ExitStatus(i32),
+    #[error("unit not found: {0}")]
+    NoSuchUnit(String),
+    #[error("failed to activate unit {unit}: {status}")]
+    ActivationFailed { unit: String, status: String },
     #[error("D-Bus error: {0}")]
     DBus(#[from] zbus::Error),
+}
+
+/// Returns true if the error indicates the unit does not exist or is not loaded.
+fn is_no_such_unit(err: &zbus::Error) -> bool {
+    matches!(
+        err,
+        zbus::Error::MethodError(name, _, _)
+            if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit"
+    )
 }
 
 // systemd Manager D-Bus interface
@@ -37,8 +50,33 @@ trait Manager {
     /// StopUnit method - stop a unit
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 
+    /// StartUnit method - start an existing unit
+    fn start_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// RestartUnit method - restart a unit
+    fn restart_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// Reload method - reload the systemd daemon configuration
+    fn reload(&self) -> zbus::Result<()>;
+
     /// ResetFailedUnit method - reset the failed state of a unit
     fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
+
+    /// Subscribe method - enables systemd to emit signals (such as JobRemoved) to
+    /// this client. Must be called before relying on those signals.
+    fn subscribe(&self) -> zbus::Result<()>;
+
+    /// JobRemoved signal - emitted when a job is dequeued. The `result` field
+    /// carries the outcome of the job ("done", "canceled", "timeout",
+    /// "dependency", "skipped", or "failed").
+    #[zbus(signal)]
+    fn job_removed(
+        &self,
+        id: u32,
+        job: OwnedObjectPath,
+        unit: String,
+        result: String,
+    ) -> zbus::Result<()>;
 }
 
 // systemd Service D-Bus interface
@@ -170,10 +208,10 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
     let start_job_path = manager
         .start_transient_unit(&full_unit_name, "fail", properties, vec![])
         .await
-        .map_err(|e| Error::StartUnit(e.to_string()))?;
+        .map_err(|e| Error::TransientUnitStart(e.to_string()))?;
 
     if start_job_path.to_string() == "/" {
-        return Err(Error::StartUnit(
+        return Err(Error::TransientUnitStart(
             "null path received for starting unit".to_string(),
         ));
     }
@@ -225,10 +263,32 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
     Ok(())
 }
 
-/// Stops a systemd unit by name.
+/// Waits for the `JobRemoved` signal matching `job` and returns its result string.
 ///
-/// This function attempts to stop a systemd unit. If the unit is already stopped
-/// or doesn't exist, it will not fail - it returns Ok(()) in all cases.
+/// systemd's `StopUnit`/`StartUnit`/`RestartUnit` enqueue a job and return its object path
+/// before activation completes.
+///
+/// The recommended mechanism to track the output of an operation is to subscribe to the
+/// `JobRemoved` signal before enqueing the job and wait for a signal with the corresponding job
+/// path to get the result of the operation
+///
+/// https://man7.org/linux/man-pages/man5/org.freedesktop.systemd1.5.html
+async fn wait_for_job(
+    stream: &mut JobRemovedStream,
+    job: &OwnedObjectPath,
+) -> Result<String, Error> {
+    use zbus::export::ordered_stream::OrderedStreamExt;
+
+    while let Some(signal) = stream.next().await {
+        let args = signal.args()?;
+        if &args.job == job {
+            return Ok(args.result);
+        }
+    }
+    Err(Error::StreamEnded)
+}
+
+/// Stops a systemd unit by name waiting until the unit reaches the inactive or failed state
 ///
 /// # Example
 ///
@@ -237,7 +297,7 @@ pub async fn run(unit: &str, command: &Command) -> Result<(), Error> {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     systemd::stop("my-script").await?;
+///     systemd::stop("my-service").await?;
 ///     Ok(())
 /// }
 /// ```
@@ -246,8 +306,88 @@ pub async fn stop(unit: &str) -> Result<(), Error> {
     let manager = ManagerProxy::new(&connection).await?;
     let full_unit_name = format!("{unit}.service");
 
-    // Stop the unit with replace mode to cancel any pending jobs
-    let _ = manager.stop_unit(&full_unit_name, "replace").await;
+    // Subscribe and start listening for JobRemoved
+    manager.subscribe().await?;
+    let mut jobs = manager.receive_job_removed().await?;
+
+    // Stop the unit with replace mode to cancel any pending jobs.
+    let job = match manager.stop_unit(&full_unit_name, "replace").await {
+        Ok(job) => job,
+        Err(e) if is_no_such_unit(&e) => return Err(Error::NoSuchUnit(full_unit_name)),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Wait for the stop job to finish. Any terminal result leaves the unit no longer
+    // running, so a non-"done" result is not treated as an error here.
+    wait_for_job(&mut jobs, &job).await?;
+
+    Ok(())
+}
+
+/// Starts an existing systemd unit by name, waiting until the start job completes.
+pub async fn start(unit: &str) -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+    let full_unit_name = format!("{unit}.service");
+
+    // Subscribe and start listening for JobRemoved signal
+    manager.subscribe().await?;
+    let mut jobs = manager.receive_job_removed().await?;
+
+    let job = match manager.start_unit(&full_unit_name, "replace").await {
+        Ok(job) => job,
+        Err(e) if is_no_such_unit(&e) => return Err(Error::NoSuchUnit(full_unit_name)),
+        Err(e) => return Err(e.into()),
+    };
+
+    // A "done" result means the unit activated successfully; any other result
+    // ("failed", "dependency", "canceled", "timeout", "skipped") is a failure.
+    let result = wait_for_job(&mut jobs, &job).await?;
+    if result != "done" {
+        return Err(Error::ActivationFailed {
+            unit: full_unit_name,
+            status: result,
+        });
+    }
+
+    Ok(())
+}
+
+/// Restarts a systemd unit by name, waiting until the restart job completes.
+pub async fn restart(unit: &str) -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+    let full_unit_name = format!("{unit}.service");
+
+    // Subscribe and start listening for JobRemoved signal
+    manager.subscribe().await?;
+    let mut jobs = manager.receive_job_removed().await?;
+
+    let job = match manager.restart_unit(&full_unit_name, "replace").await {
+        Ok(job) => job,
+        Err(e) if is_no_such_unit(&e) => return Err(Error::NoSuchUnit(full_unit_name)),
+        Err(e) => return Err(e.into()),
+    };
+
+    // A "done" result means the unit activated successfully; any other result
+    // ("failed", "dependency", "canceled", "timeout", "skipped") is a failure.
+    let result = wait_for_job(&mut jobs, &job).await?;
+    if result != "done" {
+        return Err(Error::ActivationFailed {
+            unit: full_unit_name,
+            status: result,
+        });
+    }
+
+    Ok(())
+}
+
+/// Reloads the systemd daemon configuration (equivalent to `systemctl daemon-reload`).
+pub async fn daemon_reload() -> Result<(), Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+
+    manager.reload().await?;
 
     Ok(())
 }

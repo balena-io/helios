@@ -130,7 +130,8 @@ features = [ "macros" ]
 
 [workspace.dependencies.clap]
 version = "4.6"
-features = [ "derive", "env" ]
+default-features = false
+features = [ "std", "help", "usage", "error-context", "derive", "env" ]
 
 [workspace.dependencies.uuid]
 version = "1.23"
@@ -167,3 +168,8 @@ features = [ "tokio" ]
 [profile.release]
 opt-level = "z"
 codegen-units = 1
+lto = "fat"
+strip = true
+# A panic in any task aborts the whole process rather than just killing
+# that task; acceptable for a supervised daemon and drops unwinding tables.
+panic = "abort"
