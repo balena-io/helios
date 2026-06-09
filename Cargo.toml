@@ -3,7 +3,7 @@ resolver = "3"
 members = [ "helios", "helios-api", "helios-balenahup", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util" ]
 
 [workspace.package]
-version = "0.25.9"
+version = "0.25.10"
 rust-version = "1.89"
 edition = "2024"
 description = "Balena's on-device agent"
@@ -170,6 +170,4 @@ opt-level = "z"
 codegen-units = 1
 lto = "fat"
 strip = true
-# A panic in any task aborts the whole process rather than just killing
-# that task; acceptable for a supervised daemon and drops unwinding tables.
 panic = "abort"

@@ -1,4 +1,37 @@
 - commits:
+    - subject: Move supervisor takeover code to Rust
+      hash: fc92c0dd6b0514ad249b3a9c38d2f7c5d61a3a77
+      body: |
+        This avoids the need for dbus and docker-cli binaries, reducing the
+        image size in around 30MB
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add systemd tools to start/stop units and reload daemon
+      hash: 0c919fd6f442803ff552bc36112f7fca7004fac6
+      body: |
+        These provide additional service control which is needed for takeover,
+        but will also be used for other future features.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove unnecessary features and optimize release build
+      hash: 431002a24852ece360bf48c0964bea2d8ef5c94b
+      body: |
+        This should reduce the binary size on about 5MB
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.10
+  title: ""
+  date: 2026-06-09T18:17:45.651Z
+- commits:
     - subject: Parse Compose byte values using parse-size
       hash: eb81b5d9db9861213c586463a0db2257c154a9ba
       body: >
