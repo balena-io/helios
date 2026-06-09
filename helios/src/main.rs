@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::watch::{self};
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::{
     EnvFilter,
-    fmt::{self, format::FmtSpan},
+    fmt::{format::FmtSpan, layer as fmt_layer},
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
@@ -21,7 +21,6 @@ use helios_remote as remote;
 use helios_state as state;
 use helios_store::DocumentStore;
 use helios_util as util;
-use helios_util::types::Uuid;
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::DaemonArgs;
@@ -33,8 +32,10 @@ use crate::remote::{
 use crate::state::StateConfig;
 use crate::util::config::StoredConfig;
 use crate::util::dirs::config_dir;
+use crate::util::logs::LocalEventFormatter;
+use crate::util::types::Uuid;
 
-fn initialize_tracing() {
+fn initialize_tracing(display_name: String) {
     // Initialize tracing subscriber for human-readable logs
     tracing_subscriber::registry()
         .with(
@@ -48,20 +49,26 @@ fn initialize_tracing() {
             ),
         )
         .with(
-            fmt::layer()
-                .with_writer(std::io::stderr)
+            fmt_layer()
                 .with_span_events(FmtSpan::CLOSE)
-                .event_format(fmt::format().compact().with_target(false).without_time()),
+                .event_format(LocalEventFormatter { display_name }),
         )
         .init();
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    initialize_tracing();
-
     // Dispatch on the applet selected by argv[0] (busybox-style multicall).
-    let cli = match cli::parse() {
+    let mut applet = cli::parse();
+
+    // The service name labels every log line; fall back to "helios" when unset.
+    let display_name = match &mut applet {
+        cli::Applet::Helios(args) => args.local_display_name.take(),
+        cli::Applet::HeliosLegacyTakeover(args) => args.local_display_name.take(),
+    };
+    initialize_tracing(display_name.unwrap_or_else(|| env!("CARGO_PKG_NAME").to_owned()));
+
+    let cli = match applet {
         cli::Applet::HeliosLegacyTakeover(args) => {
             let oci = oci::Client::connect().await?;
             legacy::takeover(&oci, args.into()).await?;
@@ -111,12 +118,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         legacy_config,
         retry_interval,
     )
-    .await?;
+    .await
+    .inspect_err(|err| error!("{err}"))?;
 
     Ok(())
 }
 
-#[instrument(name = "helios", skip_all, err)]
 async fn start_supervisor(
     uuid: Uuid,
     state_config: StateConfig,

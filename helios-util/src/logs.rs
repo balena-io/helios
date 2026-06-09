@@ -1,4 +1,11 @@
+use std::fmt;
+
 use mahler::json::Operation;
+use tracing::{Event, Level, Subscriber};
+use tracing_subscriber::{
+    fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields, format::Writer},
+    registry::{LookupSpan, Scope},
+};
 
 static SENSITIVE_KEYWORDS: &[&str] = &[
     "auth", "card", "cert", "cookie", "cred", "cvv", "cvc", "e-mail", "e_mail", "email", "key",
@@ -84,6 +91,86 @@ pub fn mask_sensitive_data(mut operation: Operation) -> Operation {
     }
 
     operation
+}
+
+/// A custom event formatter that allows to configure the outermost
+/// span in the scope via the display_name property.
+///
+/// Events will read a `<display_name>:poll:..` rather than using the crate-derived target.
+pub struct LocalEventFormatter {
+    pub display_name: String,
+}
+
+impl LocalEventFormatter {
+    /// Right-padded, optionally coloured level tag, matching the built-in
+    /// compact formatter.
+    fn write_level(&self, writer: &mut Writer<'_>, level: &Level) -> fmt::Result {
+        let (tag, color) = match *level {
+            Level::TRACE => ("TRACE", "\x1b[35m"),
+            Level::DEBUG => ("DEBUG", "\x1b[34m"),
+            Level::INFO => (" INFO", "\x1b[32m"),
+            Level::WARN => (" WARN", "\x1b[33m"),
+            Level::ERROR => ("ERROR", "\x1b[31m"),
+        };
+        if writer.has_ansi_escapes() {
+            write!(writer, "{color}{tag}\x1b[0m ")
+        } else {
+            write!(writer, "{tag} ")
+        }
+    }
+}
+
+impl<S, N> FormatEvent<S, N> for LocalEventFormatter
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let meta = event.metadata();
+        let ansi = writer.has_ansi_escapes();
+
+        self.write_level(&mut writer, meta.level())?;
+
+        // Service name first, then each span in the scope from the root down,
+        // joined by ':' (e.g. `helios:poll:`).
+        let bold = |name: &str| -> String {
+            if ansi {
+                format!("\x1b[1m{name}\x1b[0m:")
+            } else {
+                format!("{name}:")
+            }
+        };
+        write!(writer, "{}", bold(&self.display_name))?;
+        if let Some(scope) = ctx.event_scope() {
+            for span in scope.from_root() {
+                write!(writer, "{}", bold(span.name()))?;
+            }
+        }
+        writer.write_char(' ')?;
+
+        // Event fields (renders the `message` field as the log line).
+        ctx.format_fields(writer.by_ref(), event)?;
+
+        // Append span fields dimmed, matching the compact formatter.
+        for span in ctx.event_scope().into_iter().flat_map(Scope::from_root) {
+            let exts = span.extensions();
+            if let Some(fields) = exts.get::<FormattedFields<N>>()
+                && !fields.is_empty()
+            {
+                if ansi {
+                    write!(writer, " \x1b[2m{}\x1b[0m", fields.fields)?;
+                } else {
+                    write!(writer, " {}", fields.fields)?;
+                }
+            }
+        }
+        writeln!(writer)
+    }
 }
 
 #[cfg(test)]

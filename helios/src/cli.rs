@@ -57,6 +57,14 @@ pub struct DaemonArgs {
     )]
     pub host_runtime_dir: Option<PathBuf>,
 
+    /// Top level service name to show on the local logs
+    #[arg(
+        env = "HELIOS_LOCAL_DISPLAY_NAME",
+        long = "local-display-name",
+        value_name = "str"
+    )]
+    pub local_display_name: Option<String>,
+
     /// Local API listen address
     #[arg(
         env = "HELIOS_LOCAL_API_ADDRESS",
@@ -64,6 +72,15 @@ pub struct DaemonArgs {
         value_name = "addr"
     )]
     pub local_api_address: Option<LocalAddress>,
+
+    /// Seek retry backoff in milliseconds
+    #[arg(
+        env = "HELIOS_LOCAL_RETRY_INTERVAL_MS",
+        long = "local-retry-interval-ms",
+        value_name = "ms",
+        value_parser = parse_duration,
+    )]
+    pub local_retry_interval: Option<Duration>,
 
     /// Remote API endpoint URI
     #[arg(
@@ -122,15 +139,6 @@ pub struct DaemonArgs {
         requires = "remote_api_endpoint"
     )]
     pub remote_poll_max_jitter: Option<Duration>,
-
-    /// Seek retry backoff in milliseconds
-    #[arg(
-        env = "HELIOS_LOCAL_RETRY_INTERVAL_MS",
-        long = "local-retry-interval-ms",
-        value_name = "ms",
-        value_parser = parse_duration,
-    )]
-    pub local_retry_interval: Option<Duration>,
 
     /// URI of legacy Supervisor API
     #[arg(
@@ -200,6 +208,14 @@ pub struct DaemonArgs {
 
 #[derive(Clone, Debug, Args)]
 pub struct TakeoverArgs {
+    /// Top level service name to show on the local logs
+    #[arg(
+        env = "HELIOS_LOCAL_DISPLAY_NAME",
+        long = "local-display-name",
+        value_name = "str"
+    )]
+    pub local_display_name: Option<String>,
+
     /// Value written verbatim to the supervisor's `apiEndpointOverride`
     #[arg(long = "override-host", value_name = "url")]
     pub host_override: String,

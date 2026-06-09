@@ -345,7 +345,7 @@ async fn seek_target(
     Ok(UpdateStatus::Interrupted)
 }
 
-#[instrument(name = "seek", skip_all, err)]
+#[instrument(name = "state", skip_all, err)]
 pub async fn start_seek(
     runtime: Resources,
     initial_state: Device,

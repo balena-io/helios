@@ -56,6 +56,12 @@ if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then
   export HELIOS_HOST_RUNTIME_DIR
 fi
 
+# Do not allow the log display name to be user configurable
+unset HELIOS_LOCAL_DISPLAY_NAME
+if [ -n "${BALENA_SERVICE_NAME}" ]; then
+  export HELIOS_LOCAL_DISPLAY_NAME="${BALENA_SERVICE_NAME}"
+fi
+
 # Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"
