@@ -247,12 +247,7 @@ mod tests {
     fn composition_with_restart_policy() {
         let comp: ServiceComposition =
             serde_json::from_value(serde_json::json!({"restart": "on-failure:5"})).unwrap();
-        assert_eq!(
-            comp.restart,
-            RestartPolicy::OnFailure {
-                max_retries: Some(5)
-            }
-        );
+        assert_eq!(comp.restart, RestartPolicy::OnFailure { max_retries: 5 });
     }
 
     #[test]
