@@ -1,11 +1,13 @@
 use bollard::Docker;
-use bollard::query_parameters::{BuildImageOptions, PushImageOptions};
+use bollard::config::ContainerStateStatusEnum;
+use bollard::query_parameters::{BuildImageOptions, ListContainersOptions, PushImageOptions};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
 
 const UPDATER_IMAGE: &str = "registry:5000/test-updater:latest";
 const FAILING_UPDATER_IMAGE: &str = "registry:5000/test-failing-updater:latest";
+const OVERLAY_IMAGE: &str = "registry:5000/test-overlay:latest";
 
 use super::common::{
     HELIOS_URL, MOCK_REMOTE_URL, clear_reports, prune_images, wait_for_report,
@@ -50,6 +52,46 @@ async fn build_test_updater_image(docker: &Docker) {
     }
 
     // remove leftover images after build
+    prune_images().await;
+}
+
+/// Build and push a minimal hostapp overlay test image.
+async fn build_overlay_image(docker: &Docker) {
+    let dockerfile = b"FROM alpine:3.23\nVOLUME /boot\n";
+
+    let mut tar_buf = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(dockerfile.len() as u64);
+    header.set_mode(0o644);
+    tar_buf
+        .append_data(&mut header, "Dockerfile", dockerfile.as_slice())
+        .unwrap();
+    let context_bytes = tar_buf.into_inner().unwrap();
+
+    let build_opts = BuildImageOptions {
+        t: Some(OVERLAY_IMAGE.to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.build_image(
+        build_opts,
+        None,
+        Some(bollard::body_full(context_bytes.into())),
+    );
+    while let Some(result) = stream.next().await {
+        result.expect("overlay image build failed");
+    }
+
+    let push_opts = PushImageOptions {
+        tag: Some("latest".to_string()),
+        ..Default::default()
+    };
+
+    let mut stream = docker.push_image("registry:5000/test-overlay", Some(push_opts), None);
+    while let Some(result) = stream.next().await {
+        result.expect("overlay image push failed");
+    }
+
     prune_images().await;
 }
 
@@ -169,6 +211,7 @@ async fn test_remote_poll_user_app() {
 async fn test_remote_poll_hostos_update() {
     let docker = Docker::connect_with_defaults().unwrap();
     build_test_updater_image(&docker).await;
+    build_overlay_image(&docker).await;
 
     let client = reqwest::Client::new();
 
@@ -191,6 +234,28 @@ async fn test_remote_poll_hostos_update() {
                         "labels": {
                             "io.balena.image.class": "hostapp",
                             "io.balena.private.hostapp.board-rev": "test-board-rev-123"
+                        }
+                    }
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "overlay",
+                            "io.balena.update.requires-reboot": "1"
+                        }
+                    }
+                },
+                "extra-modules": {
+                    "id": 203,
+                    "image": OVERLAY_IMAGE,
+                    "labels": {},
+                    "composition": {
+                        "labels": {
+                            "io.balena.image.class": "overlay",
+                            "io.balena.update.requires-reboot": "1"
                         }
                     }
                 }
@@ -229,8 +294,11 @@ async fn test_remote_poll_hostos_update() {
 
     let status = wait_for_target_apply().await;
 
-    // we expectd an aborted state because it has to wait for the reboot
-    assert_eq!(status, json!({"status": "aborted"}));
+    assert_ne!(
+        status,
+        json!({"status": "aborted"}),
+        "Phase 2 removed the install-defer; the apply must no longer abort, got: {status}"
+    );
 
     let args_content = tokio::fs::read_to_string("/tmp/run/balenahup/args.txt")
         .await
@@ -260,11 +328,10 @@ async fn test_remote_poll_hostos_update() {
         args_content.contains(UPDATER_IMAGE),
         "args should contain updater image uri, got: {args_content}"
     );
-    // FIXME: this needs to be re-added once helios handles locks
-    // assert!(
-    //     args_content.contains("--no-reboot"),
-    //     "args should contain --no-reboot, got: {args_content}"
-    // );
+    assert!(
+        args_content.contains("--no-reboot"),
+        "args should contain --no-reboot (helios owns the reboot now), got: {args_content}"
+    );
 
     let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(
@@ -272,12 +339,93 @@ async fn test_remote_poll_hostos_update() {
         "breadcrumb file should exist at {breadcrumb}"
     );
 
-    // verify state report includes the hostapp with aborted status
-    let release_report = wait_for_report(APP_UUID, RELEASE_COMMIT, "aborted", 10).await;
-    assert_eq!(
-        release_report["services"]["hostapp"]["status"],
-        "Installing"
+    // Each target overlay container must have been created, run under the
+    // `extension` runtime, and exited 0 BEFORE the (balenahup-issued) reboot:
+    // helios gates the host install on EVERY target overlay being deployed
+    // first. Two overlays of the single class `overlay` prove generic N-overlay
+    // handling (both deploy, the install gate waits for both).
+    for service_name in ["kernel-modules", "extra-modules"] {
+        let mut filters = std::collections::HashMap::new();
+        filters.insert(
+            "label".to_string(),
+            vec![
+                "io.balena.image.class=overlay".to_string(),
+                format!("io.balena.service-name={service_name}"),
+                format!("io.balena.private.hostapp.release={RELEASE_COMMIT}"),
+            ],
+        );
+        let containers = docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            containers.len(),
+            1,
+            "exactly one '{service_name}' overlay container should be deployed, got: {containers:?}"
+        );
+        let inspect = docker
+            .inspect_container(containers[0].id.as_deref().unwrap(), None)
+            .await
+            .unwrap();
+        let state = inspect
+            .state
+            .expect("overlay container should have state");
+        assert_eq!(
+            state.status,
+            Some(ContainerStateStatusEnum::EXITED),
+            "'{service_name}' overlay container should have exited"
+        );
+        assert_eq!(
+            state.exit_code,
+            Some(0),
+            "'{service_name}' overlay should exit 0 (deployed), got: {state:?}"
+        );
+    }
+
+    // Assert helios issued the coordinated reboot itself.
+    let mut reboot_observed = false;
+    for _ in 0..15 {
+        let out = tokio::process::Command::new("dbus-send")
+            .args([
+                "--system",
+                "--print-reply",
+                "--dest=org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.DBus.Properties.Get",
+                "string:org.freedesktop.login1.Manager",
+                "string:MockState",
+            ])
+            .output()
+            .await;
+        if let Ok(o) = out {
+            if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("rebooting") {
+                reboot_observed = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert!(
+        reboot_observed,
+        "helios should have issued the activation reboot via logind \
+         (org.freedesktop.login1.Manager.Reboot), flipping the mock's MockState \
+         to `rebooting`, but MockState never became `rebooting`"
     );
+
+    let _ = tokio::process::Command::new("dbus-send")
+        .args([
+            "--system",
+            "--print-reply",
+            "--dest=org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager.MockReset",
+        ])
+        .output()
+        .await;
 
     clear_reports().await;
     client

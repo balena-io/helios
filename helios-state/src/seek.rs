@@ -371,6 +371,7 @@ pub async fn start_seek(
         local_store,
         registry_auth_client,
         host_runtime_dir,
+        host_state_dir,
     } = runtime;
 
     // Create an uninitialized local worker
@@ -378,6 +379,7 @@ pub async fn start_seek(
         docker.clone(),
         local_store.clone(),
         host_runtime_dir.clone(),
+        host_state_dir.clone(),
         registry_auth_client.clone(),
     );
 
@@ -474,7 +476,14 @@ pub async fn start_seek(
 
                 // We re-initialize the worker each time as the state of the system may have changed
                 // outside of what is monitored by the worker
-                current_state = read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
+                current_state = read_state(
+                    &docker,
+                    &local_store,
+                    uuid.clone(),
+                    os.clone(),
+                    host_state_dir.as_path(),
+                )
+                .await?;
 
                 // Set the update status immediately
                 update_status = UpdateStatus::ApplyingChanges;
@@ -608,8 +617,14 @@ pub async fn start_seek(
                 // if the legacy apply went through
                 else if matches!(state, SeekState::Reset) {
                     // reload the current state
-                    current_state =
-                        read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
+                    current_state = read_state(
+                        &docker,
+                        &local_store,
+                        uuid.clone(),
+                        os.clone(),
+                        host_state_dir.as_path(),
+                    )
+                    .await?;
 
                     UpdateStatus::Done
                 } else {

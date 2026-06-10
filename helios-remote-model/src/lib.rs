@@ -136,6 +136,7 @@ pub struct RejectedApp {
     pub reason: String,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum App {
     User(UserApp),
@@ -146,6 +147,7 @@ pub enum App {
 /// Outcome of `parse_app` — either an accepted `App`, a per-app rejection
 /// keyed by a specific release uuid, or a fatal device-level error that
 /// should abort the whole `AppMap` deserialization.
+#[derive(Debug)]
 enum ParseAppError {
     Reject(RejectedApp),
     Fatal(String),
@@ -213,13 +215,31 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         ));
     };
 
-    let Some(svc) = release.services.into_values().find(|svc| {
-        svc.composition
-            .labels
-            .get("io.balena.image.class")
-            .map(|value| value == "hostapp")
-            .is_some()
-    }) else {
+    let mut hostapp_svc: Option<(String, Service)> = None;
+    let mut overlays: Vec<HostAppOverlay> = Vec::new();
+    for (svc_name, svc) in release.services.into_iter() {
+        match svc.composition.labels.get("io.balena.image.class").map(String::as_str) {
+            Some("hostapp") => hostapp_svc = Some((svc_name, svc)),
+            Some("overlay") => {
+                let requires_reboot = matches!(
+                    svc.composition
+                        .labels
+                        .get("io.balena.update.requires-reboot")
+                        .map(String::as_str),
+                    Some("1")
+                );
+                overlays.push(HostAppOverlay {
+                    name: svc_name,
+                    image: svc.image,
+                    class: "overlay".to_string(),
+                    requires_reboot,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let Some((_, svc)) = hostapp_svc else {
         return Err(ParseAppError::Reject(RejectedApp {
             id: app.id,
             name: app.name,
@@ -229,6 +249,8 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
                 .to_string(),
         }));
     };
+
+    overlays.sort_by_key(|o| o.name.clone());
 
     let mut labels: HashMap<String, String> = svc
         .composition
@@ -276,6 +298,7 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         image: svc.image,
         board_rev,
         updater,
+        overlays,
     }))
 }
 
@@ -285,6 +308,15 @@ pub struct HostApp {
     pub image: ImageUri,
     pub board_rev: String,
     pub updater: ImageUri,
+    pub overlays: Vec<HostAppOverlay>,
+}
+
+#[derive(Debug)]
+pub struct HostAppOverlay {
+    pub name: String,
+    pub image: ImageUri,
+    pub class: String,
+    pub requires_reboot: bool,
 }
 
 /// Target app as defined by the remote backend
@@ -1062,6 +1094,40 @@ mod tests {
             err.to_string(),
             "service 'my-service' refers to undefined volume missing"
         );
+    }
+
+    #[test]
+    fn parses_hostapp_with_overlay_service() {
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": "registry2.balena-cloud.com/v2/aabbccddeeff00112233445566778899@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "labels": {},
+                    "composition": { "labels": {
+                        "io.balena.image.class": "overlay",
+                        "io.balena.update.requires-reboot": "1"
+                    }}
+                }
+            }}}
+        });
+        let app = parse_app(value).unwrap();
+        let App::Host(hostapp) = app else { panic!("expected hostapp") };
+        assert_eq!(hostapp.overlays.len(), 1);
+        let ov = &hostapp.overlays[0];
+        assert_eq!(ov.name, "kernel-modules");
+        assert_eq!(ov.class, "overlay");
+        assert!(ov.requires_reboot);
     }
 
     #[test]

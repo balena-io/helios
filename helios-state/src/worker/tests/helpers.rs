@@ -40,6 +40,23 @@ pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>
     );
 }
 
+/// Assert that the planner finds an empty workflow (no work at all) for the
+/// given current/target pair.
+pub(super) fn assert_no_workflow(current: Value, target: Value) {
+    let current = serde_json::from_value::<Device>(current).unwrap();
+    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
+    let (_, workflow) = super::super::worker()
+        .initial_state(current)
+        .find_workflow(target)
+        .unwrap();
+    let workflow = workflow.expect("workflow should be found");
+    assert_eq!(
+        workflow.to_string(),
+        Dag::<&str>::default().to_string(),
+        "expected an empty plan, got:\n{workflow}"
+    );
+}
+
 /// Wraps a DAG with `prepare release` and `finish release` steps,
 /// matching the pattern for updates to an existing release.
 pub(super) fn release_update(

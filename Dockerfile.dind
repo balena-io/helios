@@ -1,0 +1,16 @@
+FROM golang:1.22-alpine AS extension-runtime
+RUN apk add --no-cache git
+WORKDIR /src
+# Pin to a branch/tag/commit via build arg; defaults to the repo's main branch.
+ARG EXTENSION_RUNTIME_VERSION=master
+RUN git clone --depth 1 --branch ${EXTENSION_RUNTIME_VERSION} \
+    https://github.com/balena-os/balena-extension-runtime.git .
+RUN go mod download
+RUN CGO_ENABLED=0 go build -ldflags '-s -w' \
+    -o /balena-extension-runtime ./cmd/balena-extension-runtime/
+
+FROM docker:25-dind
+COPY --from=extension-runtime /balena-extension-runtime /usr/local/bin/balena-extension-runtime
+RUN mkdir -p /etc/docker && \
+    printf '%s\n' '{"runtimes":{"extension":{"path":"/usr/local/bin/balena-extension-runtime"}},"insecure-registries":["registry:5000"]}' \
+    > /etc/docker/daemon.json

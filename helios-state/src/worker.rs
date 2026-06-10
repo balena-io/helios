@@ -2,7 +2,7 @@ use mahler::worker::{Uninitialized, Worker};
 
 use helios_store::DocumentStore;
 
-use crate::common_types::HostRuntimeDir;
+use crate::common_types::{HostRuntimeDir, HostStateDir};
 use crate::oci::{Client as Docker, RegistryAuth};
 use crate::util::locking::{ForceAcquireLocks, LockSet};
 
@@ -51,6 +51,7 @@ pub fn create(
     docker: Docker,
     local_store: DocumentStore,
     host_runtime_dir: HostRuntimeDir,
+    host_state_dir: HostStateDir,
     registry_auth_client: Option<RegistryAuth>,
 ) -> LocalWorker {
     // Create the worker and set-up resources
@@ -61,6 +62,7 @@ pub fn create(
     }
 
     worker.use_resource(host_runtime_dir);
+    worker.use_resource(host_state_dir);
     worker.use_resource(local_store);
     worker.use_resource(LockSet::new());
     worker.use_resource(ForceAcquireLocks::from(false));

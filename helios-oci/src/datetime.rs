@@ -1,7 +1,8 @@
 use std::fmt;
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,6 +19,38 @@ impl FromStr for DateTime {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(DateTime(chrono::DateTime::parse_from_rfc3339(s)?.to_utc()))
+    }
+}
+
+impl DateTime {
+    /// Convert to a `std::time::SystemTime` for comparison against host clocks
+    pub fn as_system_time(&self) -> SystemTime {
+        let sec = self.0.timestamp();
+        let nsec = self.0.timestamp_subsec_nanos();
+        if sec < 0 {
+            UNIX_EPOCH - Duration::new(-sec as u64, 0) + Duration::new(0, nsec)
+        } else {
+            UNIX_EPOCH + Duration::new(sec as u64, nsec)
+        }
+    }
+}
+
+impl From<SystemTime> for DateTime {
+    /// Build a `DateTime` from a `std::time::SystemTime`.
+    fn from(v: SystemTime) -> Self {
+        let (sec, nsec) = match v.duration_since(UNIX_EPOCH) {
+            Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
+            Err(e) => {
+                let dur = e.duration();
+                let (sec, nsec) = (dur.as_secs() as i64, dur.subsec_nanos());
+                if nsec == 0 {
+                    (-sec, 0)
+                } else {
+                    (-sec - 1, 1_000_000_000 - nsec)
+                }
+            }
+        };
+        DateTime(Utc.timestamp_opt(sec, nsec).unwrap())
     }
 }
 

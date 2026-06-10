@@ -83,9 +83,10 @@ services:
       timeout: 3s
 
   docker:
-    image: docker:28-dind
+    build:
+      context: .
+      dockerfile: Dockerfile.dind
     privileged: true
-    command: ['--insecure-registry', 'registry:5000']
     volumes:
       - dind:/var/run
     depends_on:
@@ -134,6 +135,11 @@ volumes:
       type: tmpfs
       device: tmpfs
   runtime:
+    driver_opts:
+      type: tmpfs
+      o: ''
+      device: tmpfs
+  state-partition:
     driver_opts:
       type: tmpfs
       o: ''

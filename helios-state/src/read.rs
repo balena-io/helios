@@ -72,6 +72,7 @@ pub async fn read(
     local_store: &DocumentStore,
     uuid: Uuid,
     os: Option<OperatingSystem>,
+    #[cfg_attr(not(feature = "balenahup"), allow(unused_variables))] host_state_dir: &std::path::Path,
 ) -> Result<Device, Error> {
     let mut device = Device::new(uuid, os);
 
@@ -81,7 +82,7 @@ pub async fn read(
     // Read the hostapp information from the local store
     #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
-        crate::balenahup::read::from_store(host, local_store).await?;
+        crate::balenahup::read::from_store(host, docker, local_store, host_state_dir).await?;
     }
 
     // Read the state of images

@@ -15,8 +15,13 @@ use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
+use crate::overlays::{deploy_overlay, remove_overlay};
+use crate::reboot::reboot_to_activate;
+
 use super::BALENAHUP;
-use super::models::{Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget};
+use super::models::{
+    Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
+};
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -70,7 +75,9 @@ fn init_hostapp_release(
         build,
         updater,
         status,
+        overlays: mahler::state::Map::new(),
         install_attempts: 0,
+        hup_in_progress: false,
     };
 
     // set the host release with the details from the target
@@ -95,6 +102,7 @@ fn init_hostapp_release(
 fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
+    Target(tgt): Target<HostRelease>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
     host_runtime_dir: Res<HostRuntimeDir>,
@@ -104,6 +112,14 @@ fn install_hostapp_release(
         release.status == HostReleaseStatus::Created,
         "OS release already installed"
     );
+
+    let overlays_ready = tgt.overlays.keys().all(|name| {
+        release
+            .overlays
+            .get(name)
+            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
+    });
+    enforce!(overlays_ready, "overlays not yet deployed");
 
     // increase the install counter
     release.install_attempts += 1;
@@ -184,8 +200,7 @@ fn install_hostapp_release(
                 release_uuid.as_str(),
                 "--target-image-uri",
                 release.image.as_str(),
-                // FIXME: this needs to be re-added after helios handles update-locks
-                // "--no-reboot"
+                "--no-reboot",
             ])
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
@@ -337,6 +352,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("install host OS release '{release_uuid}'")
                     },
                 ),
+                job::update(reboot_to_activate).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("reboot to activate host OS release '{release_uuid}'")
+                    },
+                ),
                 job::update(update_script_uri).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("update metadata for host OS release '{release_uuid}'")
@@ -345,6 +365,21 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::delete(remove_old_metadata).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("remove metadata for host OS release '{release_uuid}'",)
+                    },
+                ),
+            ],
+        )
+        .jobs(
+            "/host/releases/{release_uuid}/overlays/{name}",
+            [
+                job::create(deploy_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("deploy overlay '{name}' for host OS release '{release_uuid}'")
+                    },
+                ),
+                job::delete(remove_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("remove overlay '{name}' for host OS release '{release_uuid}'")
                     },
                 ),
             ],
@@ -358,18 +393,19 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             "/host",
             exception::delete(|| true).with_description(|| "target host release missing"),
         )
-        // ignore requests to update the host if it has already been installed (we are waiting for
-        // a reboot) or we reached the number of install attempts
-        .exception(
-            "/host/releases/{release_uuid}",
-            exception::update(|rel: View<HostRelease>| rel.status == HostReleaseStatus::Installed)
-                .with_description(|| "update needs a reboot to complete"),
-        )
+        // ignore requests to update the host if we reached the number of install attempts
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
                 rel.status == HostReleaseStatus::Created && rel.install_attempts > 3
             })
             .with_description(|| "too many failed installs, check device"),
+        )
+        // wait for an in-progress host OS update (the OS is validating a staged
+        // update and may still roll back); do not start more host work.
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>| rel.hup_in_progress)
+                .with_description(|| "host OS update in progress, waiting for validation"),
         )
 }

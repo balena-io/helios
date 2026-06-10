@@ -36,6 +36,7 @@ services:
       # Needed for locks and balenahup. This needs to match the device
       # used for the `runtime` volume
       - BALENA_HOST_RUNTIME_DIR=/tmp/balena-supervisor
+      - BALENA_HOST_STATE_DIR=/mnt/state
     volumes:
       # Critical configurations
       - config:/config/helios
@@ -46,6 +47,7 @@ services:
       - state:/local/helios
       # Runtime directory. Data here does not persist reboots
       - runtime:/tmp/run
+      - state-partition:/mnt/state:ro
 
 volumes:
   config:
@@ -61,3 +63,10 @@ volumes:
       o: bind
       # XXX: this directory needs to exist on the host before the container is started
       device: /tmp/balena-supervisor
+  state-partition:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # The host state partition mount (balenaOS); must exist before start
+      device: /mnt/state

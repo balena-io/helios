@@ -56,6 +56,10 @@ if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then
   export HELIOS_HOST_RUNTIME_DIR
 fi
 
+HELIOS_HOST_STATE_DIR="${BALENA_HOST_STATE_DIR:-/mnt/state}"
+unset BALENA_HOST_STATE_DIR
+export HELIOS_HOST_STATE_DIR
+
 # Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"
