@@ -1,6 +1,6 @@
 use helios_oci::Client;
 use helios_util::systemd;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// ES-module script (run via `node --input-type=module -e`) that idempotently
 /// points the legacy supervisor at helios by writing its `apiEndpointOverride`
@@ -65,6 +65,7 @@ pub enum TakeoverError {
 /// then restart it so it re-reads the override.
 ///
 /// Idempotent: a supervisor already configured for takeover is left untouched.
+#[instrument(name = "takeover", skip_all, err)]
 pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutcome, TakeoverError> {
     let container = oci.non_namepaced_container();
 
