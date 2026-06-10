@@ -1,4 +1,25 @@
 - commits:
+    - subject: Normalize on-failure restart policy with no retry count
+      hash: da00869650dd679729051286483c5e9a7d670b75
+      body: >
+        A bare `restart: on-failure` parsed to no retry count, but the engine
+        sets
+
+        `0` by default. This mismatch meant that `restart: on-failure` could not
+        be
+
+        applied to the device. Set `on-failure` to 0 in remote model by default
+
+        if no value supplised.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.25.12
+  title: ""
+  date: 2026-06-10T22:03:08.132Z
+- commits:
     - subject: Remove the top level logging span
       hash: 716f370982c4ba8a577ddbb5f5707ee6b34edc57
       body: |
