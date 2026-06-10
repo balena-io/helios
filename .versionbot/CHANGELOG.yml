@@ -1,4 +1,32 @@
 - commits:
+    - subject: Remove the top level logging span
+      hash: 716f370982c4ba8a577ddbb5f5707ee6b34edc57
+      body: |
+        It was hardcoded to `helios` before.  When using as a service on a
+        balena device, we don't want that name to show on the dashboard logs.
+
+        The dashboard already shows the service name on the composition so just
+        removing the top level logging span is enough.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Configure logs output by level
+      hash: 9a2ee2d50cd4dd65c99537e2a9b550b8b957ac38
+      body: |
+        Logs with level warn and above go to stderr and the rest go to stdout,
+        this will ensure they get the right priority on the journal and will
+        help with future filtering.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.11
+  title: ""
+  date: 2026-06-10T19:57:05.034Z
+- commits:
     - subject: Move supervisor takeover code to Rust
       hash: fc92c0dd6b0514ad249b3a9c38d2f7c5d61a3a77
       body: |
