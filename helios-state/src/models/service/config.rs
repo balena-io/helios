@@ -443,6 +443,40 @@ mod tests {
     }
 
     #[test]
+    fn preserves_ports_across_round_trip() {
+        let original = oci::ContainerConfig {
+            ports: ["8080:80", "127.0.0.1:5353:53/udp", "443"]
+                .into_iter()
+                .map(|p| p.parse().unwrap())
+                .collect(),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.ports, original.ports);
+    }
+
+    #[test]
+    fn keeps_ports_without_tracking_label() {
+        // Ports need no entry in LABEL_CONFIG_FIELDS: `HostConfig.PortBindings`
+        // only ever contains what the create request asked for (image EXPOSE
+        // entries surface in `Config.ExposedPorts`, which is never read back).
+        let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
+        let inspected = oci::ContainerConfig {
+            ports: ["8080:80".parse().unwrap()].into_iter().collect(),
+            labels,
+            ..Default::default()
+        };
+        let svc = ServiceConfig::from(inspected);
+        assert_eq!(
+            svc.ports,
+            ["8080:80".parse().unwrap()].into_iter().collect()
+        );
+    }
+
+    #[test]
     fn drops_engine_inherited_healthcheck_subfields() {
         let original = oci::ContainerConfig {
             healthcheck: Some(oci::Healthcheck {
