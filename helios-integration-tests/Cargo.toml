@@ -51,6 +51,8 @@ tokio = { version = "1.52.2", default-features = false, features = [
   "time",
   "fs",
   "sync",
+  "net",
+  "io-util",
 ] }
 tokio-stream = { version = "0.1.18", default-features = false, features = [
   "sync",
