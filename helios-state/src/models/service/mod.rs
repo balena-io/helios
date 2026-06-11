@@ -147,8 +147,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             .chain(environment)
             .collect();
 
-        // convert the composition command to a Vec
+        // convert the composition command and entrypoint to a Vec
         let command = composition.command.map(|cmd| cmd.into_iter().collect());
+        let entrypoint = composition.entrypoint.map(|e| e.into_iter().collect());
 
         // convert the restart policy
         let restart_policy = match composition.restart {
@@ -249,7 +250,11 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .map(DurationMicros::to_i64)
                     .unwrap_or(0),
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
+                dns: composition.dns.unwrap_or_default(),
+                dns_opt: composition.dns_opt.unwrap_or_default(),
+                dns_search: composition.dns_search.unwrap_or_default(),
                 domainname: composition.domainname,
+                entrypoint,
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
                 hostname: composition.hostname,
