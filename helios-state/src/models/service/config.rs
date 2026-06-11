@@ -54,6 +54,7 @@ macro_rules! impl_field_tracking {
 impl_field_tracking!(oci::ContainerConfig {
     cgroup_parent,
     command,
+    entrypoint,
     healthcheck,
     hostname,
     init,
@@ -350,6 +351,7 @@ mod tests {
             cpu_rt_runtime: 950_000,
             cpu_shares: 2048,
             domainname: Some("example.com".to_string()),
+            entrypoint: Some(vec!["/entrypoint.sh".to_string()]),
             healthcheck: Some(oci::Healthcheck {
                 test: Some(vec!["CMD".to_string(), "true".to_string()]),
                 interval: Some(30_000_000_000),
@@ -379,6 +381,7 @@ mod tests {
 
         let back = ServiceConfig::from(with_labels);
         assert_eq!(back.command, original.command);
+        assert_eq!(back.entrypoint, original.entrypoint);
         assert_eq!(back.cgroup, original.cgroup);
         assert_eq!(back.cgroup_parent, original.cgroup_parent);
         assert_eq!(back.cpuset, original.cpuset);
@@ -412,6 +415,7 @@ mod tests {
         let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
+            entrypoint: Some(vec!["/docker-entrypoint.sh".to_string()]),
             healthcheck: Some(oci::Healthcheck {
                 test: Some(vec!["CMD".to_string(), "image-default".to_string()]),
                 ..Default::default()
@@ -430,6 +434,7 @@ mod tests {
         };
         let svc = ServiceConfig::from(inspected);
         assert_eq!(svc.command, None);
+        assert_eq!(svc.entrypoint, None);
         assert_eq!(svc.healthcheck, None);
         assert_eq!(svc.hostname, None);
         assert_eq!(svc.init, None);
