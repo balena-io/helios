@@ -87,6 +87,9 @@ pub struct ServiceComposition {
     pub domainname: Option<String>,
 
     #[serde(default)]
+    pub entrypoint: Option<Command>,
+
+    #[serde(default)]
     pub environment: Environment,
 
     #[serde(default)]
@@ -274,6 +277,26 @@ mod tests {
         let comp: ServiceComposition =
             serde_json::from_value(serde_json::json!({"stop_grace_period": 30})).unwrap();
         assert_eq!(comp.stop_grace_period.map(DurationSecs::to_i64), Some(30));
+    }
+
+    #[test]
+    fn composition_parses_entrypoint_string() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"entrypoint": "/bin/sh -c"})).unwrap();
+        assert_eq!(
+            comp.entrypoint.as_deref(),
+            Some(&vec!["/bin/sh".to_string(), "-c".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_parses_entrypoint_list() {
+        let comp: ServiceComposition =
+            serde_json::from_value(serde_json::json!({"entrypoint": ["/bin/sh", "-c"]})).unwrap();
+        assert_eq!(
+            comp.entrypoint.as_deref(),
+            Some(&vec!["/bin/sh".to_string(), "-c".to_string()])
+        );
     }
 
     #[test]

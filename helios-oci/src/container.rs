@@ -480,6 +480,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|c| c.domainname.take())
             .filter(|s| !s.is_empty());
+        let entrypoint = config.as_mut().and_then(|c| c.entrypoint.take());
         let healthcheck = config
             .as_mut()
             .and_then(|c| c.healthcheck.take())
@@ -524,6 +525,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cgroup,
             cgroup_parent,
             command: cmd,
+            entrypoint,
             cpuset,
             cpu_rt_period,
             cpu_rt_runtime,
@@ -1209,6 +1211,10 @@ pub struct ContainerConfig {
     /// NIS domain name to use for the container.
     pub domainname: Option<String>,
 
+    /// Entrypoint to run specified as an array of strings, overrides the
+    /// image ENTRYPOINT
+    pub entrypoint: Option<Vec<String>>,
+
     /// Environment variables
     #[serde(skip_serializing_if = "Environment::is_empty")]
     pub environment: Environment,
@@ -1312,6 +1318,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cgroup,
             cgroup_parent,
             command: cmd,
+            entrypoint,
             cpuset,
             cpu_rt_period,
             cpu_rt_runtime,
@@ -1445,6 +1452,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
         ContainerCreateBody {
             cmd,
             domainname,
+            entrypoint,
             env,
             healthcheck: healthcheck.map(Into::into),
             hostname,
