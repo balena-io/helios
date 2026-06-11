@@ -353,6 +353,18 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cpu_shares.take())
             .unwrap_or(0);
+        let dns = host_config
+            .as_mut()
+            .and_then(|hc| hc.dns.take())
+            .unwrap_or_default();
+        let dns_opt = host_config
+            .as_mut()
+            .and_then(|hc| hc.dns_options.take())
+            .unwrap_or_default();
+        let dns_search = host_config
+            .as_mut()
+            .and_then(|hc| hc.dns_search.take())
+            .unwrap_or_default();
         // Engine reports each entry as `host:ip`; split on the first `:` so
         // IPv6 addresses remain untouched.
         let extra_hosts = host_config
@@ -528,6 +540,9 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            dns,
+            dns_opt,
+            dns_search,
             domainname,
             environment,
             extra_hosts,
@@ -1165,7 +1180,7 @@ impl TryFrom<bollard::models::Mount> for Mount {
 
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ContainerConfig {
     /// Cgroup namespace mode (`host` or `private`)
@@ -1191,6 +1206,18 @@ pub struct ContainerConfig {
     /// CPU shares (relative weight vs other containers; default 1024)
     #[serde(skip_serializing_if = "is_zero")]
     pub cpu_shares: i64,
+
+    /// Custom DNS servers for the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dns: Vec<String>,
+
+    /// Custom DNS resolver options (`/etc/resolv.conf` options).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dns_opt: Vec<String>,
+
+    /// Custom DNS search domains.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dns_search: Vec<String>,
 
     /// NIS domain name to use for the container.
     pub domainname: Option<String>,
@@ -1297,54 +1324,6 @@ pub struct ContainerConfig {
     pub healthcheck: Option<Healthcheck>,
 }
 
-/// Compare configs treating networks as unordered (Docker inspect doesn't
-/// preserve the network priority order). The volumes field is canonicalized
-/// (sorted by target path) on both deserialization paths so a straight Vec
-/// comparison is stable across target-state reorderings.
-impl PartialEq for ContainerConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.cgroup == other.cgroup
-            && self.cgroup_parent == other.cgroup_parent
-            && self.command == other.command
-            && self.cpu_rt_period == other.cpu_rt_period
-            && self.cpu_rt_runtime == other.cpu_rt_runtime
-            && self.cpuset == other.cpuset
-            && self.cpu_shares == other.cpu_shares
-            && self.domainname == other.domainname
-            && self.environment == other.environment
-            && self.extra_hosts == other.extra_hosts
-            && self.healthcheck == other.healthcheck
-            && self.hostname == other.hostname
-            && self.init == other.init
-            && self.labels == other.labels
-            && self.mem_limit == other.mem_limit
-            && self.mem_reservation == other.mem_reservation
-            && self.nano_cpus == other.nano_cpus
-            && self.oom_score_adj == other.oom_score_adj
-            && self.pids_limit == other.pids_limit
-            && self.privileged == other.privileged
-            && self.read_only == other.read_only
-            && self.restart_policy == other.restart_policy
-            && self.runtime == other.runtime
-            && self.shm_size == other.shm_size
-            && self.stop_grace_period == other.stop_grace_period
-            && self.stop_signal == other.stop_signal
-            && self.tty == other.tty
-            && self.user == other.user
-            && self.userns_mode == other.userns_mode
-            && self.uts == other.uts
-            && self.working_dir == other.working_dir
-            && self.network_mode == other.network_mode
-            && self.networks.len() == other.networks.len()
-            && self
-                .networks
-                .iter()
-                .all(|(k, v)| other.networks.get(k) == Some(v))
-            && self.volumes == other.volumes
-            && self.ports == other.ports
-    }
-}
-
 impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
         let ContainerConfig {
@@ -1355,6 +1334,9 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            dns,
+            dns_opt,
+            dns_search,
             domainname,
             environment,
             extra_hosts,
@@ -1459,6 +1441,9 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_realtime_period: non_zero(cpu_rt_period),
             cpu_realtime_runtime: non_zero(cpu_rt_runtime),
             cpu_shares: non_zero(cpu_shares),
+            dns: (!dns.is_empty()).then_some(dns),
+            dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
+            dns_search: (!dns_search.is_empty()).then_some(dns_search),
             extra_hosts: (!extra_hosts.is_empty()).then(|| {
                 extra_hosts
                     .into_iter()
@@ -1985,6 +1970,62 @@ mod tests {
         // An empty map should not emit an ExtraHosts entry on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().extra_hosts, None);
+    }
+
+    #[test]
+    fn inspect_reads_dns_config() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                dns: Some(vec!["8.8.8.8".to_string(), "9.9.9.9".to_string()]),
+                dns_options: Some(vec!["use-vc".to_string()]),
+                dns_search: Some(vec!["example.com".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.dns,
+            vec!["8.8.8.8".to_string(), "9.9.9.9".to_string()]
+        );
+        assert_eq!(c.config.dns_opt, vec!["use-vc".to_string()]);
+        assert_eq!(c.config.dns_search, vec!["example.com".to_string()]);
+    }
+
+    #[test]
+    fn container_create_body_emits_dns_config() {
+        let cfg = ContainerConfig {
+            dns: vec!["8.8.8.8".to_string(), "9.9.9.9".to_string()],
+            dns_opt: vec!["use-vc".to_string(), "no-tld-query".to_string()],
+            dns_search: vec!["dc1.example.com".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.dns,
+            Some(vec!["8.8.8.8".to_string(), "9.9.9.9".to_string()])
+        );
+        assert_eq!(
+            hc.dns_options,
+            Some(vec!["use-vc".to_string(), "no-tld-query".to_string()])
+        );
+        assert_eq!(hc.dns_search, Some(vec!["dc1.example.com".to_string()]));
+
+        // Empty lists should not emit Dns/DnsOptions/DnsSearch on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = empty.host_config.unwrap();
+        assert_eq!(hc.dns, None);
+        assert_eq!(hc.dns_options, None);
+        assert_eq!(hc.dns_search, None);
     }
 
     #[test]

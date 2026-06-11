@@ -73,6 +73,18 @@ pub struct ServiceComposition {
     #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
 
+    /// Custom DNS servers, single string or list.
+    #[serde(default, deserialize_with = "deserialize_string_or_list")]
+    pub dns: Option<Vec<String>>,
+
+    /// Custom DNS resolver options.
+    #[serde(default)]
+    pub dns_opt: Option<Vec<String>>,
+
+    /// Custom DNS search domains, single string or list.
+    #[serde(default, deserialize_with = "deserialize_string_or_list")]
+    pub dns_search: Option<Vec<String>>,
+
     #[serde(default)]
     pub domainname: Option<String>,
 
@@ -183,6 +195,27 @@ where
         .map(validate_cpus)
         .transpose()
         .map_err(serde::de::Error::custom)
+}
+
+/// Deserialize a Compose `string_or_list` value (such as `dns` or
+/// `dns_search`) into a list, wrapping a single string in a one-element list.
+fn deserialize_string_or_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrList {
+        String(String),
+        List(Vec<String>),
+    }
+
+    Ok(
+        Option::<StringOrList>::deserialize(deserializer)?.map(|raw| match raw {
+            StringOrList::String(s) => vec![s],
+            StringOrList::List(list) => list,
+        }),
+    )
 }
 
 /// Deserialize Compose `extra_hosts` from a list of `host:ip`/`host=ip`
@@ -554,6 +587,50 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.to_string().contains("host:ip"), "{err}");
+    }
+
+    #[test]
+    fn composition_dns_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.dns, None);
+        assert_eq!(comp.dns_opt, None);
+        assert_eq!(comp.dns_search, None);
+    }
+
+    #[test]
+    fn composition_dns_accepts_single_string() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "dns": "8.8.8.8",
+            "dns_search": "example.com",
+        }))
+        .unwrap();
+        assert_eq!(comp.dns, Some(vec!["8.8.8.8".to_string()]));
+        assert_eq!(comp.dns_search, Some(vec!["example.com".to_string()]));
+    }
+
+    #[test]
+    fn composition_dns_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "dns": ["8.8.8.8", "9.9.9.9"],
+            "dns_opt": ["use-vc", "no-tld-query"],
+            "dns_search": ["dc1.example.com", "dc2.example.com"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.dns,
+            Some(vec!["8.8.8.8".to_string(), "9.9.9.9".to_string()])
+        );
+        assert_eq!(
+            comp.dns_opt,
+            Some(vec!["use-vc".to_string(), "no-tld-query".to_string()])
+        );
+        assert_eq!(
+            comp.dns_search,
+            Some(vec![
+                "dc1.example.com".to_string(),
+                "dc2.example.com".to_string()
+            ])
+        );
     }
 
     #[test]
