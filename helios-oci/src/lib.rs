@@ -20,6 +20,9 @@ pub use container::{
 mod datetime;
 pub use datetime::DateTime;
 
+mod ports;
+pub use ports::{HostPort, PortMapping, PortProtocol};
+
 mod network;
 pub use network::{
     LocalNetwork, Network, NetworkConfig, NetworkDriver, NetworkIpamConfig, NetworkIpamDriver,

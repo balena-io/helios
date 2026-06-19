@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use bollard::{
     config::{
@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
 use super::datetime::DateTime;
+use super::ports::{PortMapping, from_oci_port_map, to_oci_port_maps};
 use super::util::types::{Environment, ImageUri};
 use super::{Client, Error, LocalNamespace, Namespace, NoNamespace, Result, WithContext};
 
@@ -453,6 +454,17 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         // serialized JSON, so reordering must not trigger reconfiguration.
         volumes.sort_by(|a, b| a.target().cmp(b.target()));
 
+        // Published ports round-trip through `HostConfig.PortBindings`, which
+        // holds exactly what the create request asked for. `Config.ExposedPorts`
+        // is deliberately ignored (it includes image EXPOSE entries), as is
+        // `NetworkSettings.Ports` (only populated while the container runs).
+        let ports = host_config
+            .as_mut()
+            .and_then(|hc| hc.port_bindings.take())
+            .map(from_oci_port_map)
+            .transpose()?
+            .unwrap_or_default();
+
         let mut config = value.config;
         let labels = config
             .as_mut()
@@ -543,6 +555,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             networks,
             network_mode,
             volumes,
+            ports,
         };
 
         let created: DateTime = value
@@ -1275,6 +1288,11 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<Mount>,
 
+    /// Published container ports. Serialized as compose short-syntax strings;
+    /// the set keeps the serialized form deterministic and deduplicated.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub ports: BTreeSet<PortMapping>,
+
     /// Container healthcheck. `None` means defer to the image's HEALTHCHECK
     pub healthcheck: Option<Healthcheck>,
 }
@@ -1323,6 +1341,7 @@ impl PartialEq for ContainerConfig {
                 .iter()
                 .all(|(k, v)| other.networks.get(k) == Some(v))
             && self.volumes == other.volumes
+            && self.ports == other.ports
     }
 }
 
@@ -1363,6 +1382,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             networks,
             network_mode,
             volumes,
+            ports,
         } = value;
 
         let env = if environment.is_empty() {
@@ -1423,6 +1443,13 @@ impl From<ContainerConfig> for ContainerCreateBody {
             Some(volumes.into_iter().map(Into::into).collect())
         };
 
+        let (exposed_ports, port_bindings) = if ports.is_empty() {
+            (None, None)
+        } else {
+            let (exposed, bindings) = to_oci_port_maps(ports);
+            (Some(exposed), Some(bindings))
+        };
+
         let cgroupns_mode = Some(cgroup.into());
 
         let host_config = bollard::config::HostConfig {
@@ -1446,6 +1473,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             network_mode: host_network_mode,
             oom_score_adj,
             pids_limit,
+            port_bindings,
             privileged: Some(privileged),
             readonly_rootfs: Some(read_only),
             restart_policy: Some(restart_policy),
@@ -1460,6 +1488,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cmd,
             domainname,
             env,
+            exposed_ports,
             healthcheck: healthcheck.map(Into::into),
             hostname,
             labels: Some(labels),
@@ -1643,6 +1672,113 @@ mod tests {
         assert_eq!(hc.init, None);
         assert_eq!(hc.privileged, Some(false));
         assert_eq!(hc.readonly_rootfs, Some(false));
+    }
+
+    #[test]
+    fn container_create_body_emits_ports() {
+        let cfg = ContainerConfig {
+            ports: BTreeSet::from([
+                "8080:80".parse().unwrap(),
+                "127.0.0.1:8081:80".parse().unwrap(),
+                "53:53/udp".parse().unwrap(),
+            ]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        assert_eq!(
+            body.exposed_ports,
+            Some(vec!["53/udp".into(), "80/tcp".into()])
+        );
+        let bindings = body.host_config.unwrap().port_bindings.unwrap();
+        assert_eq!(
+            bindings["80/tcp"],
+            Some(vec![
+                bollard::models::PortBinding {
+                    host_ip: None,
+                    host_port: Some("8080".to_string()),
+                },
+                bollard::models::PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()),
+                    host_port: Some("8081".to_string()),
+                },
+            ])
+        );
+        assert_eq!(
+            bindings["53/udp"],
+            Some(vec![bollard::models::PortBinding {
+                host_ip: None,
+                host_port: Some("53".to_string()),
+            }])
+        );
+    }
+
+    #[test]
+    fn container_create_body_omits_empty_ports() {
+        let body: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(body.exposed_ports, None);
+        assert_eq!(body.host_config.unwrap().port_bindings, None);
+    }
+
+    #[test]
+    fn inspect_reads_port_bindings() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                port_bindings: Some(bollard::models::PortMap::from([(
+                    "80/tcp".to_string(),
+                    Some(vec![bollard::models::PortBinding {
+                        // the engine reports unset values as empty strings
+                        host_ip: Some("".to_string()),
+                        host_port: Some("8080".to_string()),
+                    }]),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.ports, BTreeSet::from(["8080:80".parse().unwrap()]));
+    }
+
+    #[test]
+    fn ports_round_trip_through_create_and_inspect() {
+        let ports: BTreeSet<PortMapping> = BTreeSet::from([
+            "8080:80".parse().unwrap(),
+            "127.0.0.1:8081:80".parse().unwrap(),
+            "53:53/udp".parse().unwrap(),
+            "443".parse().unwrap(),
+            "8000-9000:3000".parse().unwrap(),
+        ]);
+        let cfg = ContainerConfig {
+            ports: ports.clone(),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                port_bindings: body.host_config.unwrap().port_bindings,
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.ports, ports);
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod command;
 mod healthcheck;
 mod network_mode;
 mod networks;
+mod ports;
 mod restart_policy;
 mod volumes;
 
@@ -19,6 +20,7 @@ pub use command::*;
 pub use healthcheck::*;
 pub use network_mode::*;
 pub use networks::*;
+pub use ports::*;
 pub use restart_policy::*;
 pub use volumes::*;
 
@@ -148,6 +150,9 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub network_mode: Option<NetworkMode>,
+
+    #[serde(default)]
+    pub ports: Ports,
 
     #[serde(default)]
     pub volumes: VolumesConfig,
@@ -465,6 +470,44 @@ mod tests {
             Some(536870912)
         );
         assert_eq!(comp.shm_size.map(ByteSize::to_bytes), Some(67108864));
+    }
+
+    #[test]
+    fn composition_ports_default_empty() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(comp.ports.is_empty());
+    }
+
+    #[test]
+    fn composition_ports_accept_mixed_forms() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "ports": [8080, "127.0.0.1:5353:53/udp", { "target": 443, "published": 8443 }],
+        }))
+        .unwrap();
+        let ports: Vec<&PortMapping> = comp.ports.iter().collect();
+        assert_eq!(
+            ports,
+            vec![
+                &PortMapping {
+                    target: 8080,
+                    published: None,
+                    host_ip: None,
+                    protocol: PortProtocol::Tcp,
+                },
+                &PortMapping {
+                    target: 53,
+                    published: Some(HostPort::Single(5353)),
+                    host_ip: Some("127.0.0.1".to_string()),
+                    protocol: PortProtocol::Udp,
+                },
+                &PortMapping {
+                    target: 443,
+                    published: Some(HostPort::Single(8443)),
+                    host_ip: None,
+                    protocol: PortProtocol::Tcp,
+                },
+            ]
+        );
     }
 
     #[test]

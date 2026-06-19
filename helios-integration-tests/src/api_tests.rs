@@ -1,8 +1,12 @@
+use std::time::Duration;
+
 use bollard::Docker;
 use bollard::config::RestartPolicy;
 use bollard::config::RestartPolicyNameEnum;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 
 use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
 
@@ -130,6 +134,26 @@ fn assert_endpoint_aliases(
             "endpoint '{network_oci_name}' missing alias '{expected}'; got {aliases:?}"
         );
     }
+}
+
+/// Connect to a TCP address and read until the peer closes the connection.
+/// Retries to cover the gap between restarts of the one-shot `nc` listener.
+async fn read_from_port(addr: &str) -> String {
+    let mut last_err = None;
+    for _ in 0..5 {
+        match TcpStream::connect(addr).await {
+            Ok(mut stream) => {
+                let mut buf = String::new();
+                stream.read_to_string(&mut buf).await.unwrap();
+                if !buf.is_empty() {
+                    return buf;
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("could not read from '{addr}'; last error: {last_err:?}")
 }
 
 async fn assert_network_created(docker: &Docker, oci_name: &str, logical_name: &str) {
@@ -270,9 +294,10 @@ async fn test_set_app_target_install_images() {
                     "id": 2,
                     "image": "alpine:latest",
                     "composition": {
-                        "command": ["sleep", "10"],
+                        "command": ["sh", "-c", "while true; do echo -n 'Hello World!!' | nc -lv -p 8080; done"],
                         "labels": { "my-label": "true" },
                         "environment": ["MY_KEY=123"],
+                        "ports": ["8080:8080"],
                         "volumes": [
                             {
                                 "type": "volume",
@@ -408,7 +433,14 @@ async fn test_set_app_target_install_images() {
         .unwrap();
     let config = container.config.unwrap();
     let host_config = container.host_config.unwrap();
-    assert_eq!(config.cmd.unwrap(), vec!["sleep", "10"]);
+    assert_eq!(
+        config.cmd.unwrap(),
+        vec![
+            "sh",
+            "-c",
+            "while true; do echo -n 'Hello World!!' | nc -lv -p 8080; done"
+        ]
+    );
     assert_eq!(
         host_config.restart_policy.unwrap(),
         RestartPolicy {
@@ -420,6 +452,25 @@ async fn test_set_app_target_install_images() {
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
     assert_env_contains(&config.env.unwrap(), &["MY_KEY=123"]);
+
+    // The compose `ports` entry surfaces in the engine port bindings and in
+    // the reported service config.
+    let bindings = host_config
+        .port_bindings
+        .as_ref()
+        .and_then(|b| b.get("8080/tcp"))
+        .and_then(|b| b.as_ref())
+        .expect("no port binding for 8080/tcp");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].host_port.as_deref(), Some("8080"));
+    assert_eq!(
+        svc_two.get("config").and_then(|c| c.get("ports")).unwrap(),
+        &json!([{"target": 8080, "published": "8080", "protocol": "tcp"}])
+    );
+
+    // The published port binds on the docker-in-docker daemon's network
+    // namespace, reachable from the test runner at the `docker` hostname.
+    assert_eq!(read_from_port("docker:8080").await, "Hello World!!");
 
     // Three networks exist: two defined in the release plus the auto-injected `default`
     // for services without an explicit network configuration.

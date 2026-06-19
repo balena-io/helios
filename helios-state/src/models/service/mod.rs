@@ -2,13 +2,16 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
+use std::collections::BTreeSet;
+
 use crate::oci::{
-    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
-    NetworkMode, NetworkSettings, RestartPolicy,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, HostPort,
+    LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
-    DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
+    DurationNanos, DurationSecs, HostPort as RemoteHostPort, Mount as RemoteMount,
+    NetworkMode as RemoteNetworkMode, PortProtocol as RemotePortProtocol,
     RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
 };
 
@@ -225,6 +228,25 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             })
             .collect();
 
+        // Convert the published ports. Both sides are sets ordered by the
+        // same key, so the conversion preserves the canonical form.
+        let ports: BTreeSet<PortMapping> = composition
+            .ports
+            .into_iter()
+            .map(|p| PortMapping {
+                target: p.target,
+                published: p.published.map(|hp| match hp {
+                    RemoteHostPort::Single(port) => HostPort::Single(port),
+                    RemoteHostPort::Range(start, end) => HostPort::Range(start, end),
+                }),
+                host_ip: p.host_ip,
+                protocol: match p.protocol {
+                    RemotePortProtocol::Tcp => PortProtocol::Tcp,
+                    RemotePortProtocol::Udp => PortProtocol::Udp,
+                },
+            })
+            .collect();
+
         ServiceTarget {
             id,
             image: image.into(),
@@ -286,6 +308,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 networks,
                 network_mode,
                 volumes,
+                ports,
                 healthcheck: composition.healthcheck.and_then(|h| {
                     // If healthcheck: {}, collapse to None to allow
                     // the service to inherit the image's HEALTHCHECK
