@@ -1,4 +1,40 @@
 - commits:
+    - subject: Add an integration test for port publishing
+      hash: 3c12bbb5c75b930010ec3f3874ece0988e25921b
+      body: |
+        The test publishes a port from one of the services in the given target
+        state and checks that the service is accessible via the local network
+        and it responds correctly.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Expose ports on the OCI engine
+      hash: 25083929dc4da9ef987c92645172362f87b01835
+      body: |
+        Ports received via the target state are read/written to the OCI engine
+        and exposed to other containers. The ports are stored on the internal
+        state as a BTreeSet, since port ordering is irrelevant.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Accept compose ports from the target state
+      hash: 8fb6fe57d00810b5ebdf3a2fed6e01a59118dc7b
+      body: |
+        Add support for short and long form ports definitions coming from the
+        target state. Ranges are expanded into individual mappings.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.13
+  title: ""
+  date: 2026-06-19T23:19:00.749Z
+- commits:
     - subject: Normalize on-failure restart policy with no retry count
       hash: da00869650dd679729051286483c5e9a7d670b75
       body: >
