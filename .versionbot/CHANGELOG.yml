@@ -1,4 +1,18 @@
 - commits:
+    - subject: Add support for dns, dns_opt and dns_search compose fields
+      hash: 4753517c0c20610fc2ea1719796e6f5a853eb6d8
+      body: >
+        Map the compose service-level DNS to the engine corresponding DNS
+        settings.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.14
+  title: ""
+  date: 2026-06-23T08:09:45.557Z
+- commits:
     - subject: Add an integration test for port publishing
       hash: 3c12bbb5c75b930010ec3f3874ece0988e25921b
       body: |
