@@ -271,6 +271,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .map(DurationMicros::to_i64)
                     .unwrap_or(0),
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
+                dns: composition.dns.unwrap_or_default(),
+                dns_opt: composition.dns_opt.unwrap_or_default(),
+                dns_search: composition.dns_search.unwrap_or_default(),
                 domainname: composition.domainname,
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
