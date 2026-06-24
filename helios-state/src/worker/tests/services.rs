@@ -131,7 +131,8 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
                                     "started": true,
                                     "oci": running_container("old_container"),
                                     "config": {
-                                        "command": ["sleep", "infinity"]
+                                        "command": ["sleep", "infinity"],
+                                        "entrypoint": ["/bin/sh", "-c"]
                                     },
                                 },
                             }
@@ -161,7 +162,8 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
                                     "image": "ubuntu:latest",
                                     "started": true,
                                     "config": {
-                                        "command": ["sleep", "10"]
+                                        "command": ["sleep", "10"],
+                                        "entrypoint": ["/bin/bash", "-c"]
                                     },
                                 },
                             }
