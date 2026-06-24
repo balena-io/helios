@@ -1,4 +1,19 @@
 - commits:
+    - subject: Add support for compose service entrypoint
+      hash: eb3b4f364168577df23e6927de1a7bb3066d4695
+      body: |
+        Re-uses `Command` utility type to parse the entrypoint and passes the
+        entrypoint to the engine in accordance with the spec. Empty entrypoint
+        (`[]` or `''`) overrides the image defined entrypoint.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.15
+  title: ""
+  date: 2026-06-24T20:37:44.359Z
+- commits:
     - subject: Add support for dns, dns_opt and dns_search compose fields
       hash: 4753517c0c20610fc2ea1719796e6f5a853eb6d8
       body: >
