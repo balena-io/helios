@@ -282,6 +282,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 entrypoint,
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
+                sysctls: composition.sysctls.unwrap_or_default(),
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,

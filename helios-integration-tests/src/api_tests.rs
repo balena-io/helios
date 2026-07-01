@@ -298,6 +298,9 @@ async fn test_set_app_target_install_images() {
                         "labels": { "my-label": "true" },
                         "environment": ["MY_KEY=123"],
                         "ports": ["8080:8080"],
+                        // Map form with a numeric value; must be coerced to a
+                        // string and reach the engine.
+                        "sysctls": { "net.ipv4.ip_forward": 1 },
                         "volumes": [
                             {
                                 "type": "volume",
@@ -458,6 +461,18 @@ async fn test_set_app_target_install_images() {
     assert_eq!(labels.get("io.balena.app-uuid").unwrap(), TEST_APP_UUID);
     assert_eq!(labels.get("my-label").unwrap(), "true");
     assert_env_contains(&config.env.unwrap(), &["MY_KEY=123"]);
+
+    // The compose `sysctls` map reaches the engine with its numeric value
+    // coerced to a string.
+    let svc_two_sysctls = host_config
+        .sysctls
+        .as_ref()
+        .expect("host_config.sysctls not set");
+    assert_eq!(
+        svc_two_sysctls.get("net.ipv4.ip_forward").map(String::as_str),
+        Some("1"),
+        "expected `net.ipv4.ip_forward=1`; got {svc_two_sysctls:?}"
+    );
 
     // The compose `ports` entry surfaces in the engine port bindings and in
     // the reported service config.
@@ -662,6 +677,49 @@ async fn test_set_app_target_rejects_disallowed_security_opt() {
         &[],
     );
     let target = app_target_json("reject-security-opt-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+
+    // The remote-model allowlist check fires during deserialization, so Axum
+    // rejects the body with a 4xx before any app is created.
+    assert!(
+        res.status().is_client_error(),
+        "expected 4xx, got {}",
+        res.status()
+    );
+
+    let res = client
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_non_namespaced_sysctl() {
+    let release_uuid = "reject-sysctl-release";
+    let release = release_json(
+        &[(
+            "bad-svc",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "sysctls": ["kernel.hostname=evil"]
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("reject-sysctl-app", release_uuid, release);
 
     let client = reqwest::Client::new();
     let res = client

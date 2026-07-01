@@ -390,6 +390,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                     .map(|(host, ip)| (host.to_string(), ip.to_string()))
             })
             .collect::<HashMap<_, _>>();
+        let sysctls = host_config
+            .as_mut()
+            .and_then(|hc| hc.sysctls.take())
+            .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -563,6 +567,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             domainname,
             environment,
             extra_hosts,
+            sysctls,
             healthcheck,
             hostname,
             init,
@@ -1335,6 +1340,11 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub extra_hosts: HashMap<String, String>,
 
+    /// Kernel parameters (sysctls) to set in the container, as a
+    /// parameter -> value map.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub sysctls: HashMap<String, String>,
+
     /// Network endpoint configurations, ordered by connection priority.
     ///
     /// Mutually exclusive with `network_mode`.
@@ -1377,6 +1387,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             domainname,
             environment,
             extra_hosts,
+            sysctls,
             healthcheck,
             hostname,
             init,
@@ -1490,6 +1501,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
                     .map(|(host, ip)| format!("{host}:{ip}"))
                     .collect()
             }),
+            sysctls: (!sysctls.is_empty()).then_some(sysctls),
             init,
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
@@ -2011,6 +2023,57 @@ mod tests {
         // An empty map should not emit an ExtraHosts entry on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().extra_hosts, None);
+    }
+
+    #[test]
+    fn inspect_reads_sysctls() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                sysctls: Some(HashMap::from([
+                    ("net.core.somaxconn".to_string(), "1024".to_string()),
+                    ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+                ])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.sysctls,
+            HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_sysctls() {
+        let cfg = ContainerConfig {
+            sysctls: HashMap::from([("net.core.somaxconn".to_string(), "1024".to_string())]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.sysctls,
+            Some(HashMap::from([(
+                "net.core.somaxconn".to_string(),
+                "1024".to_string()
+            )]))
+        );
+
+        // An empty map should not emit a Sysctls entry on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().sysctls, None);
     }
 
     #[test]
