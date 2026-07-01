@@ -45,6 +45,14 @@ pub struct Service {
 // FIXME: add remaining fields
 #[derive(Deserialize, Debug, Default)]
 pub struct ServiceComposition {
+    /// Linux capabilities to add to the container.
+    #[serde(default)]
+    pub cap_add: Option<Vec<String>>,
+
+    /// Linux capabilities to drop from the container.
+    #[serde(default)]
+    pub cap_drop: Option<Vec<String>>,
+
     #[serde(default)]
     pub cgroup: Option<Cgroup>,
 
@@ -653,6 +661,27 @@ mod tests {
                 "dc1.example.com".to_string(),
                 "dc2.example.com".to_string()
             ])
+        );
+    }
+
+    #[test]
+    fn composition_cap_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.cap_add, None);
+        assert_eq!(comp.cap_drop, None);
+    }
+
+    #[test]
+    fn composition_cap_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cap_add": ["ALL"],
+            "cap_drop": ["NET_ADMIN", "SYS_ADMIN"],
+        }))
+        .unwrap();
+        assert_eq!(comp.cap_add, Some(vec!["ALL".to_string()]));
+        assert_eq!(
+            comp.cap_drop,
+            Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
         );
     }
 
