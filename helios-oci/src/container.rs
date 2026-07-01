@@ -353,6 +353,14 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cpu_shares.take())
             .unwrap_or(0);
+        let cap_add = host_config
+            .as_mut()
+            .and_then(|hc| hc.cap_add.take())
+            .unwrap_or_default();
+        let cap_drop = host_config
+            .as_mut()
+            .and_then(|hc| hc.cap_drop.take())
+            .unwrap_or_default();
         let dns = host_config
             .as_mut()
             .and_then(|hc| hc.dns.take())
@@ -542,6 +550,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            cap_add,
+            cap_drop,
             dns,
             dns_opt,
             dns_search,
@@ -1209,6 +1219,14 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "is_zero")]
     pub cpu_shares: i64,
 
+    /// Linux capabilities to add to the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cap_add: Vec<String>,
+
+    /// Linux capabilities to drop from the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cap_drop: Vec<String>,
+
     /// Custom DNS servers for the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<String>,
@@ -1341,6 +1359,8 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            cap_add,
+            cap_drop,
             dns,
             dns_opt,
             dns_search,
@@ -1448,6 +1468,8 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_realtime_period: non_zero(cpu_rt_period),
             cpu_realtime_runtime: non_zero(cpu_rt_runtime),
             cpu_shares: non_zero(cpu_shares),
+            cap_add: (!cap_add.is_empty()).then_some(cap_add),
+            cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
             dns_search: (!dns_search.is_empty()).then_some(dns_search),
@@ -2034,6 +2056,54 @@ mod tests {
         assert_eq!(hc.dns, None);
         assert_eq!(hc.dns_options, None);
         assert_eq!(hc.dns_search, None);
+    }
+
+    #[test]
+    fn inspect_reads_cap_config() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cap_add: Some(vec!["ALL".to_string()]),
+                cap_drop: Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cap_add, vec!["ALL".to_string()]);
+        assert_eq!(
+            c.config.cap_drop,
+            vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_cap_config() {
+        let cfg = ContainerConfig {
+            cap_add: vec!["ALL".to_string()],
+            cap_drop: vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.cap_add, Some(vec!["ALL".to_string()]));
+        assert_eq!(
+            hc.cap_drop,
+            Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
+        );
+
+        // Empty lists should not emit CapAdd/CapDrop on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = empty.host_config.unwrap();
+        assert_eq!(hc.cap_add, None);
+        assert_eq!(hc.cap_drop, None);
     }
 
     #[test]
