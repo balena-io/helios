@@ -116,12 +116,12 @@ async fn get_reports(State(state): State<AppState>) -> impl IntoResponse {
     drop(state);
 
     // Replay current accumulated state, then stream new reports as NDJSON
-    let replay: Option<Result<Vec<u8>, std::io::Error>> =
-        if current.as_object().unwrap().is_empty() {
-            None
-        } else {
-            Some(Ok(to_ndjson_line(&current)))
-        };
+    let replay: Option<Result<Vec<u8>, std::io::Error>> = if current.as_object().unwrap().is_empty()
+    {
+        None
+    } else {
+        Some(Ok(to_ndjson_line(&current)))
+    };
 
     let live = BroadcastStream::new(rx).filter_map(|r| r.ok().map(|v| Ok(to_ndjson_line(&v))));
     let stream = tokio_stream::iter(replay).chain(live);

@@ -577,6 +577,49 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_target_service_with_invalid_security_opt() {
+        let json = json!({
+            "name": "my-device",
+            "apps": {
+                "app-one": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "c8b48659434e80a8b3adc0c5ad1e347a": {
+                            "id": 7,
+                            "services": {
+                                "main": {
+                                    "id": 3,
+                                    "image_id": 4,
+                                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                                    "composition": {
+                                        "security_opt": ["label:user:USER"]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+
+        });
+
+        let device: Device = serde_json::from_value(json).unwrap();
+        let rejection = match device.apps.get(&Uuid::from("app-one")) {
+            Some(App::Rejected(r)) => r,
+            other => panic!("app-one should be rejected, got {other:?}"),
+        };
+        assert_eq!(
+            rejection.release,
+            Uuid::from("c8b48659434e80a8b3adc0c5ad1e347a"),
+        );
+        assert_eq!(
+            rejection.reason,
+            "services.main.composition.security_opt: only `no-new-privileges`, `apparmor=unconfined` and `seccomp=unconfined` are allowed, got `label:user:USER`",
+        );
+    }
+
+    #[test]
     fn test_rejects_target_service_with_invalid_networks() {
         let json = json!({
             "name": "my-device",
