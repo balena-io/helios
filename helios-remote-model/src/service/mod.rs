@@ -173,6 +173,10 @@ pub struct ServiceComposition {
     #[serde(default, deserialize_with = "deserialize_extra_hosts")]
     pub extra_hosts: Option<HashMap<String, String>>,
 
+    /// Kernel parameters (sysctls) to set in the container. Only kernel-namespaced values are permitted.
+    #[serde(default, deserialize_with = "deserialize_sysctls")]
+    pub sysctls: Option<HashMap<String, String>>,
+
     #[serde(default)]
     pub pids_limit: Option<i64>,
 
@@ -298,6 +302,82 @@ where
             })
             .collect::<Result<_, D::Error>>()?,
     };
+
+    Ok(Some(map))
+}
+
+/// Validate kernel namespaces.
+///
+/// See https://docs.docker.com/reference/cli/docker/container/run/#sysctl
+fn is_namespaced_sysctl(key: &str) -> bool {
+    key.starts_with("net.")
+        || key.starts_with("fs.mqueue.")
+        || key.starts_with("kernel.shm")
+        || key.starts_with("kernel.msg")
+        || key == "kernel.sem"
+}
+
+/// Deserialize Compose `sysctls` from a list of `key=value` strings or a
+/// `key: value` mapping into a parameter -> value map. Numeric map values are
+/// accepted and coerced to strings. Only kernel-namespaced keys are allowed.
+fn deserialize_sysctls<'de, D>(deserializer: D) -> Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ScalarValue {
+        Int(i64),
+        Float(f64),
+        Bool(bool),
+        String(String),
+    }
+
+    impl std::fmt::Display for ScalarValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ScalarValue::String(s) => write!(f, "{s}"),
+                ScalarValue::Int(i) => write!(f, "{i}"),
+                ScalarValue::Float(n) => write!(f, "{n}"),
+                ScalarValue::Bool(b) => write!(f, "{b}"),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Sysctls {
+        List(Vec<String>),
+        Map(HashMap<String, ScalarValue>),
+    }
+
+    let Some(raw) = Option::<Sysctls>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let map: HashMap<String, String> = match raw {
+        Sysctls::Map(map) => map
+            .into_iter()
+            .map(|(key, value)| (key, value.to_string()))
+            .collect(),
+        Sysctls::List(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                let (key, value) = entry.split_once('=').ok_or_else(|| {
+                    serde::de::Error::custom(format!("entry `{entry}` must be in `key=value` form"))
+                })?;
+                Ok((key.to_string(), value.to_string()))
+            })
+            .collect::<Result<_, D::Error>>()?,
+    };
+
+    for key in map.keys() {
+        if !is_namespaced_sysctl(key) {
+            return Err(serde::de::Error::custom(format!(
+                "only kernel-namespaced sysctls (`net.*`, `fs.mqueue.*`, `kernel.shm*`, `kernel.msg*`, `kernel.sem`) are allowed, got `{key}`"
+            )));
+        }
+    }
 
     Ok(Some(map))
 }
@@ -652,6 +732,68 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.to_string().contains("host:ip"), "{err}");
+    }
+
+    #[test]
+    fn composition_sysctls_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.sysctls, None);
+    }
+
+    #[test]
+    fn composition_sysctls_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "sysctls": ["net.core.somaxconn=1024", "net.ipv4.tcp_syncookies=0"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.sysctls,
+            Some(HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_sysctls_accepts_mapping_and_coerces_numbers() {
+        // Map values may arrive as numbers; they are coerced to strings.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "sysctls": {"net.core.somaxconn": 1024, "net.ipv4.tcp_syncookies": "0"},
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.sysctls,
+            Some(HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_sysctls_rejects_non_namespaced() {
+        // Both list and map forms reject keys outside the namespaced allowlist.
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": ["kernel.hostname=evil"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("kernel-namespaced"), "{err}");
+
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": {"vm.swappiness": "10"},
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("kernel-namespaced"), "{err}");
+    }
+
+    #[test]
+    fn composition_sysctls_rejects_list_entry_without_separator() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": ["net.core.somaxconn"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("key=value"), "{err}");
     }
 
     #[test]
