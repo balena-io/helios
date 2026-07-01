@@ -272,6 +272,10 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .map(DurationMicros::to_i64)
                     .unwrap_or(0),
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
+                cap_add: composition.cap_add.unwrap_or_default(),
+                cap_drop: composition.cap_drop.unwrap_or_default(),
+                group_add: composition.group_add.unwrap_or_default(),
+                security_opt: composition.security_opt.unwrap_or_default(),
                 dns: composition.dns.unwrap_or_default(),
                 dns_opt: composition.dns_opt.unwrap_or_default(),
                 dns_search: composition.dns_search.unwrap_or_default(),
@@ -279,6 +283,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 entrypoint,
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
+                sysctls: composition.sysctls.unwrap_or_default(),
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,

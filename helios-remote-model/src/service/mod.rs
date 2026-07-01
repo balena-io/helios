@@ -45,6 +45,19 @@ pub struct Service {
 // FIXME: add remaining fields
 #[derive(Deserialize, Debug, Default)]
 pub struct ServiceComposition {
+    /// Linux capabilities to add to the container.
+    #[serde(default)]
+    pub cap_add: Option<Vec<String>>,
+
+    /// Linux capabilities to drop from the container.
+    #[serde(default)]
+    pub cap_drop: Option<Vec<String>>,
+
+    /// Additional groups, by name or GID, the container user must be a member
+    /// of. Numeric entries are accepted and coerced to strings.
+    #[serde(default, deserialize_with = "deserialize_group_add")]
+    pub group_add: Option<Vec<String>>,
+
     #[serde(default)]
     pub cgroup: Option<Cgroup>,
 
@@ -119,6 +132,11 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Container security options. Only `no-new-privileges`,
+    /// `apparmor=unconfined` and `seccomp=unconfined` are permitted.
+    #[serde(default, deserialize_with = "deserialize_security_opt")]
+    pub security_opt: Option<Vec<String>>,
+
     #[serde(default)]
     pub restart: RestartPolicy,
 
@@ -160,6 +178,10 @@ pub struct ServiceComposition {
     #[serde(default, deserialize_with = "deserialize_extra_hosts")]
     pub extra_hosts: Option<HashMap<String, String>>,
 
+    /// Kernel parameters (sysctls) to set in the container. Only kernel-namespaced values are permitted.
+    #[serde(default, deserialize_with = "deserialize_sysctls")]
+    pub sysctls: Option<HashMap<String, String>>,
+
     #[serde(default)]
     pub pids_limit: Option<i64>,
 
@@ -196,6 +218,35 @@ where
 {
     Option::<f64>::deserialize(deserializer)?
         .map(validate_cpus)
+        .transpose()
+        .map_err(serde::de::Error::custom)
+}
+
+/// Validate a single `security_opt` entry against the permitted allowlist,
+/// replacing `:` for `=` to match what the docker engine expects internally.
+fn normalize_security_opt(opt: String) -> Result<String, String> {
+    let normalized = opt.replacen(':', "=", 1);
+    match normalized.as_str() {
+        "no-new-privileges"
+        | "no-new-privileges=true"
+        | "apparmor=unconfined"
+        | "seccomp=unconfined" => Ok(normalized),
+        _ => Err(format!(
+            "only `no-new-privileges`, `apparmor=unconfined` and `seccomp=unconfined` are allowed, got `{opt}`"
+        )),
+    }
+}
+
+fn deserialize_security_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Vec<String>>::deserialize(deserializer)?
+        .map(|opts| {
+            opts.into_iter()
+                .map(normalize_security_opt)
+                .collect::<Result<Vec<_>, _>>()
+        })
         .transpose()
         .map_err(serde::de::Error::custom)
 }
@@ -258,6 +309,110 @@ where
     };
 
     Ok(Some(map))
+}
+
+/// Validate kernel namespaces.
+///
+/// See https://docs.docker.com/reference/cli/docker/container/run/#sysctl
+fn is_namespaced_sysctl(key: &str) -> bool {
+    key.starts_with("net.")
+        || key.starts_with("fs.mqueue.")
+        || key.starts_with("kernel.shm")
+        || key.starts_with("kernel.msg")
+        || key == "kernel.sem"
+}
+
+/// Deserialize Compose `sysctls` from a list of `key=value` strings or a
+/// `key: value` mapping into a parameter -> value map. Numeric map values are
+/// accepted and coerced to strings. Only kernel-namespaced keys are allowed.
+fn deserialize_sysctls<'de, D>(deserializer: D) -> Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ScalarValue {
+        Int(i64),
+        Float(f64),
+        Bool(bool),
+        String(String),
+    }
+
+    impl std::fmt::Display for ScalarValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ScalarValue::String(s) => write!(f, "{s}"),
+                ScalarValue::Int(i) => write!(f, "{i}"),
+                ScalarValue::Float(n) => write!(f, "{n}"),
+                ScalarValue::Bool(b) => write!(f, "{b}"),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Sysctls {
+        List(Vec<String>),
+        Map(HashMap<String, ScalarValue>),
+    }
+
+    let Some(raw) = Option::<Sysctls>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let map: HashMap<String, String> = match raw {
+        Sysctls::Map(map) => map
+            .into_iter()
+            .map(|(key, value)| (key, value.to_string()))
+            .collect(),
+        Sysctls::List(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                let (key, value) = entry.split_once('=').ok_or_else(|| {
+                    serde::de::Error::custom(format!("entry `{entry}` must be in `key=value` form"))
+                })?;
+                Ok((key.to_string(), value.to_string()))
+            })
+            .collect::<Result<_, D::Error>>()?,
+    };
+
+    for key in map.keys() {
+        if !is_namespaced_sysctl(key) {
+            return Err(serde::de::Error::custom(format!(
+                "only kernel-namespaced sysctls (`net.*`, `fs.mqueue.*`, `kernel.shm*`, `kernel.msg*`, `kernel.sem`) are allowed, got `{key}`"
+            )));
+        }
+    }
+
+    Ok(Some(map))
+}
+
+/// Deserialize Compose `group_add` from a list whose entries may be group names
+/// (strings) or GIDs (numbers), coercing numeric entries to strings.
+fn deserialize_group_add<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Group {
+        Int(i64),
+        String(String),
+    }
+
+    let Some(raw) = Option::<Vec<Group>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let groups = raw
+        .into_iter()
+        .map(|group| match group {
+            Group::String(s) => s,
+            Group::Int(i) => i.to_string(),
+        })
+        .collect();
+
+    Ok(Some(groups))
 }
 
 #[cfg(test)]
@@ -613,6 +768,68 @@ mod tests {
     }
 
     #[test]
+    fn composition_sysctls_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.sysctls, None);
+    }
+
+    #[test]
+    fn composition_sysctls_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "sysctls": ["net.core.somaxconn=1024", "net.ipv4.tcp_syncookies=0"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.sysctls,
+            Some(HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_sysctls_accepts_mapping_and_coerces_numbers() {
+        // Map values may arrive as numbers; they are coerced to strings.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "sysctls": {"net.core.somaxconn": 1024, "net.ipv4.tcp_syncookies": "0"},
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.sysctls,
+            Some(HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_sysctls_rejects_non_namespaced() {
+        // Both list and map forms reject keys outside the namespaced allowlist.
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": ["kernel.hostname=evil"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("kernel-namespaced"), "{err}");
+
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": {"vm.swappiness": "10"},
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("kernel-namespaced"), "{err}");
+    }
+
+    #[test]
+    fn composition_sysctls_rejects_list_entry_without_separator() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "sysctls": ["net.core.somaxconn"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("key=value"), "{err}");
+    }
+
+    #[test]
     fn composition_dns_default_unset() {
         let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(comp.dns, None);
@@ -654,6 +871,91 @@ mod tests {
                 "dc2.example.com".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn composition_cap_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.cap_add, None);
+        assert_eq!(comp.cap_drop, None);
+    }
+
+    #[test]
+    fn composition_cap_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "cap_add": ["ALL"],
+            "cap_drop": ["NET_ADMIN", "SYS_ADMIN"],
+        }))
+        .unwrap();
+        assert_eq!(comp.cap_add, Some(vec!["ALL".to_string()]));
+        assert_eq!(
+            comp.cap_drop,
+            Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_group_add_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.group_add, None);
+    }
+
+    #[test]
+    fn composition_group_add_accepts_names_and_coerces_gids() {
+        // Entries may be group names (strings) or numeric GIDs; numbers are
+        // coerced to strings.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "group_add": ["mail", 1000],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.group_add,
+            Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_security_opt_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.security_opt, None);
+    }
+
+    #[test]
+    fn composition_security_opt_accepts_allowed_and_normalizes() {
+        // `:` and `=` separators are both accepted and stored with `=`.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "security_opt": [
+                "no-new-privileges",
+                "no-new-privileges:true",
+                "apparmor:unconfined",
+                "seccomp=unconfined",
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.security_opt,
+            Some(vec![
+                "no-new-privileges".to_string(),
+                "no-new-privileges=true".to_string(),
+                "apparmor=unconfined".to_string(),
+                "seccomp=unconfined".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn composition_security_opt_rejects_disallowed() {
+        for value in [
+            "label:user:USER",
+            "apparmor=custom",
+            "seccomp=/profile.json",
+            "no-new-privileges=false",
+        ] {
+            let _ = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+                "security_opt": [value],
+            }))
+            .unwrap_err();
+        }
     }
 
     #[test]
