@@ -327,6 +327,12 @@ async fn test_set_app_target_install_images() {
                     "composition": {
                         "command": ["sleep", "infinity"],
                         "network_mode": "host",
+                        // Mixed `:` and `=` separators to exercise normalization;
+                        // both must reach the engine using `=`.
+                        "security_opt": [
+                            "no-new-privileges:true",
+                            "seccomp=unconfined",
+                        ],
                     }
                 }),
             ),
@@ -519,6 +525,26 @@ async fn test_set_app_target_install_images() {
     );
     assert_container_networks(&svc_three_container, &["host"]);
 
+    // service-three's security options round-trip to the engine with the `:`
+    // separator normalized to `=`, and are reported back verbatim.
+    let svc_three_security_opt = svc_three_container
+        .host_config
+        .as_ref()
+        .and_then(|hc| hc.security_opt.as_ref())
+        .expect("host_config.security_opt not set");
+    assert!(
+        svc_three_security_opt
+            .iter()
+            .any(|o| o == "no-new-privileges=true"),
+        "expected normalized `no-new-privileges=true`; got {svc_three_security_opt:?}"
+    );
+    assert!(
+        svc_three_security_opt
+            .iter()
+            .any(|o| o == "seccomp=unconfined"),
+        "expected `seccomp=unconfined`; got {svc_three_security_opt:?}"
+    );
+
     let my_vol_id = get_resource_oci_name(app, release_uuid, "volumes", "my-vol").to_string();
     let volume = docker.inspect_volume(&my_vol_id).await.unwrap();
     assert_eq!(
@@ -610,6 +636,49 @@ async fn test_set_app_target_rejects_bind_mount_not_in_allowlist() {
     );
 
     // Confirm no app was created.
+    let res = client
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_disallowed_security_opt() {
+    let release_uuid = "reject-security-opt-release";
+    let release = release_json(
+        &[(
+            "bad-svc",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "security_opt": ["label:user:USER"]
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("reject-security-opt-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+
+    // The remote-model allowlist check fires during deserialization, so Axum
+    // rejects the body with a 4xx before any app is created.
+    assert!(
+        res.status().is_client_error(),
+        "expected 4xx, got {}",
+        res.status()
+    );
+
     let res = client
         .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .send()

@@ -127,6 +127,11 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Container security options. Only `no-new-privileges`,
+    /// `apparmor=unconfined` and `seccomp=unconfined` are permitted.
+    #[serde(default, deserialize_with = "deserialize_security_opt")]
+    pub security_opt: Option<Vec<String>>,
+
     #[serde(default)]
     pub restart: RestartPolicy,
 
@@ -204,6 +209,35 @@ where
 {
     Option::<f64>::deserialize(deserializer)?
         .map(validate_cpus)
+        .transpose()
+        .map_err(serde::de::Error::custom)
+}
+
+/// Validate a single `security_opt` entry against the permitted allowlist,
+/// replacing `:` for `=` to match what the docker engine expects internally.
+fn normalize_security_opt(opt: String) -> Result<String, String> {
+    let normalized = opt.replacen(':', "=", 1);
+    match normalized.as_str() {
+        "no-new-privileges"
+        | "no-new-privileges=true"
+        | "apparmor=unconfined"
+        | "seccomp=unconfined" => Ok(normalized),
+        _ => Err(format!(
+            "only `no-new-privileges`, `apparmor=unconfined` and `seccomp=unconfined` are allowed, got `{opt}`"
+        )),
+    }
+}
+
+fn deserialize_security_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Vec<String>>::deserialize(deserializer)?
+        .map(|opts| {
+            opts.into_iter()
+                .map(normalize_security_opt)
+                .collect::<Result<Vec<_>, _>>()
+        })
         .transpose()
         .map_err(serde::de::Error::custom)
 }
@@ -683,6 +717,50 @@ mod tests {
             comp.cap_drop,
             Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
         );
+    }
+
+    #[test]
+    fn composition_security_opt_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.security_opt, None);
+    }
+
+    #[test]
+    fn composition_security_opt_accepts_allowed_and_normalizes() {
+        // `:` and `=` separators are both accepted and stored with `=`.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "security_opt": [
+                "no-new-privileges",
+                "no-new-privileges:true",
+                "apparmor:unconfined",
+                "seccomp=unconfined",
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.security_opt,
+            Some(vec![
+                "no-new-privileges".to_string(),
+                "no-new-privileges=true".to_string(),
+                "apparmor=unconfined".to_string(),
+                "seccomp=unconfined".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn composition_security_opt_rejects_disallowed() {
+        for value in [
+            "label:user:USER",
+            "apparmor=custom",
+            "seccomp=/profile.json",
+            "no-new-privileges=false",
+        ] {
+            let _ = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+                "security_opt": [value],
+            }))
+            .unwrap_err();
+        }
     }
 
     #[test]

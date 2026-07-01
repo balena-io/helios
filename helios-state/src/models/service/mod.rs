@@ -274,6 +274,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 cpu_shares: composition.cpu_shares.unwrap_or(0),
                 cap_add: composition.cap_add.unwrap_or_default(),
                 cap_drop: composition.cap_drop.unwrap_or_default(),
+                security_opt: composition.security_opt.unwrap_or_default(),
                 dns: composition.dns.unwrap_or_default(),
                 dns_opt: composition.dns_opt.unwrap_or_default(),
                 dns_search: composition.dns_search.unwrap_or_default(),

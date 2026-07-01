@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use bollard::{Docker, query_parameters::PruneImagesOptions};
-use tokio_stream::StreamExt;
 use serde_json::Value;
 use std::time::Duration;
+use tokio_stream::StreamExt;
 
 pub const HELIOS_URL: &str = "http://helios-api";
 pub const MOCK_REMOTE_URL: &str = "http://mock-remote";
@@ -73,8 +73,7 @@ pub async fn wait_for_report(
                 };
 
                 if let Some(device) = report.as_object().and_then(|m| m.values().next())
-                    && let Some(status) =
-                        device.pointer(&status_path).and_then(|s| s.as_str())
+                    && let Some(status) = device.pointer(&status_path).and_then(|s| s.as_str())
                     && status == expected_status
                 {
                     return device.pointer(&release_path).unwrap().clone();

@@ -361,6 +361,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cap_drop.take())
             .unwrap_or_default();
+        let security_opt = host_config
+            .as_mut()
+            .and_then(|hc| hc.security_opt.take())
+            .unwrap_or_default();
         let dns = host_config
             .as_mut()
             .and_then(|hc| hc.dns.take())
@@ -552,6 +556,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_shares,
             cap_add,
             cap_drop,
+            security_opt,
             dns,
             dns_opt,
             dns_search,
@@ -1227,6 +1232,10 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cap_drop: Vec<String>,
 
+    /// Security options applied to the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub security_opt: Vec<String>,
+
     /// Custom DNS servers for the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<String>,
@@ -1361,6 +1370,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares,
             cap_add,
             cap_drop,
+            security_opt,
             dns,
             dns_opt,
             dns_search,
@@ -1470,6 +1480,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares: non_zero(cpu_shares),
             cap_add: (!cap_add.is_empty()).then_some(cap_add),
             cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
+            security_opt: (!security_opt.is_empty()).then_some(security_opt),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
             dns_search: (!dns_search.is_empty()).then_some(dns_search),
@@ -2104,6 +2115,55 @@ mod tests {
         let hc = empty.host_config.unwrap();
         assert_eq!(hc.cap_add, None);
         assert_eq!(hc.cap_drop, None);
+    }
+
+    #[test]
+    fn inspect_reads_security_opt() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                security_opt: Some(vec![
+                    "no-new-privileges=true".to_string(),
+                    "seccomp=unconfined".to_string(),
+                ]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.security_opt,
+            vec![
+                "no-new-privileges=true".to_string(),
+                "seccomp=unconfined".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_security_opt() {
+        let cfg = ContainerConfig {
+            security_opt: vec!["apparmor=unconfined".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.security_opt,
+            Some(vec!["apparmor=unconfined".to_string()])
+        );
+
+        // An empty list should not emit SecurityOpt on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = empty.host_config.unwrap();
+        assert_eq!(hc.security_opt, None);
     }
 
     #[test]
