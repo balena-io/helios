@@ -361,6 +361,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cap_drop.take())
             .unwrap_or_default();
+        let group_add = host_config
+            .as_mut()
+            .and_then(|hc| hc.group_add.take())
+            .unwrap_or_default();
         let security_opt = host_config
             .as_mut()
             .and_then(|hc| hc.security_opt.take())
@@ -560,6 +564,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_shares,
             cap_add,
             cap_drop,
+            group_add,
             security_opt,
             dns,
             dns_opt,
@@ -1237,6 +1242,10 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cap_drop: Vec<String>,
 
+    /// Additional groups (by name or GID) the container user is a member of.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub group_add: Vec<String>,
+
     /// Security options applied to the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub security_opt: Vec<String>,
@@ -1380,6 +1389,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares,
             cap_add,
             cap_drop,
+            group_add,
             security_opt,
             dns,
             dns_opt,
@@ -1491,6 +1501,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_shares: non_zero(cpu_shares),
             cap_add: (!cap_add.is_empty()).then_some(cap_add),
             cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
+            group_add: (!group_add.is_empty()).then_some(group_add),
             security_opt: (!security_opt.is_empty()).then_some(security_opt),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
@@ -2178,6 +2189,48 @@ mod tests {
         let hc = empty.host_config.unwrap();
         assert_eq!(hc.cap_add, None);
         assert_eq!(hc.cap_drop, None);
+    }
+
+    #[test]
+    fn inspect_reads_group_add() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                group_add: Some(vec!["mail".to_string(), "1000".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.group_add,
+            vec!["mail".to_string(), "1000".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_group_add() {
+        let cfg = ContainerConfig {
+            group_add: vec!["mail".to_string(), "1000".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.group_add,
+            Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+
+        // Empty list should not emit GroupAdd on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().group_add, None);
     }
 
     #[test]

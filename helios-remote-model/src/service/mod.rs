@@ -53,6 +53,11 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub cap_drop: Option<Vec<String>>,
 
+    /// Additional groups, by name or GID, the container user must be a member
+    /// of. Numeric entries are accepted and coerced to strings.
+    #[serde(default, deserialize_with = "deserialize_group_add")]
+    pub group_add: Option<Vec<String>>,
+
     #[serde(default)]
     pub cgroup: Option<Cgroup>,
 
@@ -380,6 +385,34 @@ where
     }
 
     Ok(Some(map))
+}
+
+/// Deserialize Compose `group_add` from a list whose entries may be group names
+/// (strings) or GIDs (numbers), coercing numeric entries to strings.
+fn deserialize_group_add<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Group {
+        Int(i64),
+        String(String),
+    }
+
+    let Some(raw) = Option::<Vec<Group>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let groups = raw
+        .into_iter()
+        .map(|group| match group {
+            Group::String(s) => s,
+            Group::Int(i) => i.to_string(),
+        })
+        .collect();
+
+    Ok(Some(groups))
 }
 
 #[cfg(test)]
@@ -858,6 +891,26 @@ mod tests {
         assert_eq!(
             comp.cap_drop,
             Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_group_add_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.group_add, None);
+    }
+
+    #[test]
+    fn composition_group_add_accepts_names_and_coerces_gids() {
+        // Entries may be group names (strings) or numeric GIDs; numbers are
+        // coerced to strings.
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "group_add": ["mail", 1000],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.group_add,
+            Some(vec!["mail".to_string(), "1000".to_string()])
         );
     }
 
