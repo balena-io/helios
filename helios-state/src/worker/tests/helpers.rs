@@ -57,6 +57,24 @@ pub(super) fn assert_no_workflow(current: Value, target: Value) {
     );
 }
 
+/// Assert that the planner finds a workflow with no tasks in it. Unlike
+/// [`assert_no_workflow`], the target is reachable: the planner simply has
+/// nothing left to do, or has deferred every divergence it found.
+pub(super) fn assert_empty_workflow(current: Value, target: Value) {
+    let current = serde_json::from_value::<Device>(current).unwrap();
+    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
+    let (_, workflow) = super::super::worker()
+        .initial_state(current)
+        .find_workflow(target)
+        .unwrap();
+    let workflow = workflow.expect("workflow should be found");
+    assert_eq!(
+        workflow.to_string(),
+        Dag::<&str>::default().to_string(),
+        "expected an empty plan, got:\n{workflow}"
+    );
+}
+
 /// Assert that the planner rules out every pending change for the given
 /// current/target pair because an exception matched, and that the skip is
 /// reported with `reason`.

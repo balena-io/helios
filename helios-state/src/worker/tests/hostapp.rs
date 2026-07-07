@@ -765,6 +765,98 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
 }
 
 #[test]
+fn it_waits_while_the_os_release_is_being_validated() {
+    init_tracing();
+    // The in-progress exception defers the only divergent work (the install)
+    // and there is nothing to clean up, so the planner returns an empty plan.
+    assert_empty_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234"
+                },
+                "os_validating": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "created"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            }
+        }),
+    );
+}
+
+#[test]
+fn it_defers_installing_a_new_target_release_while_validation_runs() {
+    init_tracing();
+    // A release that first appears in the target during the validation window
+    // must not be installed or rebooted (the guard is device-global). The
+    // metadata `create` is harmless and still runs, so the plan initializes the
+    // release and stops there: no install, no reboot mid-validation.
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234"
+                },
+                "os_validating": true,
+                "releases": {}
+            }
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            }
+        }),
+        seq!("initialize host OS release 'new-release'"),
+    );
+}
+
+#[test]
 fn it_ignores_a_target_that_deletes_the_hostapp() {
     init_tracing();
     assert_workflow(
@@ -837,5 +929,65 @@ fn it_adopts_a_running_release_with_no_recorded_state() {
             },
         }),
         seq!("initialize host OS release 'target-release'"),
+    );
+}
+
+#[test]
+fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
+    // A converged release plans nothing, so no reboot is issued.
+    init_tracing();
+    assert_empty_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
     );
 }
