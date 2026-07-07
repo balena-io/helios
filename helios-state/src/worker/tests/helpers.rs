@@ -40,6 +40,34 @@ pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>
     );
 }
 
+/// Assert that the planner rules out every pending change for the given
+/// current/target pair because an exception matched, and that the skip is
+/// reported with `reason`.
+pub(super) fn assert_aborted(current: Value, target: Value, reason: &str) {
+    let current = serde_json::from_value::<Device>(current).unwrap();
+    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
+    let (_, workflow) = super::super::worker()
+        .initial_state(current)
+        .find_workflow(target)
+        .unwrap();
+    let workflow = workflow.expect("workflow should be found");
+    assert_eq!(
+        workflow.to_string(),
+        Dag::<&str>::default().to_string(),
+        "expected no tasks to be planned, got:\n{workflow}"
+    );
+
+    let reasons: Vec<&str> = workflow
+        .exceptions()
+        .iter()
+        .filter_map(|ignored| ignored.reason.as_deref())
+        .collect();
+    assert!(
+        reasons.contains(&reason),
+        "expected a skipped operation with reason '{reason}', got: {reasons:?}"
+    );
+}
+
 /// Wraps a DAG with `prepare release` and `finish release` steps,
 /// matching the pattern for updates to an existing release.
 pub(super) fn release_update(
