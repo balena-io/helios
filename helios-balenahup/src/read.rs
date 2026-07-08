@@ -39,10 +39,10 @@ pub async fn from_store(host: &mut Host, local_store: &DocumentStore) -> Result<
         {
             Ok(hostapp_doc) => {
                 let last_modified = hostapp_doc.modified().unwrap_or_else(SystemTime::now);
-                let mut hostapp: HostRelease = hostapp_doc.into_value().await?;
+                let mut release: HostRelease = hostapp_doc.into_value().await?;
 
                 // ignore the status on the store and deduce it instead
-                hostapp.status = if host.meta.build.as_ref() == Some(&hostapp.build) {
+                release.status = if host.meta.build.as_ref() == Some(&release.hostapp.build) {
                     // if the hostapp build is the current OS build then the release is running
                     HostReleaseStatus::Running
                 } else if tokio::fs::try_exists(
@@ -60,10 +60,10 @@ pub async fn from_store(host: &mut Host, local_store: &DocumentStore) -> Result<
 
                 if SystemTime::now() - Duration::from_secs(3600 * 24) > last_modified {
                     // reset the install attempts after 24 hours
-                    hostapp.install_attempts = 0;
+                    release.hostapp.install_attempts = 0;
                 }
 
-                host.releases.insert(release_uuid, hostapp);
+                host.releases.insert(release_uuid, release);
             }
             Err(store::Error::NotFound { .. }) => {}
             Err(e) => return Err(e)?,

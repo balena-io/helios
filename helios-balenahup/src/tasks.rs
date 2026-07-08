@@ -16,7 +16,7 @@ use crate::util::systemd;
 use crate::util::tar;
 
 use super::BALENAHUP;
-use super::models::{Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget};
+use super::models::{Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget};
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -43,19 +43,13 @@ fn init_hostapp_release(
     System(device): System<Device>,
     store: Res<DocumentStore>,
 ) -> IO<HostRelease, store::Error> {
-    let HostReleaseTarget {
-        app,
-        image,
-        build,
-        updater,
-        ..
-    } = tgt;
+    let HostReleaseTarget { app, hostapp, .. } = tgt;
 
     // Get the running status by comparing to the current os build
     let is_running = device
         .host
         .and_then(|host| host.meta.build)
-        .is_some_and(|os_build| os_build == build);
+        .is_some_and(|os_build| os_build == hostapp.build);
 
     let status = if is_running {
         HostReleaseStatus::Running
@@ -66,11 +60,13 @@ fn init_hostapp_release(
     // Create a release using the target metadata
     let rel = HostRelease {
         app,
-        image,
-        build,
-        updater,
+        hostapp: HostApp {
+            image: hostapp.image,
+            build: hostapp.build,
+            updater: hostapp.updater,
+            install_attempts: 0,
+        },
         status,
-        install_attempts: 0,
     };
 
     // set the host release with the details from the target
@@ -106,7 +102,7 @@ fn install_hostapp_release(
     );
 
     // increase the install counter
-    release.install_attempts += 1;
+    release.hostapp.install_attempts += 1;
     with_io(release, async move |mut release| {
         let docker = docker
             .as_ref()
@@ -127,21 +123,24 @@ fn install_hostapp_release(
         let _ = release.commit().await;
 
         // Pull the docker image for the updater
-        debug!("pull hostapp updater script from '{}'", release.updater);
+        debug!(
+            "pull hostapp updater script from '{}'",
+            release.hostapp.updater
+        );
         docker
             .image()
-            .pull(&release.updater, None)
+            .pull(&release.hostapp.updater, None)
             .await
             .with_context(|| {
                 format!(
                     "failed to pull hostapp updater script from '{}",
-                    release.updater
+                    release.hostapp.updater
                 )
             })?;
 
         // create a `balenahup` container from the update image
         let id = container_helper
-            .create_tmp(BALENAHUP, &release.updater)
+            .create_tmp(BALENAHUP, &release.hostapp.updater)
             .await?;
 
         // configure the target dir in $RUNTIME_DIR/balenahup
@@ -183,7 +182,7 @@ fn install_hostapp_release(
                 "--release-commit",
                 release_uuid.as_str(),
                 "--target-image-uri",
-                release.image.as_str(),
+                release.hostapp.image.as_str(),
                 // FIXME: this needs to be re-added after helios handles update-locks
                 // "--no-reboot"
             ])
@@ -229,7 +228,7 @@ fn update_script_uri(
     );
 
     // the only change that this applies is to the updater script
-    rel.updater = tgt.updater;
+    rel.hostapp.updater = tgt.hostapp.updater;
 
     with_io(rel, async move |rel| {
         // write the release data into the store
@@ -303,7 +302,7 @@ pub fn cleanup_hostapp(
                 .await?
             {
                 // remove the updater image if it exists
-                docker.image().remove(&rel.updater).await?;
+                docker.image().remove(&rel.hostapp.updater).await?;
             }
 
             // if the release does not exist in the target state
@@ -369,7 +368,7 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
-                rel.status == HostReleaseStatus::Created && rel.install_attempts >= 3
+                rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
             })
             .with_description(|| "too many failed installs, check device"),
         )
