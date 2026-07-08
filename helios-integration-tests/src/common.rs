@@ -44,6 +44,26 @@ pub async fn wait_for_report(
     expected_status: &str,
     timeout_secs: u64,
 ) -> Value {
+    wait_for_report_where(app_uuid, release_uuid, expected_status, |_| true, timeout_secs).await
+}
+
+/// Like [`wait_for_report`], but only accepts a report whose release value also
+/// satisfies `predicate`.
+///
+/// A release can hold the same `update_status` across many reports while the
+/// state under it is still converging, so matching on the status alone returns
+/// whichever report happened to be emitted first. Callers that care about the
+/// content, rather than just the status, need to say so.
+///
+/// On timeout the panic carries the last report that matched the status, which
+/// is what tells you whether the state never arrived or the predicate is wrong.
+pub async fn wait_for_report_where(
+    app_uuid: &str,
+    release_uuid: &str,
+    expected_status: &str,
+    predicate: impl Fn(&Value) -> bool,
+    timeout_secs: u64,
+) -> Value {
     let release_path = format!("/apps/{app_uuid}/releases/{release_uuid}");
     let status_path = format!("{release_path}/update_status");
 
@@ -52,6 +72,8 @@ pub async fn wait_for_report(
         .unwrap();
     let mut stream = response.bytes_stream();
     let mut buf = String::new();
+    // Kept only to make a timeout say whether the status was ever seen.
+    let mut last_status_match: Option<Value> = None;
 
     let result = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
         while let Some(chunk) = stream.next().await {
@@ -75,8 +97,12 @@ pub async fn wait_for_report(
                 if let Some(device) = report.as_object().and_then(|m| m.values().next())
                     && let Some(status) = device.pointer(&status_path).and_then(|s| s.as_str())
                     && status == expected_status
+                    && let Some(release) = device.pointer(&release_path)
                 {
-                    return device.pointer(&release_path).unwrap().clone();
+                    if predicate(release) {
+                        return release.clone();
+                    }
+                    last_status_match = Some(release.clone());
                 }
             }
         }
@@ -86,9 +112,16 @@ pub async fn wait_for_report(
 
     match result {
         Ok(value) => value,
-        Err(_) => panic!(
-            "Timed out waiting for report with app '{app_uuid}' release '{release_uuid}' status '{expected_status}'"
-        ),
+        Err(_) => match last_status_match {
+            Some(last) => panic!(
+                "Timed out waiting for a report on app '{app_uuid}' release '{release_uuid}' \
+                 matching the predicate. Status '{expected_status}' was reported, last such \
+                 report was: {last}"
+            ),
+            None => panic!(
+                "Timed out waiting for report with app '{app_uuid}' release '{release_uuid}' status '{expected_status}'"
+            ),
+        },
     }
 }
 
