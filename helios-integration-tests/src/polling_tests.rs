@@ -670,6 +670,22 @@ async fn test_hostos_update_aborts_on_overlay_activation_failure() {
         "helios must not reboot when an overlay activation fails"
     );
 
+    // A failed activation is terminal and must surface as such to the API:
+    // Dead, not a status that reads as work still in progress. This is the
+    // only place the Failed to Dead mapping is exercised end to end.
+    let release_report = wait_for_report_where(
+        APP_UUID,
+        RELEASE_COMMIT,
+        "aborted",
+        |rel| rel["services"]["kernel-modules"]["status"] == "Dead",
+        30,
+    )
+    .await;
+    assert_eq!(
+        release_report["services"]["kernel-modules"]["status"], "Dead",
+        "a failed overlay activation must report as Dead, got: {release_report}"
+    );
+
     clear_reports().await;
     client
         .delete(format!("{MOCK_REMOTE_URL}/mock/state"))
@@ -833,22 +849,6 @@ async fn test_rejected_app_is_reported() {
         release_report["services"]
             .as_object()
             .map(|m| m.is_empty())
-    // A failed activation is terminal and must surface as such to the API:
-    // Dead, not a status that reads as work still in progress. This is the
-    // only place the Failed to Dead mapping is exercised end to end.
-    let release_report = wait_for_report_where(
-        APP_UUID,
-        RELEASE_COMMIT,
-        "aborted",
-        |rel| rel["services"]["kernel-modules"]["status"] == "Dead",
-        30,
-    )
-    .await;
-    assert_eq!(
-        release_report["services"]["kernel-modules"]["status"], "Dead",
-        "a failed overlay activation must report as Dead, got: {release_report}"
-    );
-
             .unwrap_or(false),
         "rejected release should have no services, got: {release_report}"
     );
