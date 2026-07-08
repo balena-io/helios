@@ -25,9 +25,11 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
                         "status": "running",
                     }
                 }
@@ -56,11 +58,13 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "abcd1234",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
                         "status": "running",
-                        "install_attempts": 1,
                     }
                 }
             },
@@ -72,9 +76,11 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
                 "releases": {
                     "new-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
                         "status": "running"
                     }
                 }
@@ -105,19 +111,23 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "abcd1234",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
                         "status": "running",
-                        "install_attempts": 1,
                     },
                     "new-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
                         "status": "installed",
-                        "install_attempts": 1,
                     }
                 }
             },
@@ -129,9 +139,11 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                 "releases": {
                     "new-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
                         "status": "running"
                     }
                 }
@@ -158,19 +170,23 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "abcd1234",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
                         "status": "running",
-                        "install_attempts": 1,
                     },
                     "new-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 4,
+                        },
                         "status": "created",
-                        "install_attempts": 4,
                     }
                 }
             },
@@ -182,9 +198,11 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
                 "releases": {
                     "new-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "cde2354",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
                         "status": "running"
                     }
                 }
@@ -210,11 +228,13 @@ fn it_ignores_a_target_that_deletes_the_hostapp() {
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
-                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                        "updater": "bh.cr/balena_os/balenahup",
-                        "build": "abcd1234",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
                         "status": "running",
-                        "install_attempts": 1,
                     }
                 }
             },
@@ -224,5 +244,46 @@ fn it_ignores_a_target_that_deletes_the_hostapp() {
             "uuid": "my-device-uuid",
         }),
         seq!("update device name",),
+    );
+}
+
+#[test]
+fn it_adopts_a_running_release_with_no_recorded_state() {
+    // A device can reach the target build with nothing recorded for it, for
+    // instance a fresh flash whose rootfs is already the target. It must adopt
+    // the release rather than re-install the OS it is already running, and
+    // with no overlays to activate there is nothing to reboot for either.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "releases": {}
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        seq!("initialize host OS release 'target-release'"),
     );
 }
