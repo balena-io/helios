@@ -139,7 +139,7 @@ pub struct RejectedApp {
 #[derive(Debug)]
 pub enum App {
     User(UserApp),
-    Host(HostApp),
+    Host(HostRelease),
     Rejected(RejectedApp),
 }
 
@@ -271,17 +271,26 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         }));
     };
 
-    Ok(App::Host(HostApp {
+    Ok(App::Host(HostRelease {
         release_uuid,
-        image: svc.image,
-        board_rev,
-        updater,
+        hostapp: HostApp {
+            image: svc.image,
+            board_rev,
+            updater,
+        },
     }))
 }
 
+/// Target host OS release as defined by the remote backend
+#[derive(Debug)]
+pub struct HostRelease {
+    pub release_uuid: Uuid,
+    pub hostapp: HostApp,
+}
+
+/// The rootfs component of a host OS release
 #[derive(Debug)]
 pub struct HostApp {
-    pub release_uuid: Uuid,
     pub image: ImageUri,
     pub board_rev: String,
     pub updater: ImageUri,
@@ -1204,9 +1213,9 @@ mod tests {
             .get(&"ea8013b1a82540b59bc8b109b45739ab".into())
             .unwrap();
 
-        if let App::Host(hostapp) = app {
+        if let App::Host(release) = app {
             assert_eq!(
-                hostapp.release_uuid,
+                release.release_uuid,
                 "c8b48659434e80a8b3adc0c5ad1e347a".into()
             );
         } else if let App::Rejected(rejected_app) = app {
