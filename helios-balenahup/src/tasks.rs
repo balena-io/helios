@@ -368,7 +368,7 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
-                rel.status == HostReleaseStatus::Created && rel.install_attempts > 3
+                rel.status == HostReleaseStatus::Created && rel.install_attempts >= 3
             })
             .with_description(|| "too many failed installs, check device"),
         )
