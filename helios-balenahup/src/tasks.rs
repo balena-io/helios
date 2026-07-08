@@ -8,7 +8,7 @@ use mahler::{exception, job};
 use tracing::debug;
 
 use crate::common_types::{HostRuntimeDir, Uuid};
-use crate::oci::{self, Client as Docker, WithContext};
+use crate::oci::{self, Client as Docker, RegistryAuth, WithContext};
 use crate::store::{self as store, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -100,6 +100,7 @@ fn install_hostapp_release(
     Target(tgt): Target<HostRelease>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
+    registry_auth: Res<RegistryAuth>,
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
@@ -148,9 +149,12 @@ fn install_hostapp_release(
             "pull hostapp updater script from '{}'",
             release.hostapp.updater
         );
+        let credentials = registry_auth
+            .as_ref()
+            .and_then(|auth| auth.credentials(&release.hostapp.updater));
         docker
             .image()
-            .pull(&release.hostapp.updater, None)
+            .pull(&release.hostapp.updater, credentials)
             .await
             .with_context(|| {
                 format!(
