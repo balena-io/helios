@@ -47,6 +47,9 @@ trait Manager {
     /// GetUnit method - get the object path for a unit by name
     fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
 
+    /// LoadUnit method - like GetUnit but loads the unit if not loaded
+    fn load_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
+
     /// StopUnit method - stop a unit
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 
@@ -87,6 +90,31 @@ trait Manager {
 trait Login1Manager {
     /// Reboot method - `interactive` controls polkit interactivity.
     fn reboot(&self, interactive: bool) -> zbus::Result<()>;
+}
+
+// systemd Unit D-Bus interface
+#[zbus::proxy(
+    interface = "org.freedesktop.systemd1.Unit",
+    default_service = "org.freedesktop.systemd1"
+)]
+trait Unit {
+    /// LoadState property - "loaded", "not-found", "masked", ...
+    #[zbus(property)]
+    fn load_state(&self) -> zbus::Result<String>;
+
+    /// ActiveState property - "active", "activating", "inactive", "failed", ...
+    #[zbus(property)]
+    fn active_state(&self) -> zbus::Result<String>;
+
+    /// ConditionTimestampMonotonic property - 0 until the unit's
+    /// `Condition*` clauses have been evaluated this boot
+    #[zbus(property)]
+    fn condition_timestamp_monotonic(&self) -> zbus::Result<u64>;
+
+    /// Job property - the job systemd holds for this unit, as an id and the
+    /// object path to it. `(0, "/")` when it holds none.
+    #[zbus(property)]
+    fn job(&self) -> zbus::Result<(u32, OwnedObjectPath)>;
 }
 
 // systemd Service D-Bus interface
@@ -400,6 +428,85 @@ pub async fn daemon_reload() -> Result<(), Error> {
     manager.reload().await?;
 
     Ok(())
+}
+
+/// Activation facts for a systemd unit, enough to decide whether a blocking
+/// oneshot has run this boot.
+#[derive(Debug, Clone)]
+pub struct UnitStatus {
+    /// "loaded", "not-found", "masked", ...
+    load_state: String,
+    /// "active", "activating", "inactive", "failed", ...
+    active_state: String,
+    /// 0 until the unit's `Condition*` clauses have been evaluated this boot
+    condition_timestamp_monotonic: u64,
+    /// Whether systemd holds a start job for the unit, queued or running
+    job_queued: bool,
+}
+
+impl UnitStatus {
+    /// Build a status from raw D-Bus property values. Callers outside this
+    /// module want [`unit_status`]; this exists so tests can stand one up.
+    pub fn new(
+        load_state: impl Into<String>,
+        active_state: impl Into<String>,
+        condition_timestamp_monotonic: u64,
+        job_queued: bool,
+    ) -> Self {
+        Self {
+            load_state: load_state.into(),
+            active_state: active_state.into(),
+            condition_timestamp_monotonic,
+            job_queued,
+        }
+    }
+
+    /// Whether systemd holds a unit it could run. False on an OS that does not
+    /// ship the unit, and false for a masked or unloadable one: systemd will
+    /// never start those, so a caller waiting on them would wait forever.
+    pub fn exists(&self) -> bool {
+        self.load_state == "loaded"
+    }
+
+    /// The unit is starting up: a blocking oneshot is still running its script.
+    pub fn is_activating(&self) -> bool {
+        self.active_state == "activating"
+    }
+
+    /// The unit is not running. It may still be pending, see
+    /// [`Self::conditions_evaluated`].
+    pub fn is_inactive(&self) -> bool {
+        self.active_state == "inactive"
+    }
+
+    /// Whether systemd has evaluated the unit's `Condition*` clauses this boot.
+    /// Until it has, an inactive unit may still be about to start.
+    pub fn conditions_evaluated(&self) -> bool {
+        self.condition_timestamp_monotonic != 0
+    }
+
+    /// Whether systemd holds a job for the unit. A unit enabled into the boot
+    /// transaction has its start job enqueued before anything in that
+    /// transaction runs, so an unevaluated unit holding one is waiting on its
+    /// ordering, and one holding none was never pulled into this boot.
+    pub fn job_queued(&self) -> bool {
+        self.job_queued
+    }
+}
+
+/// Query the load, activation, condition-evaluation and job state of a unit.
+pub async fn unit_status(unit: &str) -> Result<UnitStatus, Error> {
+    let connection = Connection::system().await?;
+    let manager = ManagerProxy::new(&connection).await?;
+    let path = manager.load_unit(&format!("{unit}.service")).await?;
+    let unit_proxy = UnitProxy::builder(&connection).path(path)?.build().await?;
+    let (job_id, _) = unit_proxy.job().await?;
+    Ok(UnitStatus::new(
+        unit_proxy.load_state().await?,
+        unit_proxy.active_state().await?,
+        unit_proxy.condition_timestamp_monotonic().await?,
+        job_id != 0,
+    ))
 }
 
 pub async fn reboot() -> Result<(), Error> {
