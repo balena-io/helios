@@ -1,4 +1,20 @@
 - commits:
+    - subject: Make at most 3 HUP attempts before aborting
+      hash: 37a1cc5ed9606d18d4ee6273504ee48eaf160161
+      body: |
+        There was a wrong condition on the hostapp install exception that was
+        allowing HUP to be tried 4 times before aborting.
+
+        This fixes the condition
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.16
+  title: ""
+  date: 2026-07-08T17:21:33.886Z
+- commits:
     - subject: Add support for compose service entrypoint
       hash: eb3b4f364168577df23e6927de1a7bb3066d4695
       body: |
