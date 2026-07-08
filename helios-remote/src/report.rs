@@ -110,7 +110,7 @@ fn report_host_app(
     let release_uuid = host_state
         .releases
         .iter()
-        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
+        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.hostapp.build))
         .map(|(uuid, _)| uuid.clone());
 
     for (rel_uuid, release) in host_state.releases {
@@ -146,7 +146,7 @@ fn report_host_app(
                 services: [(
                     "hostapp".to_owned(),
                     ServiceReport {
-                        image: release.image.repo(),
+                        image: release.hostapp.image.repo(),
                         status: service_status,
                         download_progress: None,
                     },

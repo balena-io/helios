@@ -2,7 +2,7 @@ use mahler::state::{Map, State};
 use serde::{Deserialize, Serialize};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
-use crate::remote_model::HostApp as RemoteHostAppTarget;
+use crate::remote_model::HostRelease as RemoteHostReleaseTarget;
 
 /// Alternative Device definition to avoid cicular dependencies
 /// DO NOT use this outside the `System` extractor
@@ -43,23 +43,23 @@ impl From<Host> for HostTarget {
     }
 }
 
-impl From<(Uuid, RemoteHostAppTarget)> for HostTarget {
-    fn from((app_uuid, app): (Uuid, RemoteHostAppTarget)) -> Self {
-        let RemoteHostAppTarget {
+impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
+    fn from((app_uuid, rel): (Uuid, RemoteHostReleaseTarget)) -> Self {
+        let RemoteHostReleaseTarget {
             release_uuid,
-            image,
-            board_rev,
-            updater,
-        } = app;
+            hostapp,
+        } = rel;
 
         let mut releases = Map::new();
         releases.insert(
             release_uuid,
             HostReleaseTarget {
                 app: app_uuid,
-                image,
-                build: board_rev,
-                updater,
+                hostapp: HostAppTarget {
+                    image: hostapp.image,
+                    build: hostapp.board_rev,
+                    updater: hostapp.updater,
+                },
                 // the release should be running (target)
                 status: HostReleaseStatus::Running,
             },
@@ -84,16 +84,10 @@ impl State for HostReleaseStatus {
     type Target = Self;
 }
 
+/// The rootfs component of a host OS release
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
-pub struct HostRelease {
-    /// The host app uuid
-    ///
-    /// There can only be one hostOS app runnning at a time, but the uuid
-    /// may change when moving between compatible device types or between
-    /// non-esr and esr
-    pub app: Uuid,
-
+pub struct HostApp {
     /// The fileset image
     /// This is needed for reporting and will be stored on local storage
     pub image: ImageUri,
@@ -106,29 +100,55 @@ pub struct HostRelease {
     /// The updater artifact
     pub updater: ImageUri,
 
-    /// The release is running/should be running
-    pub status: HostReleaseStatus,
-
     /// How many installs have been attempted for this release
     #[mahler(internal)]
     pub install_attempts: usize,
+}
+
+impl From<HostApp> for HostAppTarget {
+    fn from(app: HostApp) -> Self {
+        let HostApp {
+            image,
+            build,
+            updater,
+            ..
+        } = app;
+        HostAppTarget {
+            image,
+            build,
+            updater,
+        }
+    }
+}
+
+/// A host OS release: the rootfs component plus release-level state.
+#[derive(State, Debug, Clone)]
+#[mahler(derive(PartialEq, Eq))]
+pub struct HostRelease {
+    /// The host app uuid
+    ///
+    /// There can only be one hostOS app runnning at a time, but the uuid
+    /// may change when moving between compatible device types or between
+    /// non-esr and esr
+    pub app: Uuid,
+
+    /// The rootfs component of the release
+    pub hostapp: HostApp,
+
+    /// The release is running/should be running
+    pub status: HostReleaseStatus,
 }
 
 impl From<HostRelease> for HostReleaseTarget {
     fn from(rel: HostRelease) -> Self {
         let HostRelease {
             app,
-            image,
-            build,
-            updater,
+            hostapp,
             status,
-            ..
         } = rel;
         HostReleaseTarget {
             app,
-            image,
-            build,
-            updater,
+            hostapp: hostapp.into(),
             status,
         }
     }
