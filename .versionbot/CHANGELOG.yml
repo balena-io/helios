@@ -1,4 +1,48 @@
 - commits:
+    - subject: Add support for `group_add` compose property
+      hash: 07cf81427d8054b7d8def8422449093171f8dbfb
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `sysctls` compose property
+      hash: 2f3f9d7845f482577603cb7bdf62388c4f5216dd
+      body: |
+        Accepts `sysctls` coming from the target state in a dictionary or a
+        `key=value` list. Validates kernel namespaces according to
+        https://docs.docker.com/reference/cli/docker/container/run/#sysctl
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `security_opt` compose property
+      hash: cfc2269b04c0cd2a6e73aff9b986d5b0d24a4d9a
+      body: |
+        Adds support for `no-new-privileges`, `apparmor=unconfined` and
+        `seccomp=unconfined` on `security_opt` property. Other security opts are
+        rejected.
+
+        Adds integrations tests to validate the feature
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `cap_add` and `cap_drop` compose properties
+      hash: d770b946febbe14e4eed8772a3c3b0fb004b83ef
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.17
+  title: ""
+  date: 2026-07-09T02:10:31.758Z
+- commits:
     - subject: Make at most 3 HUP attempts before aborting
       hash: 37a1cc5ed9606d18d4ee6273504ee48eaf160161
       body: |
