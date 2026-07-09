@@ -298,6 +298,9 @@ async fn test_set_app_target_install_images() {
                         "labels": { "my-label": "true" },
                         "environment": ["MY_KEY=123"],
                         "ports": ["8080:8080"],
+                        // Map form with a numeric value; must be coerced to a
+                        // string and reach the engine.
+                        "sysctls": { "net.ipv4.ip_forward": 1 },
                         "volumes": [
                             {
                                 "type": "volume",
@@ -327,6 +330,12 @@ async fn test_set_app_target_install_images() {
                     "composition": {
                         "command": ["sleep", "infinity"],
                         "network_mode": "host",
+                        // Mixed `:` and `=` separators to exercise normalization;
+                        // both must reach the engine using `=`.
+                        "security_opt": [
+                            "no-new-privileges:true",
+                            "seccomp=unconfined",
+                        ],
                     }
                 }),
             ),
@@ -453,6 +462,18 @@ async fn test_set_app_target_install_images() {
     assert_eq!(labels.get("my-label").unwrap(), "true");
     assert_env_contains(&config.env.unwrap(), &["MY_KEY=123"]);
 
+    // The compose `sysctls` map reaches the engine with its numeric value
+    // coerced to a string.
+    let svc_two_sysctls = host_config
+        .sysctls
+        .as_ref()
+        .expect("host_config.sysctls not set");
+    assert_eq!(
+        svc_two_sysctls.get("net.ipv4.ip_forward").map(String::as_str),
+        Some("1"),
+        "expected `net.ipv4.ip_forward=1`; got {svc_two_sysctls:?}"
+    );
+
     // The compose `ports` entry surfaces in the engine port bindings and in
     // the reported service config.
     let bindings = host_config
@@ -518,6 +539,26 @@ async fn test_set_app_target_install_images() {
         Some("host")
     );
     assert_container_networks(&svc_three_container, &["host"]);
+
+    // service-three's security options round-trip to the engine with the `:`
+    // separator normalized to `=`, and are reported back verbatim.
+    let svc_three_security_opt = svc_three_container
+        .host_config
+        .as_ref()
+        .and_then(|hc| hc.security_opt.as_ref())
+        .expect("host_config.security_opt not set");
+    assert!(
+        svc_three_security_opt
+            .iter()
+            .any(|o| o == "no-new-privileges=true"),
+        "expected normalized `no-new-privileges=true`; got {svc_three_security_opt:?}"
+    );
+    assert!(
+        svc_three_security_opt
+            .iter()
+            .any(|o| o == "seccomp=unconfined"),
+        "expected `seccomp=unconfined`; got {svc_three_security_opt:?}"
+    );
 
     let my_vol_id = get_resource_oci_name(app, release_uuid, "volumes", "my-vol").to_string();
     let volume = docker.inspect_volume(&my_vol_id).await.unwrap();
@@ -610,6 +651,92 @@ async fn test_set_app_target_rejects_bind_mount_not_in_allowlist() {
     );
 
     // Confirm no app was created.
+    let res = client
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_disallowed_security_opt() {
+    let release_uuid = "reject-security-opt-release";
+    let release = release_json(
+        &[(
+            "bad-svc",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "security_opt": ["label:user:USER"]
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("reject-security-opt-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+
+    // The remote-model allowlist check fires during deserialization, so Axum
+    // rejects the body with a 4xx before any app is created.
+    assert!(
+        res.status().is_client_error(),
+        "expected 4xx, got {}",
+        res.status()
+    );
+
+    let res = client
+        .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_non_namespaced_sysctl() {
+    let release_uuid = "reject-sysctl-release";
+    let release = release_json(
+        &[(
+            "bad-svc",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "sysctls": ["kernel.hostname=evil"]
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("reject-sysctl-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+
+    // The remote-model allowlist check fires during deserialization, so Axum
+    // rejects the body with a 4xx before any app is created.
+    assert!(
+        res.status().is_client_error(),
+        "expected 4xx, got {}",
+        res.status()
+    );
+
     let res = client
         .get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
         .send()

@@ -353,6 +353,22 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.cpu_shares.take())
             .unwrap_or(0);
+        let cap_add = host_config
+            .as_mut()
+            .and_then(|hc| hc.cap_add.take())
+            .unwrap_or_default();
+        let cap_drop = host_config
+            .as_mut()
+            .and_then(|hc| hc.cap_drop.take())
+            .unwrap_or_default();
+        let group_add = host_config
+            .as_mut()
+            .and_then(|hc| hc.group_add.take())
+            .unwrap_or_default();
+        let security_opt = host_config
+            .as_mut()
+            .and_then(|hc| hc.security_opt.take())
+            .unwrap_or_default();
         let dns = host_config
             .as_mut()
             .and_then(|hc| hc.dns.take())
@@ -378,6 +394,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
                     .map(|(host, ip)| (host.to_string(), ip.to_string()))
             })
             .collect::<HashMap<_, _>>();
+        let sysctls = host_config
+            .as_mut()
+            .and_then(|hc| hc.sysctls.take())
+            .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
         // Only recognize `none`/`host` from host_config: for user networks Docker also
         // populates `network_mode` with the first network name, which would otherwise
@@ -542,12 +562,17 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            cap_add,
+            cap_drop,
+            group_add,
+            security_opt,
             dns,
             dns_opt,
             dns_search,
             domainname,
             environment,
             extra_hosts,
+            sysctls,
             healthcheck,
             hostname,
             init,
@@ -1209,6 +1234,22 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "is_zero")]
     pub cpu_shares: i64,
 
+    /// Linux capabilities to add to the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cap_add: Vec<String>,
+
+    /// Linux capabilities to drop from the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cap_drop: Vec<String>,
+
+    /// Additional groups (by name or GID) the container user is a member of.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub group_add: Vec<String>,
+
+    /// Security options applied to the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub security_opt: Vec<String>,
+
     /// Custom DNS servers for the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<String>,
@@ -1308,6 +1349,11 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub extra_hosts: HashMap<String, String>,
 
+    /// Kernel parameters (sysctls) to set in the container, as a
+    /// parameter -> value map.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub sysctls: HashMap<String, String>,
+
     /// Network endpoint configurations, ordered by connection priority.
     ///
     /// Mutually exclusive with `network_mode`.
@@ -1341,12 +1387,17 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_rt_period,
             cpu_rt_runtime,
             cpu_shares,
+            cap_add,
+            cap_drop,
+            group_add,
+            security_opt,
             dns,
             dns_opt,
             dns_search,
             domainname,
             environment,
             extra_hosts,
+            sysctls,
             healthcheck,
             hostname,
             init,
@@ -1448,6 +1499,10 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cpu_realtime_period: non_zero(cpu_rt_period),
             cpu_realtime_runtime: non_zero(cpu_rt_runtime),
             cpu_shares: non_zero(cpu_shares),
+            cap_add: (!cap_add.is_empty()).then_some(cap_add),
+            cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
+            group_add: (!group_add.is_empty()).then_some(group_add),
+            security_opt: (!security_opt.is_empty()).then_some(security_opt),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
             dns_search: (!dns_search.is_empty()).then_some(dns_search),
@@ -1457,6 +1512,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
                     .map(|(host, ip)| format!("{host}:{ip}"))
                     .collect()
             }),
+            sysctls: (!sysctls.is_empty()).then_some(sysctls),
             init,
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
@@ -1981,6 +2037,57 @@ mod tests {
     }
 
     #[test]
+    fn inspect_reads_sysctls() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                sysctls: Some(HashMap::from([
+                    ("net.core.somaxconn".to_string(), "1024".to_string()),
+                    ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+                ])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.sysctls,
+            HashMap::from([
+                ("net.core.somaxconn".to_string(), "1024".to_string()),
+                ("net.ipv4.tcp_syncookies".to_string(), "0".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_sysctls() {
+        let cfg = ContainerConfig {
+            sysctls: HashMap::from([("net.core.somaxconn".to_string(), "1024".to_string())]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.sysctls,
+            Some(HashMap::from([(
+                "net.core.somaxconn".to_string(),
+                "1024".to_string()
+            )]))
+        );
+
+        // An empty map should not emit a Sysctls entry on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().sysctls, None);
+    }
+
+    #[test]
     fn inspect_reads_dns_config() {
         let resp = ContainerInspectResponse {
             id: Some("cid".to_string()),
@@ -2034,6 +2141,145 @@ mod tests {
         assert_eq!(hc.dns, None);
         assert_eq!(hc.dns_options, None);
         assert_eq!(hc.dns_search, None);
+    }
+
+    #[test]
+    fn inspect_reads_cap_config() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                cap_add: Some(vec!["ALL".to_string()]),
+                cap_drop: Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cap_add, vec!["ALL".to_string()]);
+        assert_eq!(
+            c.config.cap_drop,
+            vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_cap_config() {
+        let cfg = ContainerConfig {
+            cap_add: vec!["ALL".to_string()],
+            cap_drop: vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.cap_add, Some(vec!["ALL".to_string()]));
+        assert_eq!(
+            hc.cap_drop,
+            Some(vec!["NET_ADMIN".to_string(), "SYS_ADMIN".to_string()])
+        );
+
+        // Empty lists should not emit CapAdd/CapDrop on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = empty.host_config.unwrap();
+        assert_eq!(hc.cap_add, None);
+        assert_eq!(hc.cap_drop, None);
+    }
+
+    #[test]
+    fn inspect_reads_group_add() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                group_add: Some(vec!["mail".to_string(), "1000".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.group_add,
+            vec!["mail".to_string(), "1000".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_group_add() {
+        let cfg = ContainerConfig {
+            group_add: vec!["mail".to_string(), "1000".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.group_add,
+            Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+
+        // Empty list should not emit GroupAdd on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().group_add, None);
+    }
+
+    #[test]
+    fn inspect_reads_security_opt() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                security_opt: Some(vec![
+                    "no-new-privileges=true".to_string(),
+                    "seccomp=unconfined".to_string(),
+                ]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.security_opt,
+            vec![
+                "no-new-privileges=true".to_string(),
+                "seccomp=unconfined".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_security_opt() {
+        let cfg = ContainerConfig {
+            security_opt: vec!["apparmor=unconfined".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.security_opt,
+            Some(vec!["apparmor=unconfined".to_string()])
+        );
+
+        // An empty list should not emit SecurityOpt on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = empty.host_config.unwrap();
+        assert_eq!(hc.security_opt, None);
     }
 
     #[test]
