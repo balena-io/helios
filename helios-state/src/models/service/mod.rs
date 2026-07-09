@@ -5,14 +5,14 @@ use crate::labels::LABEL_SERVICE_ID;
 use std::collections::BTreeSet;
 
 use crate::oci::{
-    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, HostPort,
-    LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
+    NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
-    DurationNanos, DurationSecs, HostPort as RemoteHostPort, Mount as RemoteMount,
-    NetworkMode as RemoteNetworkMode, PortProtocol as RemotePortProtocol,
-    RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
+    DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
+    PortProtocol as RemotePortProtocol, RestartPolicy as RemoteRestartPolicy,
+    Service as RemoteServiceTarget,
 };
 
 use super::image::ImageRef;
@@ -236,10 +236,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             .into_iter()
             .map(|p| PortMapping {
                 target: p.target,
-                published: p.published.map(|hp| match hp {
-                    RemoteHostPort::Single(port) => HostPort::Single(port),
-                    RemoteHostPort::Range(start, end) => HostPort::Range(start, end),
-                }),
+                published: p.published,
                 host_ip: p.host_ip,
                 protocol: match p.protocol {
                     RemotePortProtocol::Tcp => PortProtocol::Tcp,

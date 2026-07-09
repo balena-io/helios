@@ -1803,7 +1803,7 @@ mod tests {
             "127.0.0.1:8081:80".parse().unwrap(),
             "53:53/udp".parse().unwrap(),
             "443".parse().unwrap(),
-            "8000-9000:3000".parse().unwrap(),
+            "8000:3000".parse().unwrap(),
         ]);
         let cfg = ContainerConfig {
             ports: ports.clone(),

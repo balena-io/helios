@@ -32,21 +32,13 @@ impl PortProtocol {
     }
 }
 
-/// Host side of a port mapping: a fixed port, or a range from which the
-/// engine picks a free port at container start.
-#[derive(Debug, PartialEq)]
-pub enum HostPort {
-    Single(u16),
-    Range(u16, u16),
-}
-
 /// A single published container port, after range expansion.
 #[derive(Debug, PartialEq)]
 pub struct PortMapping {
     /// Container port
     pub target: u16,
-    /// Host port (or range). `None` publishes to an ephemeral port.
-    pub published: Option<HostPort>,
+    /// Host port. `None` publishes to an ephemeral port.
+    pub published: Option<u16>,
     /// Host IP to bind to. `None` binds to all interfaces.
     pub host_ip: Option<String>,
     pub protocol: PortProtocol,
@@ -244,7 +236,7 @@ fn parse_short(s: &str) -> Result<Vec<PortMapping>, String> {
         Some(published) => Some(parse_port_or_range(published)?),
     };
 
-    let host_ip = host_ip_part.map(parse_host_ip).transpose()?;
+    let host_ip = host_ip_part.map(parse_host_ip).transpose()?.flatten();
 
     expand(target, published, host_ip, protocol)
 }
@@ -262,17 +254,15 @@ fn parse_long(l: LongPort) -> Result<Vec<PortMapping>, String> {
         .map(PortProtocol::parse)
         .transpose()?
         .unwrap_or_default();
-    let host_ip = host_ip.as_deref().map(parse_host_ip).transpose()?;
+    let host_ip = host_ip.as_deref().map(parse_host_ip).transpose()?.flatten();
 
     expand(target, published, host_ip, protocol)
 }
 
-/// Expand a (possibly ranged) mapping into individual single-target-port
-/// mappings, mirroring the engine's `nat` package semantics:
-///
-/// - single target + published range: the engine picks a free host port from
-///   the range, so the range is kept as the published value
-/// - target range + published range: matched pairwise (lengths must agree)
+/// Expand a range mapping into individual single-port mappings.
+/// - single target + host range: publish the container port on every host
+///   port in the range
+/// - target range + host range: matched pairwise (lengths must agree)
 fn expand(
     target: PortOrRange,
     published: Option<PortOrRange>,
@@ -294,17 +284,14 @@ fn expand(
     };
 
     if target.len() == 1 {
-        let published = if published.len() == 1 {
-            HostPort::Single(published.0)
-        } else {
-            HostPort::Range(published.0, published.1)
-        };
-        return Ok(vec![PortMapping {
-            target: target.0,
-            published: Some(published),
-            host_ip,
-            protocol,
-        }]);
+        return Ok((published.0..=published.1)
+            .map(|host_port| PortMapping {
+                target: target.0,
+                published: Some(host_port),
+                host_ip: host_ip.clone(),
+                protocol,
+            })
+            .collect());
     }
 
     if published.len() != target.len() {
@@ -318,7 +305,7 @@ fn expand(
         .zip(published.0..=published.1)
         .map(|(target, published)| PortMapping {
             target,
-            published: Some(HostPort::Single(published)),
+            published: Some(published),
             host_ip: host_ip.clone(),
             protocol,
         })
@@ -357,15 +344,20 @@ fn parse_port_or_range(s: &str) -> Result<PortOrRange, String> {
 }
 
 /// Validate a host IP, accepting bracketed IPv6 (`[::1]`) but returning the
-/// unbracketed form.
-fn parse_host_ip(s: &str) -> Result<String, String> {
+/// unbracketed form. The IP `0.0.0.0` is normalized to `None` as is equivalent to
+/// "bind all interfaces"
+fn parse_host_ip(s: &str) -> Result<Option<String>, String> {
     let ip = s
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(s);
-    ip.parse::<IpAddr>()
+    let ip = ip
+        .parse::<IpAddr>()
         .map_err(|_| format!("invalid host IP address `{s}`"))?;
-    Ok(ip.to_string())
+    if ip.is_unspecified() && ip.is_ipv4() {
+        return Ok(None);
+    }
+    Ok(Some(ip.to_string()))
 }
 
 #[cfg(test)]
@@ -379,7 +371,7 @@ mod tests {
 
     fn mapping(
         target: u16,
-        published: Option<HostPort>,
+        published: Option<u16>,
         host_ip: Option<&str>,
         protocol: PortProtocol,
     ) -> PortMapping {
@@ -410,12 +402,7 @@ mod tests {
         let p = ports(json!(["8080:80"]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Single(8080)),
-                None,
-                PortProtocol::Tcp
-            )])
+            Vec::from([mapping(80, Some(8080), None, PortProtocol::Tcp)])
         );
     }
 
@@ -425,8 +412,8 @@ mod tests {
         assert_eq!(
             p.0,
             Vec::from([
-                mapping(6060, Some(HostPort::Single(6060)), None, PortProtocol::Udp),
-                mapping(1234, Some(HostPort::Single(1234)), None, PortProtocol::Tcp),
+                mapping(6060, Some(6060), None, PortProtocol::Udp),
+                mapping(1234, Some(1234), None, PortProtocol::Tcp),
             ])
         );
     }
@@ -438,7 +425,7 @@ mod tests {
             p.0,
             Vec::from([mapping(
                 8001,
-                Some(HostPort::Single(8001)),
+                Some(8001),
                 Some("127.0.0.1"),
                 PortProtocol::Tcp
             )])
@@ -464,12 +451,7 @@ mod tests {
         let p = ports(json!(["[::1]:8080:80"]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Single(8080)),
-                Some("::1"),
-                PortProtocol::Tcp
-            )])
+            Vec::from([mapping(80, Some(8080), Some("::1"), PortProtocol::Tcp)])
         );
     }
 
@@ -480,13 +462,18 @@ mod tests {
         let p = ports(json!([":::8080:80"]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Single(8080)),
-                Some("::"),
-                PortProtocol::Tcp
-            )])
+            Vec::from([mapping(80, Some(8080), Some("::"), PortProtocol::Tcp)])
         );
+    }
+
+    #[test]
+    fn ipv4_catch_all_host_ip_normalizes_to_none() {
+        let p = ports(json!(["0.0.0.0:8080:80"]));
+        assert_eq!(
+            p.0,
+            Vec::from([mapping(80, Some(8080), None, PortProtocol::Tcp)])
+        );
+        assert_eq!(p, ports(json!(["8080:80"])));
     }
 
     #[test]
@@ -508,8 +495,8 @@ mod tests {
         assert_eq!(
             p.0,
             Vec::from([
-                mapping(8080, Some(HostPort::Single(9090)), None, PortProtocol::Tcp),
-                mapping(8081, Some(HostPort::Single(9091)), None, PortProtocol::Tcp),
+                mapping(8080, Some(9090), None, PortProtocol::Tcp),
+                mapping(8081, Some(9091), None, PortProtocol::Tcp),
             ])
         );
     }
@@ -520,34 +507,22 @@ mod tests {
         assert_eq!(
             p.0,
             Vec::from([
-                mapping(
-                    5000,
-                    Some(HostPort::Single(5000)),
-                    Some("127.0.0.1"),
-                    PortProtocol::Tcp
-                ),
-                mapping(
-                    5001,
-                    Some(HostPort::Single(5001)),
-                    Some("127.0.0.1"),
-                    PortProtocol::Tcp
-                ),
+                mapping(5000, Some(5000), Some("127.0.0.1"), PortProtocol::Tcp),
+                mapping(5001, Some(5001), Some("127.0.0.1"), PortProtocol::Tcp),
             ])
         );
     }
 
     #[test]
-    fn short_form_host_range_to_single_port_kept_as_range() {
-        // the engine picks a free host port from the range at start
-        let p = ports(json!(["8000-9000:80"]));
+    fn short_form_host_range_to_single_port_expands() {
+        let p = ports(json!(["8000-8002:80"]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Range(8000, 9000)),
-                None,
-                PortProtocol::Tcp
-            )])
+            Vec::from([
+                mapping(80, Some(8000), None, PortProtocol::Tcp),
+                mapping(80, Some(8001), None, PortProtocol::Tcp),
+                mapping(80, Some(8002), None, PortProtocol::Tcp),
+            ])
         );
     }
 
@@ -563,7 +538,7 @@ mod tests {
             p.0,
             Vec::from([mapping(
                 80,
-                Some(HostPort::Single(8080)),
+                Some(8080),
                 Some("127.0.0.1"),
                 PortProtocol::Udp
             )])
@@ -577,16 +552,15 @@ mod tests {
     }
 
     #[test]
-    fn long_form_published_range() {
-        let p = ports(json!([{ "target": 80, "published": "8000-9000" }]));
+    fn long_form_published_range_expands() {
+        let p = ports(json!([{ "target": 80, "published": "8000-8002" }]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Range(8000, 9000)),
-                None,
-                PortProtocol::Tcp
-            )])
+            Vec::from([
+                mapping(80, Some(8000), None, PortProtocol::Tcp),
+                mapping(80, Some(8001), None, PortProtocol::Tcp),
+                mapping(80, Some(8002), None, PortProtocol::Tcp),
+            ])
         );
     }
 
@@ -596,8 +570,8 @@ mod tests {
         assert_eq!(
             p.0,
             Vec::from([
-                mapping(80, Some(HostPort::Single(8080)), None, PortProtocol::Tcp),
-                mapping(81, Some(HostPort::Single(8081)), None, PortProtocol::Tcp),
+                mapping(80, Some(8080), None, PortProtocol::Tcp),
+                mapping(81, Some(8081), None, PortProtocol::Tcp),
             ])
         );
     }
@@ -613,12 +587,7 @@ mod tests {
         }]));
         assert_eq!(
             p.0,
-            Vec::from([mapping(
-                80,
-                Some(HostPort::Single(8080)),
-                None,
-                PortProtocol::Tcp
-            )])
+            Vec::from([mapping(80, Some(8080), None, PortProtocol::Tcp)])
         );
     }
 

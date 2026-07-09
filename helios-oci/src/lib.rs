@@ -21,7 +21,7 @@ mod datetime;
 pub use datetime::DateTime;
 
 mod ports;
-pub use ports::{HostPort, PortMapping, PortProtocol};
+pub use ports::{PortMapping, PortProtocol};
 
 mod network;
 pub use network::{

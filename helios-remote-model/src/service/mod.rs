@@ -707,13 +707,13 @@ mod tests {
                 },
                 &PortMapping {
                     target: 53,
-                    published: Some(HostPort::Single(5353)),
+                    published: Some(5353),
                     host_ip: Some("127.0.0.1".to_string()),
                     protocol: PortProtocol::Udp,
                 },
                 &PortMapping {
                     target: 443,
-                    published: Some(HostPort::Single(8443)),
+                    published: Some(8443),
                     host_ip: None,
                     protocol: PortProtocol::Tcp,
                 },
