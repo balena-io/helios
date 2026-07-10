@@ -1,4 +1,54 @@
 - commits:
+    - subject: Send WARN level errors to stdout
+      hash: 5661591503f6afb947575743e1755b5e0a556f22
+      body: |
+        This prevents these errors from getting shipped when the log shipping
+        level is set to `error`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make release rejection notice into an error
+      hash: 7d444ccff959efb3d9b44a0a5fcf43b28a90d6f8
+      body: |
+        A rejected release is an error in the target defined by the user and
+        should be logged as such
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make the host removal exception message less cryptic
+      hash: 1ff2564ddf7f3814dd032f79a45c37a235229a09
+      body: |
+        The message references the target host release being missing which
+        relates to the target hostapp state being rejected. This is not
+        straightforward to understand without knowledge of how helios processes
+        the target state.
+
+        This references the target state possibly being invalid as a workaround.
+        A proper fix is to handle a release rejection in a similar way to how it
+        is done for user apps.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Include release uuid in rejection warning
+      hash: 84d3ed479e4eeb9d303a1d68873633d3ae68f676
+      body: |
+        This should allow us to identify if helios is processing a stale target
+        state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.18
+  title: ""
+  date: 2026-07-10T19:55:22.646Z
+- commits:
     - subject: Add support for `group_add` compose property
       hash: 07cf81427d8054b7d8def8422449093171f8dbfb
       body: ""
