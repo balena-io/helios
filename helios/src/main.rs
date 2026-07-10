@@ -49,10 +49,10 @@ fn initialize_tracing() {
         )
         .with(
             fmt_layer()
-                // INFO and below go to stdout; WARN and ERROR go to stderr.
+                // WARN and below go to stdout; ERROR goes to stderr.
                 .with_writer(
                     std::io::stderr
-                        .with_max_level(Level::WARN)
+                        .with_max_level(Level::ERROR)
                         .or_else(std::io::stdout),
                 )
                 .with_span_events(FmtSpan::CLOSE)

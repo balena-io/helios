@@ -356,7 +356,8 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         // ignore requests to delete the host field if the target OS is set to null
         .exception(
             "/host",
-            exception::delete(|| true).with_description(|| "target host release missing"),
+            exception::delete(|| true)
+                .with_description(|| "target host release is invalid or missing"),
         )
         // ignore requests to update the host if it has already been installed (we are waiting for
         // a reboot) or we reached the number of install attempts
