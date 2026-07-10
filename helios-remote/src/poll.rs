@@ -249,7 +249,7 @@ async fn start_poll_with_reemit(
                                 // create the app with `rejected_release` set.
                                 for (uuid, app) in remote_target.apps.iter() {
                                     if let RemoteApp::Rejected(rej) = app {
-                                        warn!(
+                                        error!(
                                             "invalid target release ({}) for app {uuid}: {}",
                                             rej.release.chars().take(7).collect::<String>(),
                                             rej.reason,
