@@ -49,59 +49,6 @@ impl FromStr for PortProtocol {
     }
 }
 
-/// Host side of a port mapping: a fixed port, or a range from which the
-/// engine picks a free port at container start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HostPort {
-    Single(u16),
-    Range(u16, u16),
-}
-
-impl fmt::Display for HostPort {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Single(port) => write!(f, "{port}"),
-            Self::Range(start, end) => write!(f, "{start}-{end}"),
-        }
-    }
-}
-
-impl FromStr for HostPort {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, String> {
-        match s.split_once('-') {
-            Some((start, end)) => {
-                let start = parse_port(start)?;
-                let end = parse_port(end)?;
-                if start > end {
-                    return Err(format!("invalid port range `{s}`"));
-                }
-                Ok(Self::Range(start, end))
-            }
-            None => Ok(Self::Single(parse_port(s)?)),
-        }
-    }
-}
-
-impl Serialize for HostPort {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for HostPort {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
-
 /// A single published container port.
 ///
 /// Field declaration order doubles as the derived `Ord` sort key, which
@@ -111,9 +58,9 @@ impl<'de> Deserialize<'de> for HostPort {
 pub struct PortMapping {
     /// Container port
     pub target: u16,
-    /// Host port (or range). `None` publishes to an ephemeral port.
+    /// Host port. `None` publishes to an ephemeral port.
     #[serde(default)]
-    pub published: Option<HostPort>,
+    pub published: Option<u16>,
     /// Host IP to bind to. `None` binds to all interfaces.
     #[serde(default)]
     pub host_ip: Option<String>,
@@ -171,7 +118,7 @@ impl FromStr for PortMapping {
                 return Err(format!("invalid port mapping `{s}`"));
             }
             Some("") => None,
-            Some(published) => Some(published.parse()?),
+            Some(published) => Some(parse_port(published)?),
         };
 
         let host_ip = host_ip_part.map(parse_host_ip).transpose()?;
@@ -190,6 +137,22 @@ fn parse_port(s: &str) -> std::result::Result<u16, String> {
         .ok()
         .filter(|port| *port != 0)
         .ok_or_else(|| format!("invalid port number `{s}`"))
+}
+
+/// Parse an engine host port, which may be a single port (`8080`) or a range
+/// (`8000-9000`), into its individual ports.
+fn parse_host_port_range(s: &str) -> std::result::Result<Vec<u16>, String> {
+    match s.split_once('-') {
+        Some((start, end)) => {
+            let start = parse_port(start)?;
+            let end = parse_port(end)?;
+            if start > end {
+                return Err(format!("invalid port range `{s}`"));
+            }
+            Ok((start..=end).collect())
+        }
+        None => Ok(vec![parse_port(s)?]),
+    }
 }
 
 /// Validate a host IP, accepting bracketed IPv6 (`[::1]`) but returning the
@@ -226,7 +189,9 @@ pub(crate) fn to_oci_port_maps(ports: BTreeSet<PortMapping>) -> (Vec<String>, Po
 }
 
 /// Read port mappings back from the engine's `HostConfig.PortBindings`,
-/// normalizing empty-string host IP/port (the engine's "unset") to absent.
+/// normalizing an unset host IP/port to absent. This considers both an empty host/IP
+/// or `0.0.0.0` to mean `bind all interfaces` so that gets converted to `None`.
+/// This is to work with different engines
 pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
     let mut ports = BTreeSet::new();
     for (key, bindings) in map {
@@ -245,19 +210,34 @@ pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
         }
 
         for binding in bindings {
-            let host_ip = binding.host_ip.filter(|ip| !ip.is_empty());
-            let published = binding
-                .host_port
-                .filter(|port| !port.is_empty())
-                .map(|port| port.parse::<HostPort>())
-                .transpose()
-                .map_err(|e| Error::other(format!("invalid engine port binding `{key}`: {e}")))?;
-            ports.insert(PortMapping {
-                target,
-                published,
-                host_ip,
-                protocol,
-            });
+            let host_ip = binding
+                .host_ip
+                .filter(|ip| !ip.is_empty() && ip != "0.0.0.0");
+            match binding.host_port.filter(|port| !port.is_empty()) {
+                None => {
+                    ports.insert(PortMapping {
+                        target,
+                        published: None,
+                        host_ip,
+                        protocol,
+                    });
+                }
+                // The engine may report a range (`8000-9000`) as the host port
+                // so we expand it to one mapping per host port
+                Some(host_port) => {
+                    let published = parse_host_port_range(&host_port).map_err(|e| {
+                        Error::other(format!("invalid engine port binding `{key}`: {e}"))
+                    })?;
+                    for host_port in published {
+                        ports.insert(PortMapping {
+                            target,
+                            published: Some(host_port),
+                            host_ip: host_ip.clone(),
+                            protocol,
+                        });
+                    }
+                }
+            }
         }
     }
     Ok(ports)
@@ -284,7 +264,6 @@ mod tests {
         for canonical in [
             "80/tcp",
             "8080:80/tcp",
-            "8000-9000:80/tcp",
             "127.0.0.1:8080:80/tcp",
             "127.0.0.1::80/tcp",
             "6060:6060/udp",
@@ -300,7 +279,7 @@ mod tests {
             mapping("8080:80"),
             PortMapping {
                 target: 80,
-                published: Some(HostPort::Single(8080)),
+                published: Some(8080),
                 host_ip: None,
                 protocol: PortProtocol::Tcp,
             }
@@ -392,6 +371,39 @@ mod tests {
     }
 
     #[test]
+    fn from_engine_port_map_normalizes_ipv4_catch_all_host_ip() {
+        // Podman reports an unset host IP as `0.0.0.0`; it must round-trip to a
+        // target with no host IP so the service configuration settles
+        let map = PortMap::from([(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some("8080".to_string()),
+            }]),
+        )]);
+        assert_eq!(
+            from_oci_port_map(map).unwrap(),
+            BTreeSet::from([mapping("8080:80")])
+        );
+    }
+
+    #[test]
+    fn from_engine_port_map_expands_host_port_range() {
+        // an engine-reported host range expands into one mapping per host port
+        let map = PortMap::from([(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some("8000-8002".to_string()),
+            }]),
+        )]);
+        assert_eq!(
+            from_oci_port_map(map).unwrap(),
+            BTreeSet::from([mapping("8000:80"), mapping("8001:80"), mapping("8002:80"),])
+        );
+    }
+
+    #[test]
     fn from_engine_port_map_handles_missing_bindings() {
         // some engines report a published-without-bindings entry as null
         let map = PortMap::from([("80/udp".to_string(), None)]);
@@ -402,28 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn from_engine_port_map_accepts_host_port_range() {
-        let map = PortMap::from([(
-            "80/tcp".to_string(),
-            Some(vec![PortBinding {
-                host_ip: None,
-                host_port: Some("8000-9000".to_string()),
-            }]),
-        )]);
-        assert_eq!(
-            from_oci_port_map(map).unwrap(),
-            BTreeSet::from([mapping("8000-9000:80")])
-        );
-    }
-
-    #[test]
     fn engine_round_trip() {
         let ports = BTreeSet::from([
             mapping("8080:80"),
             mapping("127.0.0.1:8081:80"),
             mapping("53:53/udp"),
             mapping("443"),
-            mapping("8000-9000:3000"),
+            mapping("9000:3000"),
         ]);
         let (_, bindings) = to_oci_port_maps(ports.clone());
         assert_eq!(from_oci_port_map(bindings).unwrap(), ports);

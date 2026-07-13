@@ -297,7 +297,7 @@ async fn test_set_app_target_install_images() {
                         "command": ["sh", "-c", "while true; do echo -n 'Hello World!!' | nc -lv -p 8080; done"],
                         "labels": { "my-label": "true" },
                         "environment": ["MY_KEY=123"],
-                        "ports": ["8080:8080"],
+                        "ports": ["8080-8081:8080"],
                         // Map form with a numeric value; must be coerced to a
                         // string and reach the engine.
                         "sysctls": { "net.ipv4.ip_forward": 1 },
@@ -469,7 +469,9 @@ async fn test_set_app_target_install_images() {
         .as_ref()
         .expect("host_config.sysctls not set");
     assert_eq!(
-        svc_two_sysctls.get("net.ipv4.ip_forward").map(String::as_str),
+        svc_two_sysctls
+            .get("net.ipv4.ip_forward")
+            .map(String::as_str),
         Some("1"),
         "expected `net.ipv4.ip_forward=1`; got {svc_two_sysctls:?}"
     );
@@ -482,11 +484,14 @@ async fn test_set_app_target_install_images() {
         .and_then(|b| b.get("8080/tcp"))
         .and_then(|b| b.as_ref())
         .expect("no port binding for 8080/tcp");
-    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings.len(), 2);
     assert_eq!(bindings[0].host_port.as_deref(), Some("8080"));
     assert_eq!(
         svc_two.get("config").and_then(|c| c.get("ports")).unwrap(),
-        &json!([{"target": 8080, "published": "8080", "protocol": "tcp"}])
+        &json!([
+            {"target": 8080, "published": 8080, "protocol": "tcp"},
+            {"target": 8080, "published": 8081, "protocol": "tcp"}
+        ])
     );
 
     // The published port binds on the docker-in-docker daemon's network
