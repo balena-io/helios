@@ -1,4 +1,22 @@
 - commits:
+    - subject: Expand port ranges to work with both Docker and Podman
+      hash: 549d57308a3dbcdb5bc0cec0938b48bbf1dc27a2
+      body: |
+        Podman doesn't allow port ranges for container create (see
+        podman-container-tools/podman#22980), the workaround is to expand the
+        port ranges when processing the target state to work with both docker
+        and podman. Note that a large port range (e.g. 8000-9000) this expansion
+        will create a large number of bindings.
+        This may create other problems but that's up to the user
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.19
+  title: ""
+  date: 2026-07-13T22:27:28.914Z
+- commits:
     - subject: Send WARN level errors to stdout
       hash: 5661591503f6afb947575743e1755b5e0a556f22
       body: |
