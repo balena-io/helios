@@ -66,7 +66,7 @@ async fn get_or_create_app<'a>(
 }
 
 /// Read the state of system
-#[instrument(name = "read_state", level = "debug", skip_all, err)]
+#[instrument(name = "read_state", level = "trace", skip_all, err)]
 pub async fn read(
     docker: &Docker,
     local_store: &DocumentStore,
