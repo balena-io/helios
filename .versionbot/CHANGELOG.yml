@@ -1,4 +1,44 @@
 - commits:
+    - subject: Make the default log level to `debug`
+      hash: 1e89e88d4161f94c67de24d1e73e9cde7b1f6db0
+      body: |
+        Given that only error logs will be shipped to the dashboard, this makes
+        the default log level to debug, to allow us to identify potential
+        implementation issues during the helios rollout
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make the `read_state` instrumentation level to `trace`
+      hash: a47a609cff2a6491e6abd6782e29c368238bfd0c
+      body: >
+        The instrumentation doesn't provide useful information. It's important
+
+        to log when the call fails as it may indicate an implementation error,
+        but
+
+        there is no need to log every time the method is called
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Log response status code for get/patch requests
+      hash: 3651a5cb30955ca2b582e0e83b4ed36f5335997c
+      body: |
+        This adds the response code in the debug logging. The code allows to
+        understand the result of a request and trace it back to its
+        consequences.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.20
+  title: ""
+  date: 2026-07-15T19:56:37.268Z
+- commits:
     - subject: Expand port ranges to work with both Docker and Podman
       hash: 549d57308a3dbcdb5bc0cec0938b48bbf1dc27a2
       body: |
