@@ -217,7 +217,7 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         svc.composition
             .labels
             .get("io.balena.image.class")
-            .map(|value| value == "hostapp")
+            .filter(|value| *value == "hostapp")
             .is_some()
     }) else {
         return Err(ParseAppError::Reject(RejectedApp {
@@ -1032,6 +1032,67 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_host_os_without_a_hostapp() {
+        // use a target from a real hostapp to test
+        let json = json!({
+            "ea8013b1a82540b59bc8b109b45739ab": {
+                "id": 3,
+                "name": "generic-aarch64",
+                "is_host": true,
+                "class": "app",
+                "releases": {
+                    "c8b48659434e80a8b3adc0c5ad1e347a": {
+                        "id": 7,
+                        "services": {
+                            "kernel-modules-raspberrypi4-64": {
+                                "id": 161253,
+                                "image_id": 272022,
+                                "image": "registry2.balena-staging.com/v2/c247ccd6279ed8f95186da0cf9adea3b@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
+                                "environment": {
+                                    "RUST_LOG": "helios=trace,helios_store=warn"
+                                },
+                                "labels": {
+                                    "io.balena.image.store": "data",
+                                    "io.balena.image.class": "overlay",
+                                    "io.balena.image.requires-reboot": "1",
+                                    "io.balena.private.updater": "registry2.balena-staging.com/v2/68ff092bda139454aabb0ee7a35b5b77@sha256:bf179e26ac91ed7b6723473a1bf239726225def236e9bdbac20350a3e8fe4778"
+                                },
+                                "composition": {
+                                    "image": "registry2.balena-staging.com/v2/4e43af0b349df81da7fd9bbd0a44b4b7@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
+                                    "labels": {
+                                        "io.balena.image.class": "overlay",
+                                        "io.balena.image.store": "data",
+                                        "io.balena.image.requires-reboot": "1"
+                                    },
+                                    "profiles": [
+                                        "kernel-modules-raspberrypi4-64"
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        });
+
+        let apps: AppMap = serde_json::from_value(json).unwrap();
+        assert_eq!(apps.len(), 1);
+
+        let app = apps
+            .get(&"ea8013b1a82540b59bc8b109b45739ab".into())
+            .unwrap();
+
+        if let App::Rejected(rejected_app) = app {
+            assert_eq!(
+                rejected_app.reason,
+                "hostapp should have a service with `io.balena.image.class=hostapp` label",
+            );
+        } else {
+            panic!("expected hostapp to be rejected");
+        }
+    }
+
+    #[test]
     fn test_accepts_hostapp_target() {
         // use a target from a real hostapp to test
         let json = json!({
@@ -1044,6 +1105,31 @@ mod tests {
                     "c8b48659434e80a8b3adc0c5ad1e347a": {
                         "id": 7,
                         "services": {
+                            "kernel-modules-raspberrypi4-64": {
+                                "id": 161253,
+                                "image_id": 272022,
+                                "image": "registry2.balena-staging.com/v2/c247ccd6279ed8f95186da0cf9adea3b@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
+                                "environment": {
+                                    "RUST_LOG": "helios=trace,helios_store=warn"
+                                },
+                                "labels": {
+                                    "io.balena.image.store": "data",
+                                    "io.balena.image.class": "overlay",
+                                    "io.balena.image.requires-reboot": "1",
+                                    "io.balena.private.updater": "registry2.balena-staging.com/v2/68ff092bda139454aabb0ee7a35b5b77@sha256:bf179e26ac91ed7b6723473a1bf239726225def236e9bdbac20350a3e8fe4778"
+                                },
+                                "composition": {
+                                    "image": "registry2.balena-staging.com/v2/4e43af0b349df81da7fd9bbd0a44b4b7@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
+                                    "labels": {
+                                        "io.balena.image.class": "overlay",
+                                        "io.balena.image.store": "data",
+                                        "io.balena.image.requires-reboot": "1"
+                                    },
+                                    "profiles": [
+                                        "kernel-modules-raspberrypi4-64"
+                                    ]
+                                }
+                            },
                             "hostapp": {
                                 "id": 3,
                                 "image_id": 4,
@@ -1066,7 +1152,7 @@ mod tests {
                         }
                     }
                 }
-        }
+            }
         });
 
         let apps: AppMap = serde_json::from_value(json).unwrap();
@@ -1081,6 +1167,8 @@ mod tests {
                 hostapp.release_uuid,
                 "c8b48659434e80a8b3adc0c5ad1e347a".into()
             );
+        } else if let App::Rejected(rejected_app) = app {
+            panic!("expected hostapp got rejection {}", rejected_app.reason);
         } else {
             panic!("expected hostapp");
         }
