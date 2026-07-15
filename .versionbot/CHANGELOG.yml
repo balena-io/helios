@@ -1,4 +1,26 @@
 - commits:
+    - subject: Fix hostapp filtering
+      hash: 7bcf687fb4da9d6816a123f916e6ef57b56a4af1
+      body: >
+        A bug in the target state filtering of the hostapp was only checking for
+        the
+
+        existence of a io.balena.image.class label and not actually checking
+
+        correctly for the value of the label. This was causing that host OS apps
+
+        with extensions would sometimes get rejected due to the non
+
+        deterministic iteration order produced by HashMap.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.21
+  title: ""
+  date: 2026-07-15T23:54:53.929Z
+- commits:
     - subject: Make the default log level to `debug`
       hash: 1e89e88d4161f94c67de24d1e73e9cde7b1f6db0
       body: |
