@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use bollard::{
     config::{
@@ -1367,10 +1367,9 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<Mount>,
 
-    /// Published container ports. Serialized as compose short-syntax strings;
-    /// the set keeps the serialized form deterministic and deduplicated.
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub ports: BTreeSet<PortMapping>,
+    /// Published container ports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<PortMapping>,
 
     /// Container healthcheck. `None` means defer to the image's HEALTHCHECK
     pub healthcheck: Option<Healthcheck>,
@@ -1581,6 +1580,7 @@ impl<N: Namespace> LocalContainer<N> {
 mod tests {
     use super::*;
     use bollard::models::{HostConfig, Mount as EngineMount};
+    use pretty_assertions::assert_eq;
 
     fn vol_mount(target: &str, source: &str) -> EngineMount {
         EngineMount {
@@ -1726,7 +1726,7 @@ mod tests {
     #[test]
     fn container_create_body_emits_ports() {
         let cfg = ContainerConfig {
-            ports: BTreeSet::from([
+            ports: Vec::from([
                 "8080:80".parse().unwrap(),
                 "127.0.0.1:8081:80".parse().unwrap(),
                 "53:53/udp".parse().unwrap(),
@@ -1793,15 +1793,17 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.config.ports, BTreeSet::from(["8080:80".parse().unwrap()]));
+        assert_eq!(c.config.ports, Vec::from(["8080:80".parse().unwrap()]));
     }
 
     #[test]
     fn ports_round_trip_through_create_and_inspect() {
-        let ports: BTreeSet<PortMapping> = BTreeSet::from([
+        // In canonical order (sorted by container port then protocol), so the
+        // round trip through create and inspect is the identity.
+        let ports = Vec::from([
+            "53:53/udp".parse().unwrap(),
             "8080:80".parse().unwrap(),
             "127.0.0.1:8081:80".parse().unwrap(),
-            "53:53/udp".parse().unwrap(),
             "443".parse().unwrap(),
             "8000:3000".parse().unwrap(),
         ]);

@@ -15,7 +15,7 @@ use std::fmt;
 use std::net::IpAddr;
 
 /// Transport protocol of a published port.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PortProtocol {
     #[default]
     Tcp,
@@ -33,15 +33,16 @@ impl PortProtocol {
 }
 
 /// A single published container port, after range expansion.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PortMapping {
     /// Container port
     pub target: u16,
+    /// Port protocol
+    pub protocol: PortProtocol,
     /// Host port. `None` publishes to an ephemeral port.
     pub published: Option<u16>,
     /// Host IP to bind to. `None` binds to all interfaces.
     pub host_ip: Option<String>,
-    pub protocol: PortProtocol,
 }
 
 /// Service port mapping set. Ordering carries no meaning, so mappings are
@@ -188,6 +189,12 @@ impl<'de> Deserialize<'de> for Ports {
         for entry in raw {
             ports.extend(parse_raw_port(entry).map_err(serde::de::Error::custom)?);
         }
+
+        // Canonicalize order and drop duplicates so the result is stable
+        // against reorderings in the remote composition.
+        ports.sort();
+        ports.dedup();
+
         Ok(Ports(ports))
     }
 }
@@ -409,11 +416,12 @@ mod tests {
     #[test]
     fn short_form_with_protocol() {
         let p = ports(json!(["6060:6060/udp", "1234:1234/tcp"]));
+        // Canonicalized by container port: 1234 sorts before 6060.
         assert_eq!(
             p.0,
             Vec::from([
-                mapping(6060, Some(6060), None, PortProtocol::Udp),
                 mapping(1234, Some(1234), None, PortProtocol::Tcp),
+                mapping(6060, Some(6060), None, PortProtocol::Udp),
             ])
         );
     }
@@ -628,5 +636,17 @@ mod tests {
     fn empty_default() {
         let p = ports(json!([]));
         assert!(p.is_empty());
+    }
+
+    #[test]
+    fn duplicate_mappings_are_deduplicated() {
+        let p = ports(json!(["8080:80", "8080:80", "8080:80/udp"]));
+        assert_eq!(
+            p.0,
+            Vec::from([
+                mapping(80, Some(8080), None, PortProtocol::Tcp),
+                mapping(80, Some(8080), None, PortProtocol::Udp),
+            ])
+        );
     }
 }

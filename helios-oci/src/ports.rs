@@ -1,13 +1,10 @@
 //! Container port publishing configuration (Compose `ports`).
 //!
 //! A [`PortMapping`] holds a single container (target) port using the Compose
-//! long-syntax fields, but serializes as the canonical short-syntax string
-//! `[HOST_IP:][HOST_PORT:]CONTAINER_PORT/PROTOCOL` (protocol always explicit)
-//! so ports stay readable in serialized state. Mappings are kept in a
-//! `BTreeSet` since port order carries no meaning; the set guarantees a
+//! long-syntax fields. Port order carries no meaning,
+//! so mappings are kept sorted by container port then protocol to guarantee a
 //! deterministic serialized form for state comparison.
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -50,22 +47,20 @@ impl FromStr for PortProtocol {
 }
 
 /// A single published container port.
-///
-/// Field declaration order doubles as the derived `Ord` sort key, which
-/// determines the serialized order within a config's port set.
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PortMapping {
     /// Container port
     pub target: u16,
+    /// Port protocol (tcp/udp)
+    #[serde(default)]
+    pub protocol: PortProtocol,
     /// Host port. `None` publishes to an ephemeral port.
     #[serde(default)]
     pub published: Option<u16>,
     /// Host IP to bind to. `None` binds to all interfaces.
     #[serde(default)]
     pub host_ip: Option<String>,
-    #[serde(default)]
-    pub protocol: PortProtocol,
 }
 
 impl PortMapping {
@@ -171,7 +166,7 @@ fn parse_host_ip(s: &str) -> std::result::Result<String, String> {
 /// Build the engine `ExposedPorts` keys and `HostConfig.PortBindings` map
 /// for a container create request. Multiple mappings of the same container
 /// port/protocol are grouped into a single binding list.
-pub(crate) fn to_oci_port_maps(ports: BTreeSet<PortMapping>) -> (Vec<String>, PortMap) {
+pub(crate) fn to_oci_port_maps(ports: Vec<PortMapping>) -> (Vec<String>, PortMap) {
     let mut bindings = PortMap::new();
     for mapping in ports {
         bindings
@@ -189,18 +184,16 @@ pub(crate) fn to_oci_port_maps(ports: BTreeSet<PortMapping>) -> (Vec<String>, Po
 }
 
 /// Read port mappings back from the engine's `HostConfig.PortBindings`,
-/// normalizing an unset host IP/port to absent. This considers both an empty host/IP
-/// or `0.0.0.0` to mean `bind all interfaces` so that gets converted to `None`.
-/// This is to work with different engines
-pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
-    let mut ports = BTreeSet::new();
+/// normalizing empty-string host IP/port (the engine's "unset") to absent.
+pub(crate) fn from_oci_port_map(map: PortMap) -> Result<Vec<PortMapping>> {
+    let mut ports = Vec::new();
     for (key, bindings) in map {
         let (target, protocol) = parse_engine_key(&key)
             .map_err(|e| Error::other(format!("invalid engine port binding `{key}`: {e}")))?;
 
         let bindings = bindings.unwrap_or_default();
         if bindings.is_empty() {
-            ports.insert(PortMapping {
+            ports.push(PortMapping {
                 target,
                 published: None,
                 host_ip: None,
@@ -215,7 +208,7 @@ pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
                 .filter(|ip| !ip.is_empty() && ip != "0.0.0.0");
             match binding.host_port.filter(|port| !port.is_empty()) {
                 None => {
-                    ports.insert(PortMapping {
+                    ports.push(PortMapping {
                         target,
                         published: None,
                         host_ip,
@@ -229,7 +222,7 @@ pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
                         Error::other(format!("invalid engine port binding `{key}`: {e}"))
                     })?;
                     for host_port in published {
-                        ports.insert(PortMapping {
+                        ports.push(PortMapping {
                             target,
                             published: Some(host_port),
                             host_ip: host_ip.clone(),
@@ -240,6 +233,10 @@ pub(crate) fn from_oci_port_map(map: PortMap) -> Result<BTreeSet<PortMapping>> {
             }
         }
     }
+    // `PortMap` is a hash map, so iteration order is unstable. Sort
+    // after the fact to match the canonical order the target state uses,
+    // so a reordering never triggers reconfiguration.
+    ports.sort();
     Ok(ports)
 }
 
@@ -324,7 +321,7 @@ mod tests {
 
     #[test]
     fn to_engine_port_maps_groups_by_container_port() {
-        let ports = BTreeSet::from([
+        let ports = Vec::from([
             mapping("8080:80"),
             mapping("127.0.0.1:8081:80"),
             mapping("53:53/udp"),
@@ -364,10 +361,7 @@ mod tests {
                 host_port: Some("".to_string()),
             }]),
         )]);
-        assert_eq!(
-            from_oci_port_map(map).unwrap(),
-            BTreeSet::from([mapping("80")])
-        );
+        assert_eq!(from_oci_port_map(map).unwrap(), Vec::from([mapping("80")]));
     }
 
     #[test]
@@ -383,7 +377,7 @@ mod tests {
         )]);
         assert_eq!(
             from_oci_port_map(map).unwrap(),
-            BTreeSet::from([mapping("8080:80")])
+            Vec::from([mapping("8080:80")])
         );
     }
 
@@ -399,7 +393,7 @@ mod tests {
         )]);
         assert_eq!(
             from_oci_port_map(map).unwrap(),
-            BTreeSet::from([mapping("8000:80"), mapping("8001:80"), mapping("8002:80"),])
+            Vec::from([mapping("8000:80"), mapping("8001:80"), mapping("8002:80"),])
         );
     }
 
@@ -409,16 +403,18 @@ mod tests {
         let map = PortMap::from([("80/udp".to_string(), None)]);
         assert_eq!(
             from_oci_port_map(map).unwrap(),
-            BTreeSet::from([mapping("80/udp")])
+            Vec::from([mapping("80/udp")])
         );
     }
 
     #[test]
     fn engine_round_trip() {
-        let ports = BTreeSet::from([
+        // In canonical order (sorted by container port then protocol), so the
+        // round trip through the engine representation is the identity.
+        let ports = Vec::from([
+            mapping("53:53/udp"),
             mapping("8080:80"),
             mapping("127.0.0.1:8081:80"),
-            mapping("53:53/udp"),
             mapping("443"),
             mapping("9000:3000"),
         ]);
