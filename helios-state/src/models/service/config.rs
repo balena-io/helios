@@ -11,6 +11,7 @@ use crate::oci::{self, LocalNamespace, Mount, Namespace};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
+const LABEL_CONFIG_ANNOTATIONS: &str = "io.balena.private.config.annotations";
 const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
@@ -130,6 +131,15 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         config
             .environment
             .retain(|k, _| label_config_env.contains(k));
+
+        // Retain only annotations that were defined in the composition.
+        let label_config_annotations: Vec<String> = labels
+            .remove(LABEL_CONFIG_ANNOTATIONS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+        config
+            .annotations
+            .retain(|k, _| label_config_annotations.contains(k));
 
         // De-namespace network names by stripping the app_uuid suffix
         if let Some(app_uuid) = maybe_app_uuid {
@@ -260,6 +270,18 @@ impl ServiceConfig {
         labels.insert(
             LABEL_CONFIG_ENV.to_string(),
             label_config_env_value.to_string(),
+        );
+
+        // Store composition-defined annotation keys so engine-added
+        // annotations can be dropped when reading the container state
+        let label_config_annotations_value = config
+            .annotations
+            .keys()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+        labels.insert(
+            LABEL_CONFIG_ANNOTATIONS.to_string(),
+            label_config_annotations_value.to_string(),
         );
 
         // add BALENA_ env vars that are tied to the container lifetime
@@ -445,6 +467,39 @@ mod tests {
         assert_eq!(svc.stop_signal, None);
         assert_eq!(svc.user, None);
         assert_eq!(svc.working_dir, None);
+    }
+
+    #[test]
+    fn preserves_annotations_across_round_trip() {
+        let original = oci::ContainerConfig {
+            annotations: HashMap::from([("com.example.foo".to_string(), "bar".to_string())]),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+
+        // Simulate the engine attaching its own annotations to the container
+        with_labels.annotations.insert(
+            "io.podman.annotations.autoremove".to_string(),
+            "FALSE".to_string(),
+        );
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.annotations, original.annotations);
+    }
+
+    #[test]
+    fn drops_engine_added_annotations_when_none_defined() {
+        // Without a composition-defined annotation the tracking label is an
+        // empty list, so engine-added annotations are dropped on read
+        let svc = ServiceConfig(oci::ContainerConfig::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid());
+        with_labels
+            .annotations
+            .insert("io.container.manager".to_string(), "libpod".to_string());
+
+        let back = ServiceConfig::from(with_labels);
+        assert!(back.annotations.is_empty());
     }
 
     #[test]
