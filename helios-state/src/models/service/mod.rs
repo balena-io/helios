@@ -271,6 +271,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 cap_drop: composition.cap_drop.unwrap_or_default(),
                 group_add: composition.group_add.unwrap_or_default(),
                 security_opt: composition.security_opt.unwrap_or_default(),
+                device_cgroup_rules: composition.device_cgroup_rules.unwrap_or_default(),
                 devices: composition
                     .devices
                     .unwrap_or_default()

@@ -88,6 +88,11 @@ pub struct ServiceComposition {
     #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
 
+    /// Cgroup device whitelist rules to add for the container, in the Linux
+    /// kernel format (e.g. `c 1:3 mr`).
+    #[serde(default)]
+    pub device_cgroup_rules: Option<Vec<String>>,
+
     /// Host devices to map into the container. Only host path mappings are
     /// supported; CDI syntax is rejected.
     #[serde(default, deserialize_with = "deserialize_devices_sorted")]
@@ -934,6 +939,24 @@ mod tests {
         assert_eq!(
             comp.group_add,
             Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_device_cgroup_rules_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.device_cgroup_rules, None);
+    }
+
+    #[test]
+    fn composition_device_cgroup_rules_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "device_cgroup_rules": ["c 1:3 mr", "a 7:* rmw"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.device_cgroup_rules,
+            Some(vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()])
         );
     }
 

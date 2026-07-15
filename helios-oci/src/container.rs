@@ -369,6 +369,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.security_opt.take())
             .unwrap_or_default();
+        let device_cgroup_rules = host_config
+            .as_mut()
+            .and_then(|hc| hc.device_cgroup_rules.take())
+            .unwrap_or_default();
         let mut devices: Vec<DeviceMapping> = host_config
             .as_mut()
             .and_then(|hc| hc.devices.take())
@@ -576,6 +580,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cap_drop,
             group_add,
             security_opt,
+            device_cgroup_rules,
             devices,
             dns,
             dns_opt,
@@ -1304,6 +1309,10 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub security_opt: Vec<String>,
 
+    /// Cgroup device whitelist rules added for the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub device_cgroup_rules: Vec<String>,
+
     /// Host devices mapped into the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub devices: Vec<DeviceMapping>,
@@ -1448,6 +1457,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop,
             group_add,
             security_opt,
+            device_cgroup_rules,
             devices,
             dns,
             dns_opt,
@@ -1561,6 +1571,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
             group_add: (!group_add.is_empty()).then_some(group_add),
             security_opt: (!security_opt.is_empty()).then_some(security_opt),
+            device_cgroup_rules: (!device_cgroup_rules.is_empty()).then_some(device_cgroup_rules),
             devices: (!devices.is_empty()).then(|| devices.into_iter().map(Into::into).collect()),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
@@ -2363,6 +2374,45 @@ mod tests {
         // An empty set should not emit Devices on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().devices, None);
+    }
+
+    #[test]
+    fn inspect_reads_device_cgroup_rules() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                device_cgroup_rules: Some(vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.device_cgroup_rules,
+            vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_device_cgroup_rules() {
+        let cfg = ContainerConfig {
+            device_cgroup_rules: vec!["c 1:3 mr".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.device_cgroup_rules, Some(vec!["c 1:3 mr".to_string()]));
+
+        // An empty list should not emit DeviceCgroupRules on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().device_cgroup_rules, None);
     }
 
     #[test]
