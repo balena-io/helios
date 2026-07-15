@@ -217,7 +217,7 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         svc.composition
             .labels
             .get("io.balena.image.class")
-            .map(|value| value == "hostapp")
+            .filter(|value| *value == "hostapp")
             .is_some()
     }) else {
         return Err(ParseAppError::Reject(RejectedApp {
