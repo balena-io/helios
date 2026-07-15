@@ -44,7 +44,7 @@ fn initialize_tracing() {
                 EnvFilter::default()
                     .add_directive("warn".parse().unwrap())
                     .add_directive("mahler=info".parse().unwrap())
-                    .add_directive("helios=info".parse().unwrap()),
+                    .add_directive("helios=debug".parse().unwrap()),
             ),
         )
         .with(

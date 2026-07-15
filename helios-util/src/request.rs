@@ -82,6 +82,16 @@ impl From<TryPatchError> for PatchError {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TryGetResponse {
+    /// the return status code for the request
+    status: StatusCode,
+    /// The JSON response body. None if the response was empty or for 304 Not Modified responses.
+    value: Option<serde_json::Value>,
+    /// Whether the response was modified (false for 304 Not Modified responses).
+    modified: bool,
+}
+
 /// HTTP GET response containing the parsed JSON body and modification status.
 #[derive(Debug, Clone)]
 pub struct GetResponse {
@@ -89,6 +99,15 @@ pub struct GetResponse {
     pub value: Option<serde_json::Value>,
     /// Whether the response was modified (false for 304 Not Modified responses).
     pub modified: bool,
+}
+
+impl From<TryGetResponse> for GetResponse {
+    fn from(res: TryGetResponse) -> Self {
+        let TryGetResponse {
+            value, modified, ..
+        } = res;
+        Self { value, modified }
+    }
 }
 
 /// Cache entry for storing etag and value pairs
@@ -400,7 +419,7 @@ impl Get {
     }
 
     #[instrument(level = "trace", skip_all, fields(response=field::Empty) err(level="warn"))]
-    async fn try_get(&mut self) -> Result<GetResponse, TryGetError> {
+    async fn try_get(&mut self) -> Result<TryGetResponse, TryGetError> {
         self.state.wait_for_rate_limit().await;
 
         // Reset the interval in case the future gets dropped before a response
@@ -458,14 +477,16 @@ impl Get {
                 }
                 self.state.record_success();
 
-                Ok(GetResponse {
+                Ok(TryGetResponse {
+                    status,
                     value: Some(json),
                     modified: true,
                 })
             }
             StatusCode::NOT_MODIFIED => {
                 self.state.record_success();
-                Ok(GetResponse {
+                Ok(TryGetResponse {
+                    status,
                     value: self.cached.clone(),
                     modified: false,
                 })
@@ -517,8 +538,9 @@ impl Get {
     ///     println!("Cached data: {:?}", response.value);
     /// }
     /// ```
-    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty))]
+    #[instrument(level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty, status_code=field::Empty))]
     pub async fn get(&mut self, interrupt: Option<Interrupt>) -> Result<GetResponse, GetError> {
+        let span = Span::current();
         let interrupt = interrupt.unwrap_or_default();
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
@@ -527,16 +549,17 @@ impl Get {
             let result = tokio::select! {
                 res = self.try_get() => res,
                 _ = interrupt.wait() => {
-                    Span::current().record("cancelled", true);
+                    span.record("cancelled", true);
                     return Err(GetError::Cancelled)
                 }
             };
 
             match result {
                 Ok(response) => {
-                    Span::current().record("retries", tries - 1);
-                    Span::current().record("success_rate", self.metrics().success_rate());
-                    return Ok(response);
+                    span.record("status_code", response.status.as_u16());
+                    span.record("retries", tries - 1);
+                    span.record("success_rate", self.metrics().success_rate());
+                    return Ok(response.into());
                 }
                 Err(TryGetError::WillRetry(_, _)) => {
                     tries += 1;
@@ -618,12 +641,13 @@ impl Patch {
     /// let result = client.patch(json!({"status": "running"}), None).await?;
     /// println!("Patch succeeded");
     /// ```
-    #[instrument(name = "patch", level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty))]
+    #[instrument(name = "patch", level="debug", skip_all, fields(retries=field::Empty, success_rate=field::Empty, cancelled=field::Empty, status_code=field::Empty))]
     pub async fn patch(
         &mut self,
         new_state: serde_json::Value,
         interrupt: Option<Interrupt>,
     ) -> Result<PatchResponse, PatchError> {
+        let span = Span::current();
         let interrupt = interrupt.unwrap_or_default();
         // re-set the back off in case the last request was dropped
         self.state.reset_backoff();
@@ -632,15 +656,16 @@ impl Patch {
             let result = tokio::select! {
                 res = Self::try_patch(&mut self.state, new_state.clone()) => res,
                 _ = interrupt.wait() => {
-                    Span::current().record("cancelled", true);
+                    span.record("cancelled", true);
                     return Err(PatchError::Cancelled)
                 }
             };
 
             match result {
-                Ok(_status) => {
-                    Span::current().record("retries", tries - 1);
-                    Span::current().record("success_rate", self.metrics().success_rate());
+                Ok(status) => {
+                    span.record("status_code", status.as_u16());
+                    span.record("retries", tries - 1);
+                    span.record("success_rate", self.metrics().success_rate());
                     return Ok(());
                 }
                 Err(TryPatchError::WillRetry(_, _)) => {
