@@ -8,6 +8,7 @@ use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
 mod command;
+mod devices;
 mod healthcheck;
 mod network_mode;
 mod networks;
@@ -17,6 +18,7 @@ mod volumes;
 
 pub use cgroup::*;
 pub use command::*;
+pub use devices::*;
 pub use healthcheck::*;
 pub use network_mode::*;
 pub use networks::*;
@@ -85,6 +87,11 @@ pub struct ServiceComposition {
     /// the engine takes nano_cpus and would otherwise saturate silently.
     #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
+
+    /// Host devices to map into the container. Only host path mappings are
+    /// supported; CDI syntax is rejected.
+    #[serde(default, deserialize_with = "deserialize_devices_sorted")]
+    pub devices: Option<Vec<DeviceMapping>>,
 
     /// Custom DNS servers, single string or list.
     #[serde(default, deserialize_with = "deserialize_string_or_list")]
@@ -249,6 +256,21 @@ where
         })
         .transpose()
         .map_err(serde::de::Error::custom)
+}
+
+// Deserialize a device mapping list, sorting by target
+fn deserialize_devices_sorted<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<DeviceMapping>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut maybe_devices = Option::<Vec<DeviceMapping>>::deserialize(deserializer)?;
+    if let Some(devices) = maybe_devices.as_mut() {
+        devices.sort_by(|a, b| a.target.cmp(&b.target));
+    }
+
+    Ok(maybe_devices)
 }
 
 /// Deserialize a Compose `string_or_list` value (such as `dns` or
@@ -912,6 +934,47 @@ mod tests {
         assert_eq!(
             comp.group_add,
             Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_devices_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.devices, None);
+    }
+
+    #[test]
+    fn composition_devices_accepts_mappings_and_resolves_defaults() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "devices": ["/dev/ttyUSB0:/dev/ttyUSB0", "/dev/sda:/dev/xvda:rw"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.devices,
+            Some(vec![
+                DeviceMapping {
+                    source: "/dev/ttyUSB0".to_string(),
+                    target: "/dev/ttyUSB0".to_string(),
+                    permissions: "rwm".to_string(),
+                },
+                DeviceMapping {
+                    source: "/dev/sda".to_string(),
+                    target: "/dev/xvda".to_string(),
+                    permissions: "rw".to_string(),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn composition_devices_rejects_cdi_syntax() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "devices": ["vendor1.com/device=gpu"],
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("CDI syntax is not yet supported"),
+            "{err}"
         );
     }
 

@@ -369,6 +369,16 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.security_opt.take())
             .unwrap_or_default();
+        let mut devices: Vec<DeviceMapping> = host_config
+            .as_mut()
+            .and_then(|hc| hc.devices.take())
+            .unwrap_or_default()
+            .into_iter()
+            .map(DeviceMapping::from)
+            .collect();
+        // Sort by target so the serialized form is stable regardless of the
+        // order the engine reports the devices in (see the volumes sort below).
+        devices.sort_by(|a, b| a.target.cmp(&b.target));
         let dns = host_config
             .as_mut()
             .and_then(|hc| hc.dns.take())
@@ -566,6 +576,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cap_drop,
             group_add,
             security_opt,
+            devices,
             dns,
             dns_opt,
             dns_search,
@@ -1205,6 +1216,49 @@ impl TryFrom<bollard::models::Mount> for Mount {
     }
 }
 
+/// A host device mapped into the container
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceMapping {
+    /// Path of the device on the host
+    pub source: String,
+    /// Path of the device inside the container
+    pub target: String,
+    /// Cgroup permissions for the device (combination of `r`, `w` and `m`)
+    pub permissions: String,
+}
+
+impl From<DeviceMapping> for bollard::models::DeviceMapping {
+    fn from(value: DeviceMapping) -> Self {
+        Self {
+            path_on_host: Some(value.source),
+            path_in_container: Some(value.target),
+            cgroup_permissions: Some(value.permissions),
+        }
+    }
+}
+
+impl From<bollard::models::DeviceMapping> for DeviceMapping {
+    fn from(value: bollard::models::DeviceMapping) -> Self {
+        let source = value.path_on_host.unwrap_or_default();
+        // Normalize the engine defaults for containers created by other
+        // tooling: an unset container path means the host path and unset
+        // permissions mean `rwm`.
+        let target = value
+            .path_in_container
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| source.clone());
+        let permissions = value
+            .cgroup_permissions
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "rwm".to_string());
+        Self {
+            source,
+            target,
+            permissions,
+        }
+    }
+}
+
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -1249,6 +1303,10 @@ pub struct ContainerConfig {
     /// Security options applied to the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub security_opt: Vec<String>,
+
+    /// Host devices mapped into the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<DeviceMapping>,
 
     /// Custom DNS servers for the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1390,6 +1448,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop,
             group_add,
             security_opt,
+            devices,
             dns,
             dns_opt,
             dns_search,
@@ -1502,6 +1561,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
             group_add: (!group_add.is_empty()).then_some(group_add),
             security_opt: (!security_opt.is_empty()).then_some(security_opt),
+            devices: (!devices.is_empty()).then(|| devices.into_iter().map(Into::into).collect()),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
             dns_search: (!dns_search.is_empty()).then_some(dns_search),
@@ -2233,6 +2293,76 @@ mod tests {
         // Empty list should not emit GroupAdd on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().group_add, None);
+    }
+
+    fn device(source: &str, target: &str, permissions: &str) -> DeviceMapping {
+        DeviceMapping {
+            source: source.to_string(),
+            target: target.to_string(),
+            permissions: permissions.to_string(),
+        }
+    }
+
+    #[test]
+    fn inspect_reads_devices_and_normalizes_engine_defaults() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                devices: Some(vec![
+                    bollard::models::DeviceMapping {
+                        path_on_host: Some("/dev/ttyUSB0".to_string()),
+                        path_in_container: Some("/dev/ttyUSB1".to_string()),
+                        cgroup_permissions: Some("rw".to_string()),
+                    },
+                    // unset container path and permissions fall back to the
+                    // host path and `rwm`
+                    bollard::models::DeviceMapping {
+                        path_on_host: Some("/dev/sda".to_string()),
+                        path_in_container: Some("".to_string()),
+                        cgroup_permissions: None,
+                    },
+                ]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.devices,
+            vec![
+                device("/dev/sda", "/dev/sda", "rwm"),
+                device("/dev/ttyUSB0", "/dev/ttyUSB1", "rw"),
+            ]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_devices() {
+        let cfg = ContainerConfig {
+            devices: vec![device("/dev/ttyUSB0", "/dev/ttyUSB0", "rwm")],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.devices,
+            Some(vec![bollard::models::DeviceMapping {
+                path_on_host: Some("/dev/ttyUSB0".to_string()),
+                path_in_container: Some("/dev/ttyUSB0".to_string()),
+                cgroup_permissions: Some("rwm".to_string()),
+            }])
+        );
+
+        // An empty set should not emit Devices on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().devices, None);
     }
 
     #[test]
