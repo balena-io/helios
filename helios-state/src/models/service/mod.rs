@@ -6,13 +6,13 @@ use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck,
     LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
-    Ulimit,
+    TmpfsOptions, Ulimit,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
     DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
     PortProtocol as RemotePortProtocol, RestartPolicy as RemoteRestartPolicy,
-    Service as RemoteServiceTarget,
+    Service as RemoteServiceTarget, TmpfsOptions as RemoteTmpfsOptions,
 };
 
 use super::image::ImageRef;
@@ -291,6 +291,14 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
                 sysctls: composition.sysctls.unwrap_or_default(),
+                tmpfs: composition
+                    .tmpfs
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(path, RemoteTmpfsOptions { mode, uid, gid })| {
+                        (path, TmpfsOptions { mode, uid, gid })
+                    })
+                    .collect(),
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,

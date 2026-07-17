@@ -498,6 +498,13 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.uts_mode.take())
             .filter(|s| !s.is_empty());
+        let tmpfs: HashMap<String, TmpfsOptions> = host_config
+            .as_mut()
+            .and_then(|hc| hc.tmpfs.take())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(path, raw_options)| (path, TmpfsOptions::from_engine(&raw_options)))
+            .collect();
 
         // Legacy supervisor bind mounts are reported via `HostConfig.Binds` as
         // `source:target[:options]` strings, not in `HostConfig.Mounts`. Parse
@@ -605,6 +612,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             environment,
             extra_hosts,
             sysctls,
+            tmpfs,
             healthcheck,
             hostname,
             init,
@@ -1281,6 +1289,50 @@ impl From<bollard::models::DeviceMapping> for DeviceMapping {
     }
 }
 
+/// Recognized tmpfs mount options. Any other option reported by the engine
+/// (e.g. from a tmpfs set up by another tool) is ignored rather than
+/// rejected when reading container state back.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct TmpfsOptions {
+    /// File system permissions, as octal digits (e.g. `755`)
+    pub mode: Option<String>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+}
+
+impl TmpfsOptions {
+    fn from_engine(raw: &str) -> Self {
+        let mut opts = TmpfsOptions::default();
+        for token in raw.split(',') {
+            let Some((key, value)) = token.split_once('=') else {
+                continue;
+            };
+            match key {
+                "mode" => opts.mode = Some(value.to_string()),
+                "uid" => opts.uid = value.parse().ok(),
+                "gid" => opts.gid = value.parse().ok(),
+                _ => {}
+            }
+        }
+        opts
+    }
+}
+
+impl From<TmpfsOptions> for String {
+    /// Render as the engine's raw comma-separated mount options string.
+    fn from(value: TmpfsOptions) -> Self {
+        [
+            value.mode.map(|m| format!("mode={m}")),
+            value.uid.map(|u| format!("uid={u}")),
+            value.gid.map(|g| format!("gid={g}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+}
+
 /// A single resource limit override for a container. The limit name (e.g.
 /// `nofile`) is the key of the enclosing `ulimits` map.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1452,6 +1504,10 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub sysctls: HashMap<String, String>,
 
+    /// tmpfs mounts, keyed by container path.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub tmpfs: HashMap<String, TmpfsOptions>,
+
     /// Network endpoint configurations, ordered by connection priority.
     ///
     /// Mutually exclusive with `network_mode`.
@@ -1497,6 +1553,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             environment,
             extra_hosts,
             sysctls,
+            tmpfs,
             healthcheck,
             hostname,
             init,
@@ -1615,6 +1672,12 @@ impl From<ContainerConfig> for ContainerCreateBody {
                     .collect()
             }),
             sysctls: (!sysctls.is_empty()).then_some(sysctls),
+            tmpfs: (!tmpfs.is_empty()).then(|| {
+                tmpfs
+                    .into_iter()
+                    .map(|(path, options)| (path, options.into()))
+                    .collect()
+            }),
             init,
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
@@ -2457,6 +2520,105 @@ mod tests {
         // An empty list should not emit DeviceCgroupRules on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().device_cgroup_rules, None);
+    }
+
+    #[test]
+    fn inspect_reads_tmpfs() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                tmpfs: Some(HashMap::from([(
+                    "/run".to_string(),
+                    "mode=755,uid=1009,gid=1009".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.tmpfs,
+            HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: Some(1009),
+                    gid: Some(1009),
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn inspect_ignores_unrecognized_tmpfs_options() {
+        // Options outside `mode`/`uid`/`gid`, and unparsable values, are
+        // ignored rather than rejected: the tmpfs may have been set up by
+        // another tool.
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                tmpfs: Some(HashMap::from([(
+                    "/run".to_string(),
+                    "rw,noexec,mode=755,uid=notanumber".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.tmpfs,
+            HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: None,
+                    gid: None,
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_tmpfs() {
+        let cfg = ContainerConfig {
+            tmpfs: HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: Some(1009),
+                    gid: Some(1009),
+                },
+            )]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.tmpfs,
+            Some(HashMap::from([(
+                "/run".to_string(),
+                "mode=755,uid=1009,gid=1009".to_string()
+            )]))
+        );
+
+        // An empty map should not emit Tmpfs on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().tmpfs, None);
     }
 
     #[test]

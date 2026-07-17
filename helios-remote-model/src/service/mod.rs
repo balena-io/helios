@@ -14,6 +14,7 @@ mod network_mode;
 mod networks;
 mod ports;
 mod restart_policy;
+mod tmpfs;
 mod ulimits;
 mod volumes;
 
@@ -25,6 +26,7 @@ pub use network_mode::*;
 pub use networks::*;
 pub use ports::*;
 pub use restart_policy::*;
+pub use tmpfs::*;
 pub use ulimits::*;
 pub use volumes::*;
 
@@ -166,6 +168,10 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub stop_signal: Option<String>,
 
+    /// tmpfs mounts, single value or list, keyed by container path.
+    #[serde(default, deserialize_with = "deserialize_tmpfs")]
+    pub tmpfs: Option<HashMap<String, TmpfsOptions>>,
+
     #[serde(default)]
     pub tty: bool,
 
@@ -303,6 +309,25 @@ where
             StringOrList::List(list) => list,
         }),
     )
+}
+
+/// Deserialize Compose `tmpfs`: a single entry or a list, keyed by path.
+fn deserialize_tmpfs<'de, D>(
+    deserializer: D,
+) -> Result<Option<HashMap<String, TmpfsOptions>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(entries) = deserialize_string_or_list(deserializer)? else {
+        return Ok(None);
+    };
+
+    entries
+        .iter()
+        .map(|s| tmpfs::try_from_entry(s))
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 /// Deserialize Compose `extra_hosts` from a list of `host:ip`/`host=ip`
@@ -905,6 +930,66 @@ mod tests {
                 "dc2.example.com".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn composition_tmpfs_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.tmpfs, None);
+    }
+
+    #[test]
+    fn composition_tmpfs_accepts_single_string() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "tmpfs": "/run",
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.tmpfs,
+            Some(HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions::default()
+            )]))
+        );
+    }
+
+    #[test]
+    fn composition_tmpfs_accepts_list_with_and_without_options() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "tmpfs": ["/run", "/data:mode=755,uid=1009,gid=1009"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.tmpfs,
+            Some(HashMap::from([
+                ("/run".to_string(), TmpfsOptions::default()),
+                (
+                    "/data".to_string(),
+                    TmpfsOptions {
+                        mode: Some("755".to_string()),
+                        uid: Some(1009),
+                        gid: Some(1009),
+                    }
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_tmpfs_rejects_empty_path() {
+        let err =
+            serde_json::from_value::<ServiceComposition>(serde_json::json!({ "tmpfs": [":ro"] }))
+                .unwrap_err();
+        assert!(err.to_string().contains("path cannot be empty"));
+    }
+
+    #[test]
+    fn composition_tmpfs_rejects_unsupported_option() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "tmpfs": ["/run:size=100m"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported option"));
     }
 
     #[test]
