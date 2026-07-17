@@ -15,7 +15,7 @@ mod container;
 pub use container::{
     BindPropagation, Cgroup, Container, ContainerConfig, ContainerState, ContainerStatus,
     DeviceMapping, ExecOutput, Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings,
-    RestartPolicy,
+    RestartPolicy, Ulimit,
 };
 
 mod datetime;

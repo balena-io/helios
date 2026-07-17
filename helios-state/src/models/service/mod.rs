@@ -6,6 +6,7 @@ use crate::labels::LABEL_SERVICE_ID;
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck,
     LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
+    Ulimit,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
@@ -309,6 +310,20 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .unwrap_or(0),
                 oom_score_adj: composition.oom_score_adj,
                 pids_limit: composition.pids_limit,
+                ulimits: composition
+                    .ulimits
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, u)| {
+                        (
+                            name,
+                            Ulimit {
+                                soft: u.soft,
+                                hard: u.hard,
+                            },
+                        )
+                    })
+                    .collect(),
                 privileged: composition.privileged,
                 read_only: composition.read_only,
                 restart_policy,

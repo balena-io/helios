@@ -472,6 +472,22 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.oom_score_adj.take())
             .filter(|n| *n != 0);
         let pids_limit = host_config.as_mut().and_then(|hc| hc.pids_limit.take());
+        let ulimits = host_config
+            .as_mut()
+            .and_then(|hc| hc.ulimits.take())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|u| {
+                let name = u.name?;
+                Some((
+                    name,
+                    Ulimit {
+                        soft: u.soft.unwrap_or_default(),
+                        hard: u.hard.unwrap_or_default(),
+                    },
+                ))
+            })
+            .collect();
         let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
         let shm_size = host_config.as_mut().and_then(|hc| hc.shm_size.take());
         let userns_mode = host_config
@@ -598,6 +614,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             nano_cpus,
             oom_score_adj,
             pids_limit,
+            ulimits,
             privileged,
             read_only,
             restart_policy,
@@ -1264,6 +1281,16 @@ impl From<bollard::models::DeviceMapping> for DeviceMapping {
     }
 }
 
+/// A single resource limit override for a container. The limit name (e.g.
+/// `nofile`) is the key of the enclosing `ulimits` map.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Ulimit {
+    /// Soft limit, enforced by the kernel for the container's processes
+    pub soft: i64,
+    /// Hard limit, the ceiling the soft limit can be raised to
+    pub hard: i64,
+}
+
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -1411,6 +1438,10 @@ pub struct ContainerConfig {
     /// Maximum number of process IDs allowed in the container
     pub pids_limit: Option<i64>,
 
+    /// Ulimit overrides for the container, keyed by limit name (e.g. `nofile`).
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub ulimits: HashMap<String, Ulimit>,
+
     /// Extra entries added to the container's `/etc/hosts`, each in the
     /// engine's `host:ip` form.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -1475,6 +1506,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             nano_cpus,
             oom_score_adj,
             pids_limit,
+            ulimits,
             privileged,
             read_only,
             restart_policy,
@@ -1591,6 +1623,18 @@ impl From<ContainerConfig> for ContainerCreateBody {
             network_mode: host_network_mode,
             oom_score_adj,
             pids_limit,
+            ulimits: (!ulimits.is_empty()).then(|| {
+                ulimits
+                    .into_iter()
+                    .map(
+                        |(name, Ulimit { soft, hard })| bollard::models::ResourcesUlimits {
+                            name: Some(name),
+                            soft: Some(soft),
+                            hard: Some(hard),
+                        },
+                    )
+                    .collect()
+            }),
             port_bindings,
             privileged: Some(privileged),
             readonly_rootfs: Some(read_only),
@@ -2413,6 +2457,68 @@ mod tests {
         // An empty list should not emit DeviceCgroupRules on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().device_cgroup_rules, None);
+    }
+
+    #[test]
+    fn inspect_reads_ulimits() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                ulimits: Some(vec![bollard::models::ResourcesUlimits {
+                    name: Some("nofile".to_string()),
+                    soft: Some(20000),
+                    hard: Some(40000),
+                }]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.ulimits,
+            HashMap::from([(
+                "nofile".to_string(),
+                Ulimit {
+                    soft: 20000,
+                    hard: 40000
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_ulimits() {
+        let cfg = ContainerConfig {
+            ulimits: HashMap::from([(
+                "nofile".to_string(),
+                Ulimit {
+                    soft: 20000,
+                    hard: 40000,
+                },
+            )]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.ulimits,
+            Some(vec![bollard::models::ResourcesUlimits {
+                name: Some("nofile".to_string()),
+                soft: Some(20000),
+                hard: Some(40000),
+            }])
+        );
+
+        // An empty map should not emit Ulimits on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().ulimits, None);
     }
 
     #[test]

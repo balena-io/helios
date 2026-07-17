@@ -14,6 +14,7 @@ mod network_mode;
 mod networks;
 mod ports;
 mod restart_policy;
+mod ulimits;
 mod volumes;
 
 pub use cgroup::*;
@@ -24,6 +25,7 @@ pub use network_mode::*;
 pub use networks::*;
 pub use ports::*;
 pub use restart_policy::*;
+pub use ulimits::*;
 pub use volumes::*;
 
 use super::labels::Labels;
@@ -196,6 +198,10 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub pids_limit: Option<i64>,
+
+    /// Container ulimit overrides, keyed by limit name (e.g. `nofile`).
+    #[serde(default)]
+    pub ulimits: Option<HashMap<String, Ulimit>>,
 
     #[serde(default)]
     pub network_mode: Option<NetworkMode>,
@@ -998,6 +1004,42 @@ mod tests {
         assert!(
             err.to_string().contains("CDI syntax is not yet supported"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn composition_ulimits_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.ulimits, None);
+    }
+
+    #[test]
+    fn composition_ulimits_accepts_single_and_soft_hard() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "ulimits": {
+                "nproc": 65535,
+                "nofile": {"soft": 20000, "hard": 40000},
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.ulimits,
+            Some(HashMap::from([
+                (
+                    "nproc".to_string(),
+                    Ulimit {
+                        soft: 65535,
+                        hard: 65535
+                    }
+                ),
+                (
+                    "nofile".to_string(),
+                    Ulimit {
+                        soft: 20000,
+                        hard: 40000
+                    }
+                ),
+            ]))
         );
     }
 
