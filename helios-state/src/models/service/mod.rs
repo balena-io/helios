@@ -2,7 +2,6 @@ use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
 use crate::labels::LABEL_SERVICE_ID;
-use std::collections::BTreeSet;
 
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
@@ -229,9 +228,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             })
             .collect();
 
-        // Convert the published ports. Both sides are sets ordered by the
-        // same key, so the conversion preserves the canonical form.
-        let ports: BTreeSet<PortMapping> = composition
+        // Convert the published ports.
+        let ports = composition
             .ports
             .into_iter()
             .map(|p| PortMapping {

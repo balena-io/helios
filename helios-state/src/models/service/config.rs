@@ -475,10 +475,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig::from(inspected);
-        assert_eq!(
-            svc.ports,
-            ["8080:80".parse().unwrap()].into_iter().collect()
-        );
+        assert_eq!(svc.ports, Vec::from(["8080:80".parse().unwrap()]));
     }
 
     #[test]

@@ -696,15 +696,10 @@ mod tests {
         }))
         .unwrap();
         let ports: Vec<&PortMapping> = comp.ports.iter().collect();
+        // Canonicalized by container port then protocol: 53 < 443 < 8080.
         assert_eq!(
             ports,
             vec![
-                &PortMapping {
-                    target: 8080,
-                    published: None,
-                    host_ip: None,
-                    protocol: PortProtocol::Tcp,
-                },
                 &PortMapping {
                     target: 53,
                     published: Some(5353),
@@ -714,6 +709,12 @@ mod tests {
                 &PortMapping {
                     target: 443,
                     published: Some(8443),
+                    host_ip: None,
+                    protocol: PortProtocol::Tcp,
+                },
+                &PortMapping {
+                    target: 8080,
+                    published: None,
                     host_ip: None,
                     protocol: PortProtocol::Tcp,
                 },
