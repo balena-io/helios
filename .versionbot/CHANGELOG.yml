@@ -1,4 +1,22 @@
 - commits:
+    - subject: Store published ports as a sorted Vec instead of a BTreeSet
+      hash: fece8e95c3bb975d13430fe18cc6aa5d8ddff115
+      body: |
+        This simplifies the internal storage of ports to avoid the need for
+        additional data structures. Ports are now sorted during target state
+        validation and stored internally in the state as a Vec. They are also
+        sorted when reading them from the engine. This ensures round-trip
+        consistency, avoiding container recreation due to a port re-ordering on
+        input.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.22
+  title: ""
+  date: 2026-07-20T15:46:31.992Z
+- commits:
     - subject: Fix hostapp filtering
       hash: 7bcf687fb4da9d6816a123f916e6ef57b56a4af1
       body: >
