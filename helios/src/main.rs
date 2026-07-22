@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = match cli::parse() {
         cli::Applet::HeliosLegacyTakeover(args) => {
             let oci = oci::Client::connect().await?;
-            legacy::takeover(&oci, args.into()).await?;
+            legacy::takeover(&oci, args).await?;
             return Ok(());
         }
         cli::Applet::Helios(args) => args,

@@ -1,6 +1,9 @@
-use helios_oci::Client;
-use helios_util::systemd;
+use clap::Args;
 use tracing::{debug, info, instrument, warn};
+
+use crate::oci::Client;
+use crate::util::http::Uri;
+use crate::util::systemd;
 
 /// ES-module script (run via `node --input-type=module -e`) that idempotently
 /// points the legacy supervisor at helios by writing its `apiEndpointOverride`
@@ -31,13 +34,13 @@ console.log('true');
 const SUPERVISOR_NAMES: [&str; 2] = ["balena_supervisor", "resin_supervisor"];
 
 /// Override values written verbatim to the legacy supervisor's config DB.
-///
-/// Provided as input by the user
+#[derive(Clone, Debug, Args)]
 pub struct TakeoverConfig {
-    /// Written verbatim to the supervisor's `apiEndpointOverride`.
-    pub host_override: String,
-    /// Written verbatim to the supervisor's `listenPortOverride`; also the
-    /// idempotency key.
+    /// Api endpoint to write as the supervisor's `apiEndpointOverride`.
+    #[arg(long = "override-host", value_name = "url")]
+    pub host_override: Uri,
+    /// Port configuration to write as the supervisor's `listenPortOverride`.
+    #[arg(long = "override-port", value_name = "port")]
     pub port_override: u16,
 }
 
