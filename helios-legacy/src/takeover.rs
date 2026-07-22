@@ -10,19 +10,25 @@ use tracing::{debug, info, instrument, warn};
 const TAKEOVER_SCRIPT: &str = r#"
 import sqlite3 from 'sqlite3';
 const db = new sqlite3.Database('/data/database.sqlite');
-const query = (s) =>
+const query = (s, params = []) =>
   new Promise((resolve, reject) =>
-    db.all(s, (err, rows) => (err ? reject(err) : resolve(rows))));
-const rows = await query("SELECT value FROM config WHERE key='listenPortOverride'");
-if (rows.length > 0 && rows[0].value === process.env.PORT_OVERRIDE) {
+    db.all(s, params, (err, rows) => (err ? reject(err) : resolve(rows))));
+const rows = await query("SELECT key, value FROM config WHERE key IN ('apiEndpointOverride', 'listenPortOverride')");
+const values = Object.fromEntries(rows.map(({ key, value }) => [key, value]));
+if (
+  values.apiEndpointOverride === process.env.HOST_OVERRIDE &&
+  values.listenPortOverride === process.env.PORT_OVERRIDE
+) {
   console.log('false');
   process.exit(0);
 }
 await query(
-  `INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '${process.env.HOST_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+  "INSERT INTO config (key, value) VALUES ('apiEndpointOverride', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  [process.env.HOST_OVERRIDE],
 );
 await query(
-  `INSERT INTO config (key, value) VALUES ('listenPortOverride', '${process.env.PORT_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+  "INSERT INTO config (key, value) VALUES ('listenPortOverride', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  [process.env.PORT_OVERRIDE],
 );
 console.log('true');
 "#;
@@ -36,8 +42,7 @@ const SUPERVISOR_NAMES: [&str; 2] = ["balena_supervisor", "resin_supervisor"];
 pub struct TakeoverConfig {
     /// Written verbatim to the supervisor's `apiEndpointOverride`.
     pub host_override: String,
-    /// Written verbatim to the supervisor's `listenPortOverride`; also the
-    /// idempotency key.
+    /// Written verbatim to the supervisor's `listenPortOverride`.
     pub port_override: u16,
 }
 
