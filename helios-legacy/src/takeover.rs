@@ -16,16 +16,19 @@ const db = new sqlite3.Database('/data/database.sqlite');
 const query = (s) =>
   new Promise((resolve, reject) =>
     db.all(s, (err, rows) => (err ? reject(err) : resolve(rows))));
-const rows = await query("SELECT value FROM config WHERE key='listenPortOverride'");
-if (rows.length > 0 && rows[0].value === process.env.PORT_OVERRIDE) {
+const rows = await query(
+  "SELECT key, value FROM config WHERE key IN ('apiEndpointOverride', 'listenPortOverride')");
+const cur = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+if (cur.apiEndpointOverride === process.env.HOST_OVERRIDE
+    && cur.listenPortOverride === process.env.PORT_OVERRIDE) {
   console.log('false');
   process.exit(0);
 }
 await query(
-  `INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '${process.env.HOST_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-);
-await query(
-  `INSERT INTO config (key, value) VALUES ('listenPortOverride', '${process.env.PORT_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+  `INSERT INTO config (key, value) VALUES
+     ('apiEndpointOverride', '${process.env.HOST_OVERRIDE}'),
+     ('listenPortOverride', '${process.env.PORT_OVERRIDE}')
+   ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 );
 console.log('true');
 "#;
