@@ -106,9 +106,9 @@ pub async fn trigger_update(
             Ok(res) if res.status().is_success() => break res,
             Ok(res) => warn!(
                 response = field::display(res.status()),
-                "received error response"
+                "received error response, retrying in 5s"
             ),
-            Err(e) => warn!("failed: {e}, retrying in 5s"),
+            Err(e) => return Err(StateUpdateError::from_upstream(e)),
         };
 
         // Back-off for a bit in case the supervisor is restarting
