@@ -138,7 +138,10 @@ async fn start_poll_with_reemit(
         poll_future = Box::pin(async move {
             (
                 Some(target_state),
-                UpdateOpts::default(),
+                UpdateOpts {
+                    force: false,
+                    cancel: false,
+                },
                 Instant::now() + remote.request.poll_min_interval,
             )
         });
