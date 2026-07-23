@@ -88,7 +88,7 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
         }
     }
     let Some(supervisor) = supervisor else {
-        warn!("no legacy supervisor container found; nothing to take over");
+        warn!("no legacy supervisor container found; nothing to do");
         return Ok(TakeoverOutcome::NotPresent);
     };
 
@@ -96,7 +96,7 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
     // underscores (`balena_supervisor` -> `balena-supervisor`).
     let unit = supervisor.name.replace('_', "-");
 
-    debug!(container = %supervisor.name, "configuring legacy supervisor for takeover");
+    debug!(container = %supervisor.name, "configuring legacy supervisor");
 
     let host_env = format!("HOST_OVERRIDE={}", cfg.host_override);
     let port_env = format!("PORT_OVERRIDE={}", cfg.port_override);
@@ -118,11 +118,11 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
 
     match output.stdout.trim() {
         "false" => {
-            debug!("legacy supervisor already configured for takeover");
+            debug!("legacy supervisor already configured");
             Ok(TakeoverOutcome::AlreadyConfigured)
         }
         "true" => {
-            info!(%unit, "restarting legacy supervisor to apply takeover");
+            info!(%unit, "restarting legacy supervisor");
             systemd::restart(&unit).await?;
             Ok(TakeoverOutcome::Migrated)
         }
