@@ -16,9 +16,9 @@ use tokio::{
     net::{TcpListener, UnixListener},
     sync::watch::Receiver,
 };
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::{
-    Span,
+    Level, Span,
     field::{Empty, display},
     info, info_span, instrument,
 };
@@ -152,7 +152,8 @@ pub async fn start(
             })
             .on_response(|response: &Response<Body>, _: Duration, span: &Span| {
                 span.record("status", display(response.status()));
-            }),
+            })
+            .on_failure(DefaultOnFailure::new().level(Level::WARN)),
     );
 
     // Assign state
