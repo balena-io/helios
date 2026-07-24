@@ -3,7 +3,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::oci::Client;
 use crate::util::http::Uri;
-use crate::util::systemd;
+use crate::util::{dirs, fs, systemd};
 
 /// ES-module script (run via `node --input-type=module -e`) that idempotently
 /// points the legacy supervisor at helios by writing its `apiEndpointOverride`
@@ -36,6 +36,9 @@ console.log('true');
 /// Candidate legacy supervisor container names, in priority order.
 const SUPERVISOR_NAMES: [&str; 2] = ["balena_supervisor", "resin_supervisor"];
 
+/// Runtime-dir breadcrumb file marking a takeover whose restart has not yet completed.
+const RESTART_PENDING_FLAG: &str = "helios-legacy-takeover-breadcrumb";
+
 /// Override values written verbatim to the legacy supervisor's config DB.
 #[derive(Clone, Debug, Args)]
 pub struct TakeoverConfig {
@@ -63,6 +66,8 @@ pub enum TakeoverError {
     Oci(#[from] helios_oci::Error),
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     #[error("supervisor exec failed (exit {code}): {stderr}")]
     Exec { code: i64, stderr: String },
 }
@@ -101,6 +106,9 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
     let host_env = format!("HOST_OVERRIDE={}", cfg.host_override);
     let port_env = format!("PORT_OVERRIDE={}", cfg.port_override);
 
+    // Create a flag in the runtime dir to detect a pending restart in case of a crash
+    let restart_pending = !set_restart_flag().await?;
+
     let output = container
         .exec(
             &supervisor.name,
@@ -117,13 +125,21 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
     }
 
     match output.stdout.trim() {
-        "false" => {
+        // No takeover neede and no restart pending
+        "false" if !restart_pending => {
             debug!("legacy supervisor already configured");
+
+            // clear the flag
+            remove_restart_flag().await?;
             Ok(TakeoverOutcome::AlreadyConfigured)
         }
-        "true" => {
+        // A takeover just took place or a restart was pending
+        "false" | "true" => {
             info!(%unit, "restarting legacy supervisor");
             systemd::restart(&unit).await?;
+
+            // clear the flag
+            remove_restart_flag().await?;
             Ok(TakeoverOutcome::Migrated)
         }
         other => Err(TakeoverError::Exec {
@@ -134,4 +150,37 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
             ),
         }),
     }
+}
+
+/// Path to the restart-pending flag in the runtime dir.
+fn restart_flag_path() -> std::path::PathBuf {
+    dirs::runtime_dir().join(RESTART_PENDING_FLAG)
+}
+
+/// Create the restart-pending flag if it does not already
+/// exist. Returns `true` when the flag was newly created.
+async fn set_restart_flag() -> std::io::Result<bool> {
+    fs::run_async(|| {
+        dirs::ensure_runtime_dir()?;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(restart_flag_path())
+        {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+}
+
+/// Remove the restart-pending flag.
+async fn remove_restart_flag() -> std::io::Result<()> {
+    fs::run_async(|| match std::fs::remove_file(restart_flag_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    })
+    .await
 }
