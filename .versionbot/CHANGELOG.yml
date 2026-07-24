@@ -1,4 +1,46 @@
 - commits:
+    - subject: Add support for `services.tmpfs` compose field
+      hash: 8ccf0f8cd3a160c0601ee50baf14f0bcda394dcf
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `service.ulimits` compose field
+      hash: b549316e3b653c54c7c8ee0961871ed188cc42ba
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `service.device_cgroup_rules` compose field
+      hash: 1b24568edaa6b97eece5cd75e1c3937a04424ceb
+      body: |
+        The field is read directly from the composition and passed to the
+        container. No validation is performed in accordance with the spec
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for `service.devices` compose property
+      hash: c96bc46fe9eb30a59cef1d5532ce7cf5b67e3cbd
+      body: |
+        Maps the user configured services.devices compose property to the
+        devices configuration on the container.
+
+        CDI syntax is not supported for now
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.23
+  title: ""
+  date: 2026-07-24T00:57:46.723Z
+- commits:
     - subject: Store published ports as a sorted Vec instead of a BTreeSet
       hash: fece8e95c3bb975d13430fe18cc6aa5d8ddff115
       body: |
