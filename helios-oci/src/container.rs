@@ -369,6 +369,20 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.security_opt.take())
             .unwrap_or_default();
+        let device_cgroup_rules = host_config
+            .as_mut()
+            .and_then(|hc| hc.device_cgroup_rules.take())
+            .unwrap_or_default();
+        let mut devices: Vec<DeviceMapping> = host_config
+            .as_mut()
+            .and_then(|hc| hc.devices.take())
+            .unwrap_or_default()
+            .into_iter()
+            .map(DeviceMapping::from)
+            .collect();
+        // Sort by target so the serialized form is stable regardless of the
+        // order the engine reports the devices in (see the volumes sort below).
+        devices.sort_by(|a, b| a.target.cmp(&b.target));
         let dns = host_config
             .as_mut()
             .and_then(|hc| hc.dns.take())
@@ -458,6 +472,22 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.oom_score_adj.take())
             .filter(|n| *n != 0);
         let pids_limit = host_config.as_mut().and_then(|hc| hc.pids_limit.take());
+        let ulimits = host_config
+            .as_mut()
+            .and_then(|hc| hc.ulimits.take())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|u| {
+                let name = u.name?;
+                Some((
+                    name,
+                    Ulimit {
+                        soft: u.soft.unwrap_or_default(),
+                        hard: u.hard.unwrap_or_default(),
+                    },
+                ))
+            })
+            .collect();
         let runtime = host_config.as_mut().and_then(|hc| hc.runtime.take());
         let shm_size = host_config.as_mut().and_then(|hc| hc.shm_size.take());
         let userns_mode = host_config
@@ -468,6 +498,13 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .as_mut()
             .and_then(|hc| hc.uts_mode.take())
             .filter(|s| !s.is_empty());
+        let tmpfs: HashMap<String, TmpfsOptions> = host_config
+            .as_mut()
+            .and_then(|hc| hc.tmpfs.take())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(path, raw_options)| (path, TmpfsOptions::from_engine(&raw_options)))
+            .collect();
 
         // Legacy supervisor bind mounts are reported via `HostConfig.Binds` as
         // `source:target[:options]` strings, not in `HostConfig.Mounts`. Parse
@@ -566,6 +603,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             cap_drop,
             group_add,
             security_opt,
+            device_cgroup_rules,
+            devices,
             dns,
             dns_opt,
             dns_search,
@@ -573,6 +612,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             environment,
             extra_hosts,
             sysctls,
+            tmpfs,
             healthcheck,
             hostname,
             init,
@@ -582,6 +622,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             nano_cpus,
             oom_score_adj,
             pids_limit,
+            ulimits,
             privileged,
             read_only,
             restart_policy,
@@ -1205,6 +1246,103 @@ impl TryFrom<bollard::models::Mount> for Mount {
     }
 }
 
+/// A host device mapped into the container
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceMapping {
+    /// Path of the device on the host
+    pub source: String,
+    /// Path of the device inside the container
+    pub target: String,
+    /// Cgroup permissions for the device (combination of `r`, `w` and `m`)
+    pub permissions: String,
+}
+
+impl From<DeviceMapping> for bollard::models::DeviceMapping {
+    fn from(value: DeviceMapping) -> Self {
+        Self {
+            path_on_host: Some(value.source),
+            path_in_container: Some(value.target),
+            cgroup_permissions: Some(value.permissions),
+        }
+    }
+}
+
+impl From<bollard::models::DeviceMapping> for DeviceMapping {
+    fn from(value: bollard::models::DeviceMapping) -> Self {
+        let source = value.path_on_host.unwrap_or_default();
+        // Normalize the engine defaults for containers created by other
+        // tooling: an unset container path means the host path and unset
+        // permissions mean `rwm`.
+        let target = value
+            .path_in_container
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| source.clone());
+        let permissions = value
+            .cgroup_permissions
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "rwm".to_string());
+        Self {
+            source,
+            target,
+            permissions,
+        }
+    }
+}
+
+/// Recognized tmpfs mount options. Any other option reported by the engine
+/// (e.g. from a tmpfs set up by another tool) is ignored rather than
+/// rejected when reading container state back.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct TmpfsOptions {
+    /// File system permissions, as octal digits (e.g. `755`)
+    pub mode: Option<String>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+}
+
+impl TmpfsOptions {
+    fn from_engine(raw: &str) -> Self {
+        let mut opts = TmpfsOptions::default();
+        for token in raw.split(',') {
+            let Some((key, value)) = token.split_once('=') else {
+                continue;
+            };
+            match key {
+                "mode" => opts.mode = Some(value.to_string()),
+                "uid" => opts.uid = value.parse().ok(),
+                "gid" => opts.gid = value.parse().ok(),
+                _ => {}
+            }
+        }
+        opts
+    }
+}
+
+impl From<TmpfsOptions> for String {
+    /// Render as the engine's raw comma-separated mount options string.
+    fn from(value: TmpfsOptions) -> Self {
+        [
+            value.mode.map(|m| format!("mode={m}")),
+            value.uid.map(|u| format!("uid={u}")),
+            value.gid.map(|g| format!("gid={g}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+}
+
+/// A single resource limit override for a container. The limit name (e.g.
+/// `nofile`) is the key of the enclosing `ulimits` map.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Ulimit {
+    /// Soft limit, enforced by the kernel for the container's processes
+    pub soft: i64,
+    /// Hard limit, the ceiling the soft limit can be raised to
+    pub hard: i64,
+}
+
 /// Container configuration that is portable between hosts
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -1249,6 +1387,14 @@ pub struct ContainerConfig {
     /// Security options applied to the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub security_opt: Vec<String>,
+
+    /// Cgroup device whitelist rules added for the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub device_cgroup_rules: Vec<String>,
+
+    /// Host devices mapped into the container.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<DeviceMapping>,
 
     /// Custom DNS servers for the container.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1344,6 +1490,10 @@ pub struct ContainerConfig {
     /// Maximum number of process IDs allowed in the container
     pub pids_limit: Option<i64>,
 
+    /// Ulimit overrides for the container, keyed by limit name (e.g. `nofile`).
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub ulimits: HashMap<String, Ulimit>,
+
     /// Extra entries added to the container's `/etc/hosts`, each in the
     /// engine's `host:ip` form.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -1353,6 +1503,10 @@ pub struct ContainerConfig {
     /// parameter -> value map.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub sysctls: HashMap<String, String>,
+
+    /// tmpfs mounts, keyed by container path.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub tmpfs: HashMap<String, TmpfsOptions>,
 
     /// Network endpoint configurations, ordered by connection priority.
     ///
@@ -1390,6 +1544,8 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop,
             group_add,
             security_opt,
+            device_cgroup_rules,
+            devices,
             dns,
             dns_opt,
             dns_search,
@@ -1397,6 +1553,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             environment,
             extra_hosts,
             sysctls,
+            tmpfs,
             healthcheck,
             hostname,
             init,
@@ -1406,6 +1563,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             nano_cpus,
             oom_score_adj,
             pids_limit,
+            ulimits,
             privileged,
             read_only,
             restart_policy,
@@ -1502,6 +1660,8 @@ impl From<ContainerConfig> for ContainerCreateBody {
             cap_drop: (!cap_drop.is_empty()).then_some(cap_drop),
             group_add: (!group_add.is_empty()).then_some(group_add),
             security_opt: (!security_opt.is_empty()).then_some(security_opt),
+            device_cgroup_rules: (!device_cgroup_rules.is_empty()).then_some(device_cgroup_rules),
+            devices: (!devices.is_empty()).then(|| devices.into_iter().map(Into::into).collect()),
             dns: (!dns.is_empty()).then_some(dns),
             dns_options: (!dns_opt.is_empty()).then_some(dns_opt),
             dns_search: (!dns_search.is_empty()).then_some(dns_search),
@@ -1512,6 +1672,12 @@ impl From<ContainerConfig> for ContainerCreateBody {
                     .collect()
             }),
             sysctls: (!sysctls.is_empty()).then_some(sysctls),
+            tmpfs: (!tmpfs.is_empty()).then(|| {
+                tmpfs
+                    .into_iter()
+                    .map(|(path, options)| (path, options.into()))
+                    .collect()
+            }),
             init,
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
@@ -1520,6 +1686,18 @@ impl From<ContainerConfig> for ContainerCreateBody {
             network_mode: host_network_mode,
             oom_score_adj,
             pids_limit,
+            ulimits: (!ulimits.is_empty()).then(|| {
+                ulimits
+                    .into_iter()
+                    .map(
+                        |(name, Ulimit { soft, hard })| bollard::models::ResourcesUlimits {
+                            name: Some(name),
+                            soft: Some(soft),
+                            hard: Some(hard),
+                        },
+                    )
+                    .collect()
+            }),
             port_bindings,
             privileged: Some(privileged),
             readonly_rootfs: Some(read_only),
@@ -2233,6 +2411,276 @@ mod tests {
         // Empty list should not emit GroupAdd on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().group_add, None);
+    }
+
+    fn device(source: &str, target: &str, permissions: &str) -> DeviceMapping {
+        DeviceMapping {
+            source: source.to_string(),
+            target: target.to_string(),
+            permissions: permissions.to_string(),
+        }
+    }
+
+    #[test]
+    fn inspect_reads_devices_and_normalizes_engine_defaults() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                devices: Some(vec![
+                    bollard::models::DeviceMapping {
+                        path_on_host: Some("/dev/ttyUSB0".to_string()),
+                        path_in_container: Some("/dev/ttyUSB1".to_string()),
+                        cgroup_permissions: Some("rw".to_string()),
+                    },
+                    // unset container path and permissions fall back to the
+                    // host path and `rwm`
+                    bollard::models::DeviceMapping {
+                        path_on_host: Some("/dev/sda".to_string()),
+                        path_in_container: Some("".to_string()),
+                        cgroup_permissions: None,
+                    },
+                ]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.devices,
+            vec![
+                device("/dev/sda", "/dev/sda", "rwm"),
+                device("/dev/ttyUSB0", "/dev/ttyUSB1", "rw"),
+            ]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_devices() {
+        let cfg = ContainerConfig {
+            devices: vec![device("/dev/ttyUSB0", "/dev/ttyUSB0", "rwm")],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.devices,
+            Some(vec![bollard::models::DeviceMapping {
+                path_on_host: Some("/dev/ttyUSB0".to_string()),
+                path_in_container: Some("/dev/ttyUSB0".to_string()),
+                cgroup_permissions: Some("rwm".to_string()),
+            }])
+        );
+
+        // An empty set should not emit Devices on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().devices, None);
+    }
+
+    #[test]
+    fn inspect_reads_device_cgroup_rules() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                device_cgroup_rules: Some(vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.device_cgroup_rules,
+            vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()]
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_device_cgroup_rules() {
+        let cfg = ContainerConfig {
+            device_cgroup_rules: vec!["c 1:3 mr".to_string()],
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(hc.device_cgroup_rules, Some(vec!["c 1:3 mr".to_string()]));
+
+        // An empty list should not emit DeviceCgroupRules on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().device_cgroup_rules, None);
+    }
+
+    #[test]
+    fn inspect_reads_tmpfs() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                tmpfs: Some(HashMap::from([(
+                    "/run".to_string(),
+                    "mode=755,uid=1009,gid=1009".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.tmpfs,
+            HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: Some(1009),
+                    gid: Some(1009),
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn inspect_ignores_unrecognized_tmpfs_options() {
+        // Options outside `mode`/`uid`/`gid`, and unparsable values, are
+        // ignored rather than rejected: the tmpfs may have been set up by
+        // another tool.
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                tmpfs: Some(HashMap::from([(
+                    "/run".to_string(),
+                    "rw,noexec,mode=755,uid=notanumber".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.tmpfs,
+            HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: None,
+                    gid: None,
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_tmpfs() {
+        let cfg = ContainerConfig {
+            tmpfs: HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    uid: Some(1009),
+                    gid: Some(1009),
+                },
+            )]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.tmpfs,
+            Some(HashMap::from([(
+                "/run".to_string(),
+                "mode=755,uid=1009,gid=1009".to_string()
+            )]))
+        );
+
+        // An empty map should not emit Tmpfs on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().tmpfs, None);
+    }
+
+    #[test]
+    fn inspect_reads_ulimits() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                ulimits: Some(vec![bollard::models::ResourcesUlimits {
+                    name: Some("nofile".to_string()),
+                    soft: Some(20000),
+                    hard: Some(40000),
+                }]),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.ulimits,
+            HashMap::from([(
+                "nofile".to_string(),
+                Ulimit {
+                    soft: 20000,
+                    hard: 40000
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_ulimits() {
+        let cfg = ContainerConfig {
+            ulimits: HashMap::from([(
+                "nofile".to_string(),
+                Ulimit {
+                    soft: 20000,
+                    hard: 40000,
+                },
+            )]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.ulimits,
+            Some(vec![bollard::models::ResourcesUlimits {
+                name: Some("nofile".to_string()),
+                soft: Some(20000),
+                hard: Some(40000),
+            }])
+        );
+
+        // An empty map should not emit Ulimits on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().ulimits, None);
     }
 
     #[test]

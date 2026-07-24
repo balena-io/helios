@@ -14,7 +14,8 @@ pub use registry::RegistryAuth;
 mod container;
 pub use container::{
     BindPropagation, Cgroup, Container, ContainerConfig, ContainerState, ContainerStatus,
-    ExecOutput, Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings, RestartPolicy,
+    DeviceMapping, ExecOutput, Healthcheck, LocalContainer, Mount, NetworkMode, NetworkSettings,
+    RestartPolicy, TmpfsOptions, Ulimit,
 };
 
 mod datetime;

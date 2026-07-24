@@ -8,20 +8,26 @@ use crate::common_types::{Environment, ImageUri, Value};
 
 mod cgroup;
 mod command;
+mod devices;
 mod healthcheck;
 mod network_mode;
 mod networks;
 mod ports;
 mod restart_policy;
+mod tmpfs;
+mod ulimits;
 mod volumes;
 
 pub use cgroup::*;
 pub use command::*;
+pub use devices::*;
 pub use healthcheck::*;
 pub use network_mode::*;
 pub use networks::*;
 pub use ports::*;
 pub use restart_policy::*;
+pub use tmpfs::*;
+pub use ulimits::*;
 pub use volumes::*;
 
 use super::labels::Labels;
@@ -85,6 +91,16 @@ pub struct ServiceComposition {
     /// the engine takes nano_cpus and would otherwise saturate silently.
     #[serde(default, deserialize_with = "deserialize_cpus")]
     pub cpus: Option<f64>,
+
+    /// Cgroup device whitelist rules to add for the container, in the Linux
+    /// kernel format (e.g. `c 1:3 mr`).
+    #[serde(default)]
+    pub device_cgroup_rules: Option<Vec<String>>,
+
+    /// Host devices to map into the container. Only host path mappings are
+    /// supported; CDI syntax is rejected.
+    #[serde(default, deserialize_with = "deserialize_devices_sorted")]
+    pub devices: Option<Vec<DeviceMapping>>,
 
     /// Custom DNS servers, single string or list.
     #[serde(default, deserialize_with = "deserialize_string_or_list")]
@@ -152,6 +168,10 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub stop_signal: Option<String>,
 
+    /// tmpfs mounts, single value or list, keyed by container path.
+    #[serde(default, deserialize_with = "deserialize_tmpfs")]
+    pub tmpfs: Option<HashMap<String, TmpfsOptions>>,
+
     #[serde(default)]
     pub tty: bool,
 
@@ -184,6 +204,10 @@ pub struct ServiceComposition {
 
     #[serde(default)]
     pub pids_limit: Option<i64>,
+
+    /// Container ulimit overrides, keyed by limit name (e.g. `nofile`).
+    #[serde(default)]
+    pub ulimits: Option<HashMap<String, Ulimit>>,
 
     #[serde(default)]
     pub network_mode: Option<NetworkMode>,
@@ -251,6 +275,21 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+// Deserialize a device mapping list, sorting by target
+fn deserialize_devices_sorted<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<DeviceMapping>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut maybe_devices = Option::<Vec<DeviceMapping>>::deserialize(deserializer)?;
+    if let Some(devices) = maybe_devices.as_mut() {
+        devices.sort_by(|a, b| a.target.cmp(&b.target));
+    }
+
+    Ok(maybe_devices)
+}
+
 /// Deserialize a Compose `string_or_list` value (such as `dns` or
 /// `dns_search`) into a list, wrapping a single string in a one-element list.
 fn deserialize_string_or_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -270,6 +309,25 @@ where
             StringOrList::List(list) => list,
         }),
     )
+}
+
+/// Deserialize Compose `tmpfs`: a single entry or a list, keyed by path.
+fn deserialize_tmpfs<'de, D>(
+    deserializer: D,
+) -> Result<Option<HashMap<String, TmpfsOptions>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(entries) = deserialize_string_or_list(deserializer)? else {
+        return Ok(None);
+    };
+
+    entries
+        .iter()
+        .map(|s| tmpfs::try_from_entry(s))
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 /// Deserialize Compose `extra_hosts` from a list of `host:ip`/`host=ip`
@@ -875,6 +933,66 @@ mod tests {
     }
 
     #[test]
+    fn composition_tmpfs_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.tmpfs, None);
+    }
+
+    #[test]
+    fn composition_tmpfs_accepts_single_string() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "tmpfs": "/run",
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.tmpfs,
+            Some(HashMap::from([(
+                "/run".to_string(),
+                TmpfsOptions::default()
+            )]))
+        );
+    }
+
+    #[test]
+    fn composition_tmpfs_accepts_list_with_and_without_options() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "tmpfs": ["/run", "/data:mode=755,uid=1009,gid=1009"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.tmpfs,
+            Some(HashMap::from([
+                ("/run".to_string(), TmpfsOptions::default()),
+                (
+                    "/data".to_string(),
+                    TmpfsOptions {
+                        mode: Some("755".to_string()),
+                        uid: Some(1009),
+                        gid: Some(1009),
+                    }
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn composition_tmpfs_rejects_empty_path() {
+        let err =
+            serde_json::from_value::<ServiceComposition>(serde_json::json!({ "tmpfs": [":ro"] }))
+                .unwrap_err();
+        assert!(err.to_string().contains("path cannot be empty"));
+    }
+
+    #[test]
+    fn composition_tmpfs_rejects_unsupported_option() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "tmpfs": ["/run:size=100m"],
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported option"));
+    }
+
+    #[test]
     fn composition_cap_default_unset() {
         let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(comp.cap_add, None);
@@ -912,6 +1030,101 @@ mod tests {
         assert_eq!(
             comp.group_add,
             Some(vec!["mail".to_string(), "1000".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_device_cgroup_rules_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.device_cgroup_rules, None);
+    }
+
+    #[test]
+    fn composition_device_cgroup_rules_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "device_cgroup_rules": ["c 1:3 mr", "a 7:* rmw"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.device_cgroup_rules,
+            Some(vec!["c 1:3 mr".to_string(), "a 7:* rmw".to_string()])
+        );
+    }
+
+    #[test]
+    fn composition_devices_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.devices, None);
+    }
+
+    #[test]
+    fn composition_devices_accepts_mappings_and_resolves_defaults() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "devices": ["/dev/ttyUSB0:/dev/ttyUSB0", "/dev/sda:/dev/xvda:rw"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.devices,
+            Some(vec![
+                DeviceMapping {
+                    source: "/dev/ttyUSB0".to_string(),
+                    target: "/dev/ttyUSB0".to_string(),
+                    permissions: "rwm".to_string(),
+                },
+                DeviceMapping {
+                    source: "/dev/sda".to_string(),
+                    target: "/dev/xvda".to_string(),
+                    permissions: "rw".to_string(),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn composition_devices_rejects_cdi_syntax() {
+        let err = serde_json::from_value::<ServiceComposition>(serde_json::json!({
+            "devices": ["vendor1.com/device=gpu"],
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("CDI syntax is not yet supported"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn composition_ulimits_default_unset() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(comp.ulimits, None);
+    }
+
+    #[test]
+    fn composition_ulimits_accepts_single_and_soft_hard() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "ulimits": {
+                "nproc": 65535,
+                "nofile": {"soft": 20000, "hard": 40000},
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.ulimits,
+            Some(HashMap::from([
+                (
+                    "nproc".to_string(),
+                    Ulimit {
+                        soft: 65535,
+                        hard: 65535
+                    }
+                ),
+                (
+                    "nofile".to_string(),
+                    Ulimit {
+                        soft: 20000,
+                        hard: 40000
+                    }
+                ),
+            ]))
         );
     }
 

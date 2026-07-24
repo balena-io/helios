@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 use crate::labels::LABEL_SERVICE_ID;
 
 use crate::oci::{
-    self, BindPropagation, Cgroup, ContainerConfig, DateTime, Healthcheck, LocalContainer, Mount,
-    NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck,
+    LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
+    TmpfsOptions, Ulimit,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
     DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
     PortProtocol as RemotePortProtocol, RestartPolicy as RemoteRestartPolicy,
-    Service as RemoteServiceTarget,
+    Service as RemoteServiceTarget, TmpfsOptions as RemoteTmpfsOptions,
 };
 
 use super::image::ImageRef;
@@ -271,6 +272,17 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 cap_drop: composition.cap_drop.unwrap_or_default(),
                 group_add: composition.group_add.unwrap_or_default(),
                 security_opt: composition.security_opt.unwrap_or_default(),
+                device_cgroup_rules: composition.device_cgroup_rules.unwrap_or_default(),
+                devices: composition
+                    .devices
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|d| DeviceMapping {
+                        source: d.source,
+                        target: d.target,
+                        permissions: d.permissions,
+                    })
+                    .collect(),
                 dns: composition.dns.unwrap_or_default(),
                 dns_opt: composition.dns_opt.unwrap_or_default(),
                 dns_search: composition.dns_search.unwrap_or_default(),
@@ -279,6 +291,14 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 environment,
                 extra_hosts: composition.extra_hosts.unwrap_or_default(),
                 sysctls: composition.sysctls.unwrap_or_default(),
+                tmpfs: composition
+                    .tmpfs
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(path, RemoteTmpfsOptions { mode, uid, gid })| {
+                        (path, TmpfsOptions { mode, uid, gid })
+                    })
+                    .collect(),
                 hostname: composition.hostname,
                 init: composition.init,
                 labels,
@@ -298,6 +318,20 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .unwrap_or(0),
                 oom_score_adj: composition.oom_score_adj,
                 pids_limit: composition.pids_limit,
+                ulimits: composition
+                    .ulimits
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, u)| {
+                        (
+                            name,
+                            Ulimit {
+                                soft: u.soft,
+                                hard: u.hard,
+                            },
+                        )
+                    })
+                    .collect(),
                 privileged: composition.privileged,
                 read_only: composition.read_only,
                 restart_policy,
