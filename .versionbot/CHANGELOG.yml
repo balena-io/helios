@@ -1,4 +1,26 @@
 - commits:
+    - subject: Log API failures as warnings
+      hash: 732a8693217b10c1a448c9ee7fc054e5d03bac60
+      body: >
+        The local API by default logs 5xx as errors. However we use the 503
+
+        status for the target state poll while helios is applying the target
+        state.
+
+        These API responses should be logged as warnings as they don't affect
+
+        the operation of the service. We also want to prevent these logs from
+
+        being sent to the dashboard.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.24
+  title: ""
+  date: 2026-07-24T17:07:02.064Z
+- commits:
     - subject: Add support for `services.tmpfs` compose field
       hash: 8ccf0f8cd3a160c0601ee50baf14f0bcda394dcf
       body: ""
