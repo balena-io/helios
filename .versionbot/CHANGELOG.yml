@@ -1,4 +1,34 @@
 - commits:
+    - subject: Assume `/tmp` is host runtime dir
+      hash: e392526d2d35a9772b1270db326841956335d818
+      body: >
+        When running in a container, we use the `local` volume driver to mount
+
+        `/tmp/balena-supervisor` into the container `/tmp/run` path, however if
+        after
+
+        boot the host path doesn't exist (because the legacy supervisor has not
+        started yet),
+
+        the container will not start and the restart policy won't apply so it
+
+        will never be restarted by the engine.
+
+
+        This just updates the default docker-compose and makes update locks
+
+        directory name more descriptive since paths will now be under `/tmp`
+
+        rather than under `/tmp/balena-supervisor`
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.25
+  title: ""
+  date: 2026-07-27T20:55:44.335Z
+- commits:
     - subject: Log API failures as warnings
       hash: 732a8693217b10c1a448c9ee7fc054e5d03bac60
       body: >
