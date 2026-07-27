@@ -77,7 +77,7 @@ impl DeviceTarget {
 
         for (app_uuid, app) in self.apps.iter_mut() {
             let bind_source = host_runtime_dir
-                .join("locking")
+                .join("update-locks")
                 .join(app_uuid.as_str())
                 .to_string_lossy()
                 .into_owned();
