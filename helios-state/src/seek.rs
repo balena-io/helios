@@ -20,7 +20,7 @@ use crate::util::logs;
 
 use super::config::Resources;
 use super::models::{Device, DeviceTarget};
-use super::read::{self, read as read_state};
+use super::read::{self, StateReader};
 use super::worker::{LocalWorker, create};
 
 /// Represents the service update status according to
@@ -241,6 +241,7 @@ async fn seek_target(
     interrupt: &Interrupt,
     state_tx: &Sender<LocalState>,
     retry_interval: Duration,
+    state_reader: &StateReader,
 ) -> Result<UpdateStatus, SeekError> {
     info!("applying target state");
 
@@ -331,6 +332,10 @@ async fn seek_target(
                                 _ = tokio::time::sleep(retry_interval) => {},
                             }
 
+                            // A task that errors reports no state back, but it may
+                            // still have changed the engine before failing.
+                            *current_state = state_reader.read().await?;
+
                             // break-the inner loop after the back-off
                             break;
                         }
@@ -372,6 +377,13 @@ pub async fn start_seek(
         registry_auth_client,
         host_runtime_dir,
     } = runtime;
+
+    let state_reader = StateReader {
+        docker: docker.clone(),
+        local_store: local_store.clone(),
+        uuid: uuid.clone(),
+        os: os.clone(),
+    };
 
     // Create an uninitialized local worker
     let worker = create(
@@ -474,7 +486,7 @@ pub async fn start_seek(
 
                 // We re-initialize the worker each time as the state of the system may have changed
                 // outside of what is monitored by the worker
-                current_state = read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
+                current_state = state_reader.read().await?;
 
                 // Set the update status immediately
                 update_status = UpdateStatus::ApplyingChanges;
@@ -490,6 +502,7 @@ pub async fn start_seek(
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
+                    let state_reader = &state_reader;
                     let worker = worker
                         .clone()
                         .resource(ForceAcquireLocks::from(update_req.opts.force));
@@ -533,6 +546,7 @@ pub async fn start_seek(
                                 &interrupt,
                                 state_tx,
                                 retry_interval,
+                                state_reader,
                             )
                             .await?;
                         }
@@ -608,8 +622,7 @@ pub async fn start_seek(
                 // if the legacy apply went through
                 else if matches!(state, SeekState::Reset) {
                     // reload the current state
-                    current_state =
-                        read_state(&docker, &local_store, uuid.clone(), os.clone()).await?;
+                    current_state = state_reader.read().await?;
 
                     UpdateStatus::Done
                 } else {
