@@ -1,4 +1,21 @@
 - commits:
+    - subject: Add support for `service.annotations` compose field
+      hash: 72eaa93fa7f33ec9fe1ae6344c9d0d81176dd2d7
+      body: |
+        Maps annotations configuration coming from the target state into the
+        container field.
+
+        Annotations require docker v24+ or Docker API 1.43+, so proper support
+        for this field requires integration of contracts into helios
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.27
+  title: ""
+  date: 2026-07-29T21:35:15.565Z
+- commits:
     - subject: Set a flag to make sure a supervisor restart happens on takeover
       hash: bed661acc4af9ab17cda265c0636b92529257aec
       body: |
