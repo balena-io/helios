@@ -328,6 +328,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         // Gather the host config fields from the engine
         // while filtering out the default values such as "" / 0.
         let mut host_config = value.host_config;
+        let annotations = host_config
+            .as_mut()
+            .and_then(|hc| hc.annotations.take())
+            .unwrap_or_default();
         let cgroup = host_config
             .as_mut()
             .and_then(|hc| hc.cgroupns_mode.take())
@@ -591,6 +595,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         };
 
         let config = ContainerConfig {
+            annotations,
             cgroup,
             cgroup_parent,
             command: cmd,
@@ -1348,6 +1353,12 @@ pub struct Ulimit {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ContainerConfig {
+    /// Arbitrary non-identifying metadata attached to the container and
+    /// provided to the runtime when the container is started, as a
+    /// key -> value map.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub annotations: HashMap<String, String>,
+
     /// Cgroup namespace mode (`host` or `private`)
     pub cgroup: Cgroup,
 
@@ -1532,6 +1543,7 @@ pub struct ContainerConfig {
 impl From<ContainerConfig> for ContainerCreateBody {
     fn from(value: ContainerConfig) -> Self {
         let ContainerConfig {
+            annotations,
             cgroup,
             cgroup_parent,
             command: cmd,
@@ -1650,6 +1662,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
         let cgroupns_mode = Some(cgroup.into());
 
         let host_config = bollard::config::HostConfig {
+            annotations: (!annotations.is_empty()).then_some(annotations),
             cgroup_parent,
             cgroupns_mode,
             cpuset_cpus: cpuset,
@@ -2265,6 +2278,54 @@ mod tests {
         // An empty map should not emit a Sysctls entry on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().sysctls, None);
+    }
+
+    #[test]
+    fn inspect_reads_annotations() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                annotations: Some(HashMap::from([(
+                    "com.example.foo".to_string(),
+                    "bar".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.annotations,
+            HashMap::from([("com.example.foo".to_string(), "bar".to_string())])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_annotations() {
+        let cfg = ContainerConfig {
+            annotations: HashMap::from([("com.example.foo".to_string(), "bar".to_string())]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.annotations,
+            Some(HashMap::from([(
+                "com.example.foo".to_string(),
+                "bar".to_string()
+            )]))
+        );
+
+        // An empty map should not emit an Annotations entry on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().annotations, None);
     }
 
     #[test]

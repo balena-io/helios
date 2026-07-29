@@ -51,6 +51,11 @@ pub struct Service {
 // FIXME: add remaining fields
 #[derive(Deserialize, Debug, Default)]
 pub struct ServiceComposition {
+    /// Annotations for the container, as a list of `key=value` strings or a
+    /// map.
+    #[serde(default)]
+    pub annotations: Labels,
+
     /// Linux capabilities to add to the container.
     #[serde(default)]
     pub cap_add: Option<Vec<String>>,
@@ -929,6 +934,40 @@ mod tests {
                 "dc1.example.com".to_string(),
                 "dc2.example.com".to_string()
             ])
+        );
+    }
+
+    #[test]
+    fn composition_annotations_default_empty() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(comp.annotations.is_empty());
+    }
+
+    #[test]
+    fn composition_annotations_accepts_list() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "annotations": ["com.example.foo=bar", "com.example.baz"],
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.annotations.get("com.example.foo"),
+            Some(&"bar".to_string())
+        );
+        assert_eq!(
+            comp.annotations.get("com.example.baz"),
+            Some(&String::new())
+        )
+    }
+
+    #[test]
+    fn composition_annotations_accepts_mapping() {
+        let comp: ServiceComposition = serde_json::from_value(serde_json::json!({
+            "annotations": {"com.example.foo": "bar"},
+        }))
+        .unwrap();
+        assert_eq!(
+            comp.annotations.get("com.example.foo"),
+            Some(&"bar".to_string())
         );
     }
 

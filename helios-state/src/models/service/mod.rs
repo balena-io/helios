@@ -249,6 +249,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             image: image.into(),
             started: true,
             config: ServiceConfig(ContainerConfig {
+                annotations: composition.annotations.into(),
                 cgroup: composition
                     .cgroup
                     .map(|c| match c {
