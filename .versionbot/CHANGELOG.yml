@@ -1,4 +1,78 @@
 - commits:
+    - subject: Set a flag to make sure a supervisor restart happens on takeover
+      hash: bed661acc4af9ab17cda265c0636b92529257aec
+      body: |
+        This makes sure the supervisor is restarted, which is a necessary step
+        for the takeover to complete.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Avoid cancelling an ongoing apply on a cached state
+      hash: 66fc49d837905f92f19c1cc19be74ec111336a0f
+      body: |
+        Helios uses the cached target state for the initial
+        apply. If the legacy supervisor is active, the initial apply will go to
+        the supervisor first before additional steps are taken locally.
+        Previously, the cached apply would tell the supervisor to cancel any
+        ongoing updates and re-apply the same target. This was not desirable
+        because it means that a restart of helios would cause ongoing downloads
+        to be terminated.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Terminate the process on a failed trigger legacy update
+      hash: 4719957d8ca178a5a3aa641567433230b59aa128
+      body: >
+        A non responding supervisor may mean that the takeover process was
+
+        applied incorrectly or was somehow reverted. Terminating the process
+        allows the
+
+        service to retry the override
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Improve takeover log messages
+      hash: 030ce3f46913f2c9ec49e1e72c4864d067182f76
+      body: |
+        The `takeover` label is already in the method instrumentation, no need
+        to put it on the messages too.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Write both takeover endpoint and port overrides on the same transaction
+      hash: 38f3c9c0a7d419ea872762bca5e61c9f9ea7e1b7
+      body: |
+        Prevents the case where only one value is written to the database. This
+        also checks for both values before terminating the override script
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Validate the takeover API override to be a URI
+      hash: b4d255fc0b5b1ce4566f9530a3b9dfe1ca3bf401
+      body: |
+        Sanity check to avoid injecting invalid values into the supervisor
+        database. This also better isolates takeover code by moving CLI args to
+        the helios-legacy sub-crate.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.26
+  title: ""
+  date: 2026-07-29T19:33:30.887Z
+- commits:
     - subject: Assume `/tmp` is host runtime dir
       hash: e392526d2d35a9772b1270db326841956335d818
       body: >
