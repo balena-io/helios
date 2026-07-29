@@ -232,7 +232,7 @@ async fn test_remote_poll_hostos_update() {
     // we expectd an aborted state because it has to wait for the reboot
     assert_eq!(status, json!({"status": "aborted"}));
 
-    let args_content = tokio::fs::read_to_string("/tmp/run/balenahup/args.txt")
+    let args_content = tokio::fs::read_to_string("/tmp/run/balena-supervisor/balenahup/args.txt")
         .await
         .expect("args.txt should exist after hostOS update");
 
@@ -266,7 +266,7 @@ async fn test_remote_poll_hostos_update() {
     //     "args should contain --no-reboot, got: {args_content}"
     // );
 
-    let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
+    let breadcrumb = format!("/tmp/run/balena-supervisor/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(
         tokio::fs::metadata(&breadcrumb).await.is_ok(),
         "breadcrumb file should exist at {breadcrumb}"
@@ -355,7 +355,7 @@ async fn test_hostos_update_retry_exhaustion() {
     assert_eq!(status, json!({"status": "aborted"}));
 
     // The updater always fails, so no breadcrumb should exist
-    let breadcrumb = format!("/tmp/run/balenahup-{RELEASE_COMMIT}-breadcrumb");
+    let breadcrumb = format!("/tmp/run/balena-supervisor/balenahup-{RELEASE_COMMIT}-breadcrumb");
     assert!(
         tokio::fs::metadata(&breadcrumb).await.is_err(),
         "breadcrumb file should NOT exist at {breadcrumb} because install always fails"

@@ -50,8 +50,13 @@ fi
 # Do not allow the runtime dir to be configurable
 unset HELIOS_HOST_RUNTIME_DIR
 
+runtime_dir="/tmp/run"
 if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then
-  HELIOS_HOST_RUNTIME_DIR="${BALENA_HOST_RUNTIME_DIR}"
+  # if running in balenaOS, reuse the `/tmp/balena-supervisor` directory
+  runtime_dir="$runtime_dir/balena-supervisor"
+  mkdir -p "$runtime_dir"
+
+  HELIOS_HOST_RUNTIME_DIR="${BALENA_HOST_RUNTIME_DIR}/balena-supervisor"
   unset BALENA_HOST_RUNTIME_DIR
   export HELIOS_HOST_RUNTIME_DIR
 fi
@@ -84,7 +89,7 @@ export HELIOS_REMOTE_POLL_INTERVAL_MS
 export XDG_CACHE_HOME=/cache
 export XDG_CONFIG_HOME=/config
 export XDG_STATE_HOME=/local
-export XDG_RUNTIME_DIR=/tmp/run
+export XDG_RUNTIME_DIR=$runtime_dir
 
 # Remove the socket if it exists (we will need some proper handover at some point)
 rm /tmp/run/helios.sock 2>/dev/null || true
