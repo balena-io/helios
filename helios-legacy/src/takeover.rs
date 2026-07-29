@@ -1,6 +1,9 @@
-use helios_oci::Client;
-use helios_util::systemd;
+use clap::Args;
 use tracing::{debug, info, instrument, warn};
+
+use crate::oci::Client;
+use crate::util::http::Uri;
+use crate::util::{dirs, fs, systemd};
 
 /// ES-module script (run via `node --input-type=module -e`) that idempotently
 /// points the legacy supervisor at helios by writing its `apiEndpointOverride`
@@ -13,16 +16,19 @@ const db = new sqlite3.Database('/data/database.sqlite');
 const query = (s) =>
   new Promise((resolve, reject) =>
     db.all(s, (err, rows) => (err ? reject(err) : resolve(rows))));
-const rows = await query("SELECT value FROM config WHERE key='listenPortOverride'");
-if (rows.length > 0 && rows[0].value === process.env.PORT_OVERRIDE) {
+const rows = await query(
+  "SELECT key, value FROM config WHERE key IN ('apiEndpointOverride', 'listenPortOverride')");
+const cur = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+if (cur.apiEndpointOverride === process.env.HOST_OVERRIDE
+    && cur.listenPortOverride === process.env.PORT_OVERRIDE) {
   console.log('false');
   process.exit(0);
 }
 await query(
-  `INSERT INTO config (key, value) VALUES ('apiEndpointOverride', '${process.env.HOST_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-);
-await query(
-  `INSERT INTO config (key, value) VALUES ('listenPortOverride', '${process.env.PORT_OVERRIDE}') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+  `INSERT INTO config (key, value) VALUES
+     ('apiEndpointOverride', '${process.env.HOST_OVERRIDE}'),
+     ('listenPortOverride', '${process.env.PORT_OVERRIDE}')
+   ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 );
 console.log('true');
 "#;
@@ -30,14 +36,17 @@ console.log('true');
 /// Candidate legacy supervisor container names, in priority order.
 const SUPERVISOR_NAMES: [&str; 2] = ["balena_supervisor", "resin_supervisor"];
 
+/// Runtime-dir breadcrumb file marking a takeover whose restart has not yet completed.
+const RESTART_PENDING_FLAG: &str = "helios-legacy-takeover-breadcrumb";
+
 /// Override values written verbatim to the legacy supervisor's config DB.
-///
-/// Provided as input by the user
+#[derive(Clone, Debug, Args)]
 pub struct TakeoverConfig {
-    /// Written verbatim to the supervisor's `apiEndpointOverride`.
-    pub host_override: String,
-    /// Written verbatim to the supervisor's `listenPortOverride`; also the
-    /// idempotency key.
+    /// Api endpoint to write as the supervisor's `apiEndpointOverride`.
+    #[arg(long = "override-host", value_name = "url")]
+    pub host_override: Uri,
+    /// Port configuration to write as the supervisor's `listenPortOverride`.
+    #[arg(long = "override-port", value_name = "port")]
     pub port_override: u16,
 }
 
@@ -57,6 +66,8 @@ pub enum TakeoverError {
     Oci(#[from] helios_oci::Error),
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     #[error("supervisor exec failed (exit {code}): {stderr}")]
     Exec { code: i64, stderr: String },
 }
@@ -82,7 +93,7 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
         }
     }
     let Some(supervisor) = supervisor else {
-        warn!("no legacy supervisor container found; nothing to take over");
+        warn!("no legacy supervisor container found; nothing to do");
         return Ok(TakeoverOutcome::NotPresent);
     };
 
@@ -90,10 +101,13 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
     // underscores (`balena_supervisor` -> `balena-supervisor`).
     let unit = supervisor.name.replace('_', "-");
 
-    debug!(container = %supervisor.name, "configuring legacy supervisor for takeover");
+    debug!(container = %supervisor.name, "configuring legacy supervisor");
 
     let host_env = format!("HOST_OVERRIDE={}", cfg.host_override);
     let port_env = format!("PORT_OVERRIDE={}", cfg.port_override);
+
+    // Create a flag in the runtime dir to detect a pending restart in case of a crash
+    let restart_pending = !set_restart_flag().await?;
 
     let output = container
         .exec(
@@ -111,13 +125,21 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
     }
 
     match output.stdout.trim() {
-        "false" => {
-            debug!("legacy supervisor already configured for takeover");
+        // No takeover neede and no restart pending
+        "false" if !restart_pending => {
+            debug!("legacy supervisor already configured");
+
+            // clear the flag
+            remove_restart_flag().await?;
             Ok(TakeoverOutcome::AlreadyConfigured)
         }
-        "true" => {
-            info!(%unit, "restarting legacy supervisor to apply takeover");
+        // A takeover just took place or a restart was pending
+        "false" | "true" => {
+            info!(%unit, "restarting legacy supervisor");
             systemd::restart(&unit).await?;
+
+            // clear the flag
+            remove_restart_flag().await?;
             Ok(TakeoverOutcome::Migrated)
         }
         other => Err(TakeoverError::Exec {
@@ -128,4 +150,37 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
             ),
         }),
     }
+}
+
+/// Path to the restart-pending flag in the runtime dir.
+fn restart_flag_path() -> std::path::PathBuf {
+    dirs::runtime_dir().join(RESTART_PENDING_FLAG)
+}
+
+/// Create the restart-pending flag if it does not already
+/// exist. Returns `true` when the flag was newly created.
+async fn set_restart_flag() -> std::io::Result<bool> {
+    fs::run_async(|| {
+        dirs::ensure_runtime_dir()?;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(restart_flag_path())
+        {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+}
+
+/// Remove the restart-pending flag.
+async fn remove_restart_flag() -> std::io::Result<()> {
+    fs::run_async(|| match std::fs::remove_file(restart_flag_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    })
+    .await
 }

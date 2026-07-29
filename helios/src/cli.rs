@@ -32,7 +32,7 @@ pub enum Applet {
     #[command(version, about, long_about = None)]
     Helios(DaemonArgs),
     /// Take over the legacy supervisor (invoked as `helios-legacy-takeover`).
-    HeliosLegacyTakeover(TakeoverArgs),
+    HeliosLegacyTakeover(crate::legacy::TakeoverConfig),
 }
 
 #[derive(Clone, Debug, Args)]
@@ -196,26 +196,6 @@ pub struct DaemonArgs {
         requires = "provisioning_key"
     )]
     pub provisioning_supervisor_version: Option<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-pub struct TakeoverArgs {
-    /// Value written verbatim to the supervisor's `apiEndpointOverride`
-    #[arg(long = "override-host", value_name = "url")]
-    pub host_override: String,
-
-    /// Value written verbatim to the supervisor's `listenPortOverride`
-    #[arg(long = "override-port", value_name = "port")]
-    pub port_override: u16,
-}
-
-impl From<TakeoverArgs> for helios_legacy::TakeoverConfig {
-    fn from(args: TakeoverArgs) -> Self {
-        Self {
-            host_override: args.host_override,
-            port_override: args.port_override,
-        }
-    }
 }
 
 pub fn parse() -> Applet {

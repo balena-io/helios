@@ -45,7 +45,6 @@ Alternatively, you can have helios register a new unique identity with balenaClo
 - Go to Provisioning Keys from the left sidebar and create a new one. Make sure to copy its value when shown. If you miss it, just make a new provisioning key.
 
 - We now have the values we need:
-
   - The ID of the fleet to provision the device into
   - The device type of this fleet
   - A provisioning key for this fleet
@@ -135,4 +134,4 @@ flowchart TD
 
 ## Testing on a Balena device
 
-The service can be set-up to take over the existing balena Supervisor on a running device. The service does this by becoming a proxy betweeen the existing supervisor and the Balena API and local applications. For more information see [balena-os/balena-supervisor#2422](https://github.com/balena-os/balena-supervisor/pull/2422).
+When installed on a balena device, the service will take over the running supervisor and become a proxy for requests between the legacy service and the balena API. For devices already running helios (on Supervisor v19 or above), draft releases can be used to test changes on a balenaOS device.
