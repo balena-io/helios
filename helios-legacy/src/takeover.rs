@@ -115,9 +115,22 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
             &["node", "--input-type=module", "-e", TAKEOVER_SCRIPT],
             &[&host_env, &port_env],
         )
-        .await?;
+        .await;
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            // remove the breadcrumb in this case to avoid an unnecessary supervisor restart
+            // on the next run
+            remove_restart_flag().await?;
+            return Err(e.into());
+        }
+    };
 
     if output.exit_code != 0 {
+        // remove the breadcrumb in this case to avoid an unnecessary supervisor restart
+        // on the next run
+        remove_restart_flag().await?;
         return Err(TakeoverError::Exec {
             code: output.exit_code,
             stderr: output.stderr,
@@ -142,13 +155,8 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
             remove_restart_flag().await?;
             Ok(TakeoverOutcome::Migrated)
         }
-        other => Err(TakeoverError::Exec {
-            code: output.exit_code,
-            stderr: format!(
-                "unexpected supervisor output: {other:?} (stderr: {})",
-                output.stderr
-            ),
-        }),
+        // exit_code == 0, means only true/false responses are expected from the script
+        other => unreachable!("expected true/false, got {other}"),
     }
 }
 
