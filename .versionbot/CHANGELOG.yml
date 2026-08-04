@@ -1,4 +1,21 @@
 - commits:
+    - subject: Avoid spurious restarts on helios takeover exec error
+      hash: 9f835e0845c977b330cd0614ddb64757a8fe3a05
+      body: |
+        While a supervisor restart should be harmless, is better to keep
+        restarts at a minimum to avoid triggering any unknown behaviors.
+
+        This makes sure to remove the takeover restart breadcrumb in case of an
+        exec error or non-zero exit code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.25.28
+  title: ""
+  date: 2026-08-04T22:37:26.774Z
+- commits:
     - subject: Add support for `service.annotations` compose field
       hash: 72eaa93fa7f33ec9fe1ae6344c9d0d81176dd2d7
       body: |
