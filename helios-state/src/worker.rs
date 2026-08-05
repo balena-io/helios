@@ -10,7 +10,6 @@ use super::models::Device;
 use super::tasks::with_device_tasks;
 #[cfg(feature = "balenahup")]
 use super::tasks::with_hostapp_tasks;
-#[cfg(feature = "userapps")]
 use super::tasks::{with_image_tasks, with_userapp_tasks};
 
 /// Configure the worker jobs
@@ -26,18 +25,20 @@ fn worker() -> Worker<Device, Uninitialized> {
         worker = with_hostapp_tasks(worker);
     }
 
-    #[cfg(feature = "userapps")]
-    {
-        worker = with_image_tasks(worker);
-        worker = with_userapp_tasks(worker);
-    }
+    worker = with_image_tasks(worker);
+    worker = with_userapp_tasks(worker);
+
     #[cfg(not(feature = "userapps"))]
     {
-        // ignore user apps when planning
+        // Without the `userapps` feature the jobs are still part of the domain, but
+        // any change under `/apps` is skipped during planning and delegated to the
+        // legacy supervisor. The distance always includes an update operation for
+        // every parent of a changed path, so an exception here covers the whole
+        // subtree.
         use mahler::exception;
         worker = worker.exception(
             "/apps",
-            exception::update(|| true).with_description(|| "app update support is disabled"),
+            exception::any(|| true).with_description(|| "user app support is disabled"),
         );
     }
 

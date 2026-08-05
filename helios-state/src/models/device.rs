@@ -152,7 +152,6 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
-        #[cfg(feature = "userapps")]
         let mut userapps = Map::new();
         #[cfg(feature = "balenahup")]
         let mut hostapps = Vec::new();
@@ -165,14 +164,9 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 }
                 #[cfg(not(feature = "balenahup"))]
                 RemoteAppTarget::Host(_) => {}
-                // Read the userapp info if it exists and the feature is enabled
-                #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
                     userapps.insert(app_uuid, userapp.into());
                 }
-                #[cfg(not(feature = "userapps"))]
-                RemoteAppTarget::User(_) => {}
-                #[cfg(feature = "userapps")]
                 RemoteAppTarget::Rejected(app) if !app.is_host => {
                     userapps.insert(app_uuid, app.into());
                 }
@@ -182,10 +176,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
 
         Self {
             name: Some(name),
-            #[cfg(feature = "userapps")]
             apps: userapps,
-            #[cfg(not(feature = "userapps"))]
-            apps: Map::new(),
             // Get only the first hostapp if any
             #[cfg(feature = "balenahup")]
             host: hostapps.pop(),
@@ -229,7 +220,6 @@ mod tests {
             serde_json::from_value(serde_json::to_value(device).unwrap()).unwrap();
     }
 
-    #[cfg(feature = "userapps")]
     #[test]
     fn rejected_user_app_is_included_in_target_with_rejected_release_set() {
         // A rejected user app should land in `target.apps` with empty
@@ -270,7 +260,7 @@ mod tests {
         assert_eq!(app.rejected_release, Some(Uuid::from("bad-release")));
     }
 
-    #[cfg(all(feature = "userapps", feature = "balenahup"))]
+    #[cfg(feature = "balenahup")]
     #[test]
     fn rejected_host_app_is_dropped_from_target() {
         // Rejected host apps are filtered out — the device keeps running
