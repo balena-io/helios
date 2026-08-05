@@ -189,19 +189,26 @@ pub async fn read(
     for network_name in networks {
         let local_network = docker.network().inspect(&network_name).await?;
 
+        let (maybe_app_uuid, maybe_net_name) =
+            if let Some((app, net)) = network_name.split_once("_") {
+                (app, net)
+            } else {
+                (UNKNOWN_APP_UUID, network_name.as_str())
+            };
+
         // get the network name from the label
         let net_name: String = local_network
             .labels
             .get(LABEL_NETWORK_NAME)
             .map(|name| name.as_str())
-            .unwrap_or(&network_name)
+            .unwrap_or(maybe_net_name)
             .into();
 
         let app_uuid: Uuid = local_network
             .namespace(&net_name)
             .as_ref()
             .map(|uuid| uuid.as_str())
-            .unwrap_or(UNKNOWN_APP_UUID)
+            .unwrap_or(maybe_app_uuid)
             .into();
 
         let network: Network = local_network.into();
@@ -225,9 +232,11 @@ pub async fn read(
     }
 
     // read the state of volumes
+    // use `LABEL_VOLUME_NAME` instead of `LABEL_SUPERVISED` as the filter
+    // to avoid removing volumes created by the legacy supervisor
     let volumes = docker
         .volume()
-        .list_with_labels(vec![LABEL_SUPERVISED])
+        .list_with_labels(vec![LABEL_VOLUME_NAME])
         .await?;
 
     for volume_name in volumes {
