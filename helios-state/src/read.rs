@@ -91,182 +91,180 @@ pub async fn read(
         device.images.insert(img_uri, image.into());
     }
 
-    // read state of apps if the `userapps` feature is enabled
-    if cfg!(feature = "userapps") {
-        let apps = &mut device.apps;
+    // read the state of apps
+    let apps = &mut device.apps;
 
-        // read apps from local state
-        let apps_view = local_store.as_view().at("apps")?;
-        let app_uuids: Vec<Uuid> = apps_view
-            .keys()
-            .await?
-            .into_iter()
-            .map(Uuid::from)
-            .collect();
-        for app_uuid in app_uuids {
-            if let Some(id) = apps_view.get(format!("{app_uuid}/id")).await? {
-                let name = apps_view.get(format!("{app_uuid}/name")).await?;
-                apps.insert(
-                    app_uuid,
-                    App {
-                        id,
-                        name,
-                        locked: false,
-                        lockfiles: Vec::new(),
-                        releases: Map::new(),
-                        rejected_release: None,
-                    },
-                );
-            }
+    // read apps from local state
+    let apps_view = local_store.as_view().at("apps")?;
+    let app_uuids: Vec<Uuid> = apps_view
+        .keys()
+        .await?
+        .into_iter()
+        .map(Uuid::from)
+        .collect();
+    for app_uuid in app_uuids {
+        if let Some(id) = apps_view.get(format!("{app_uuid}/id")).await? {
+            let name = apps_view.get(format!("{app_uuid}/name")).await?;
+            apps.insert(
+                app_uuid,
+                App {
+                    id,
+                    name,
+                    locked: false,
+                    lockfiles: Vec::new(),
+                    releases: Map::new(),
+                    rejected_release: None,
+                },
+            );
         }
+    }
 
-        // read the state of containers
-        let containers = docker
-            .container()
-            .list_with_labels(vec![LABEL_SUPERVISED])
-            .await?;
+    // read the state of containers
+    let containers = docker
+        .container()
+        .list_with_labels(vec![LABEL_SUPERVISED])
+        .await?;
 
-        for container_id in containers {
-            let local_container = docker.container().inspect(&container_id).await?;
-            let labels = &local_container.config.labels;
-            let app_uuid: Uuid = labels
-                .get(LABEL_APP_UUID)
-                .map(|uuid| uuid.as_str())
-                .unwrap_or(UNKNOWN_APP_UUID)
-                .into();
-            let service_name: String = labels
-                .get(LABEL_SERVICE_NAME)
-                .map(|name| name.as_str())
-                .unwrap_or(local_container.name.as_str())
-                .into();
-            let release_uuid: Uuid = local_container
-                .namespace(&service_name)
-                .as_ref()
-                .map(|n| n.as_str())
-                .unwrap_or(UNKNOWN_RELEASE_UUID)
-                .into();
+    for container_id in containers {
+        let local_container = docker.container().inspect(&container_id).await?;
+        let labels = &local_container.config.labels;
+        let app_uuid: Uuid = labels
+            .get(LABEL_APP_UUID)
+            .map(|uuid| uuid.as_str())
+            .unwrap_or(UNKNOWN_APP_UUID)
+            .into();
+        let service_name: String = labels
+            .get(LABEL_SERVICE_NAME)
+            .map(|name| name.as_str())
+            .unwrap_or(local_container.name.as_str())
+            .into();
+        let release_uuid: Uuid = local_container
+            .namespace(&service_name)
+            .as_ref()
+            .map(|n| n.as_str())
+            .unwrap_or(UNKNOWN_RELEASE_UUID)
+            .into();
 
-            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+        let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
-            // Create the release for the uuid if it doesn't exist
-            let release = if let Some(rel) = app.releases.get_mut(&release_uuid) {
-                rel
-            } else {
-                // only read the install state when creating the release
-                let installed = apps_view
-                    .get(format!("{app_uuid}/releases/{release_uuid}/installed"))
-                    .await?
-                    .unwrap_or_default();
+        // Create the release for the uuid if it doesn't exist
+        let release = if let Some(rel) = app.releases.get_mut(&release_uuid) {
+            rel
+        } else {
+            // only read the install state when creating the release
+            let installed = apps_view
+                .get(format!("{app_uuid}/releases/{release_uuid}/installed"))
+                .await?
+                .unwrap_or_default();
 
-                app.releases.entry(release_uuid.clone()).or_insert(Release {
-                    installed,
+            app.releases.entry(release_uuid.clone()).or_insert(Release {
+                installed,
+                services: Map::new(),
+                networks: Map::new(),
+                volumes: Map::new(),
+            })
+        };
+
+        // Create the service configuration from the container
+        let mut svc = Service::from(local_container);
+
+        // Link the service to the local image if there is state metadata about it
+        svc.image = apps_view
+            .get(format!(
+                "{app_uuid}/releases/{release_uuid}/services/{service_name}/image"
+            ))
+            .await?
+            // use the image id if no store metadata is available
+            .unwrap_or(svc.image);
+
+        release.services.insert(service_name, svc);
+    }
+
+    // read the state of networks
+    let networks = docker
+        .network()
+        .list_with_labels(vec![LABEL_SUPERVISED])
+        .await?;
+
+    for network_name in networks {
+        let local_network = docker.network().inspect(&network_name).await?;
+
+        // get the network name from the label
+        let net_name: String = local_network
+            .labels
+            .get(LABEL_NETWORK_NAME)
+            .map(|name| name.as_str())
+            .unwrap_or(&network_name)
+            .into();
+
+        let app_uuid: Uuid = local_network
+            .namespace(&net_name)
+            .as_ref()
+            .map(|uuid| uuid.as_str())
+            .unwrap_or(UNKNOWN_APP_UUID)
+            .into();
+
+        let network: Network = local_network.into();
+        let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+
+        // If there are no releases, create an unknown release for cleanup
+        if app.releases.is_empty() {
+            app.releases
+                .entry(UNKNOWN_RELEASE_UUID.into())
+                .or_insert(Release {
+                    installed: false,
                     services: Map::new(),
                     networks: Map::new(),
                     volumes: Map::new(),
-                })
-            };
-
-            // Create the service configuration from the container
-            let mut svc = Service::from(local_container);
-
-            // Link the service to the local image if there is state metadata about it
-            svc.image = apps_view
-                .get(format!(
-                    "{app_uuid}/releases/{release_uuid}/services/{service_name}/image"
-                ))
-                .await?
-                // use the image id if no store metadata is available
-                .unwrap_or(svc.image);
-
-            release.services.insert(service_name, svc);
+                });
         }
-
-        // read the state of networks
-        let networks = docker
-            .network()
-            .list_with_labels(vec![LABEL_SUPERVISED])
-            .await?;
-
-        for network_name in networks {
-            let local_network = docker.network().inspect(&network_name).await?;
-
-            // get the network name from the label
-            let net_name: String = local_network
-                .labels
-                .get(LABEL_NETWORK_NAME)
-                .map(|name| name.as_str())
-                .unwrap_or(&network_name)
-                .into();
-
-            let app_uuid: Uuid = local_network
-                .namespace(&net_name)
-                .as_ref()
-                .map(|uuid| uuid.as_str())
-                .unwrap_or(UNKNOWN_APP_UUID)
-                .into();
-
-            let network: Network = local_network.into();
-            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
-
-            // If there are no releases, create an unknown release for cleanup
-            if app.releases.is_empty() {
-                app.releases
-                    .entry(UNKNOWN_RELEASE_UUID.into())
-                    .or_insert(Release {
-                        installed: false,
-                        services: Map::new(),
-                        networks: Map::new(),
-                        volumes: Map::new(),
-                    });
-            }
-            // Add network to all existing releases
-            for release in app.releases.values_mut() {
-                release.networks.insert(net_name.clone(), network.clone());
-            }
+        // Add network to all existing releases
+        for release in app.releases.values_mut() {
+            release.networks.insert(net_name.clone(), network.clone());
         }
+    }
 
-        // read the state of volumes
-        let volumes = docker
-            .volume()
-            .list_with_labels(vec![LABEL_SUPERVISED])
-            .await?;
+    // read the state of volumes
+    let volumes = docker
+        .volume()
+        .list_with_labels(vec![LABEL_SUPERVISED])
+        .await?;
 
-        for volume_name in volumes {
-            let local_volume = docker.volume().inspect(&volume_name).await?;
+    for volume_name in volumes {
+        let local_volume = docker.volume().inspect(&volume_name).await?;
 
-            // get the volume name from the label
-            let vol_name: String = local_volume
-                .labels
-                .get(LABEL_VOLUME_NAME)
-                .map(|name| name.as_str())
-                .unwrap_or(&volume_name)
-                .into();
+        // get the volume name from the label
+        let vol_name: String = local_volume
+            .labels
+            .get(LABEL_VOLUME_NAME)
+            .map(|name| name.as_str())
+            .unwrap_or(&volume_name)
+            .into();
 
-            let app_uuid: Uuid = local_volume
-                .namespace(&vol_name)
-                .as_ref()
-                .map(|n| n.as_str())
-                .unwrap_or(UNKNOWN_APP_UUID)
-                .into();
+        let app_uuid: Uuid = local_volume
+            .namespace(&vol_name)
+            .as_ref()
+            .map(|n| n.as_str())
+            .unwrap_or(UNKNOWN_APP_UUID)
+            .into();
 
-            let volume: Volume = local_volume.into();
-            let app = get_or_create_app(apps, &app_uuid, local_store).await?;
+        let volume: Volume = local_volume.into();
+        let app = get_or_create_app(apps, &app_uuid, local_store).await?;
 
-            // If there are no releases, create an unknown release for cleanup
-            if app.releases.is_empty() {
-                app.releases
-                    .entry(UNKNOWN_RELEASE_UUID.into())
-                    .or_insert(Release {
-                        installed: false,
-                        services: Map::new(),
-                        networks: Map::new(),
-                        volumes: Map::new(),
-                    });
-            }
-            // Add volume to all existing releases
-            for release in app.releases.values_mut() {
-                release.volumes.insert(vol_name.clone(), volume.clone());
-            }
+        // If there are no releases, create an unknown release for cleanup
+        if app.releases.is_empty() {
+            app.releases
+                .entry(UNKNOWN_RELEASE_UUID.into())
+                .or_insert(Release {
+                    installed: false,
+                    services: Map::new(),
+                    networks: Map::new(),
+                    volumes: Map::new(),
+                });
+        }
+        // Add volume to all existing releases
+        for release in app.releases.values_mut() {
+            release.volumes.insert(vol_name.clone(), volume.clone());
         }
     }
 

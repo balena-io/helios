@@ -1,18 +1,11 @@
-#[cfg(feature = "userapps")]
 mod app;
-#[cfg(feature = "userapps")]
+mod device;
 mod helpers;
-#[cfg(feature = "userapps")]
 mod image;
 
-mod device;
-
-#[cfg(feature = "userapps")]
 pub use app::*;
-#[cfg(feature = "userapps")]
-pub use image::*;
-
 pub use device::*;
+pub use image::*;
 
 #[cfg(feature = "balenahup")]
 pub use crate::balenahup::with_hostapp_tasks;
