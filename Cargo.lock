@@ -934,9 +934,11 @@ dependencies = [
  "helios-util",
  "mahler",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -1065,6 +1067,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "walkdir",
  "zbus",
 ]
 

@@ -8,15 +8,20 @@ use mahler::{exception, job};
 use tracing::debug;
 
 use crate::common_types::{HostRuntimeDir, Uuid};
-use crate::oci::{self, Client as Docker, WithContext};
+use crate::oci::{self, Client as Docker, RegistryAuth, WithContext};
 use crate::store::{self as store, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
+use crate::overlays::{deploy_overlay, redeploy_overlay, remove_overlay};
+use crate::reboot::reboot_to_activate;
+
 use super::BALENAHUP;
-use super::models::{Device, Host, HostRelease, HostReleaseStatus, HostReleaseTarget};
+use super::models::{
+    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
+};
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -43,19 +48,13 @@ fn init_hostapp_release(
     System(device): System<Device>,
     store: Res<DocumentStore>,
 ) -> IO<HostRelease, store::Error> {
-    let HostReleaseTarget {
-        app,
-        image,
-        build,
-        updater,
-        ..
-    } = tgt;
+    let HostReleaseTarget { app, hostapp, .. } = tgt;
 
     // Get the running status by comparing to the current os build
     let is_running = device
         .host
         .and_then(|host| host.meta.build)
-        .is_some_and(|os_build| os_build == build);
+        .is_some_and(|os_build| os_build == hostapp.build);
 
     let status = if is_running {
         HostReleaseStatus::Running
@@ -66,11 +65,14 @@ fn init_hostapp_release(
     // Create a release using the target metadata
     let rel = HostRelease {
         app,
-        image,
-        build,
-        updater,
+        hostapp: HostApp {
+            image: hostapp.image,
+            build: hostapp.build,
+            updater: hostapp.updater,
+            install_attempts: 0,
+        },
         status,
-        install_attempts: 0,
+        overlays: mahler::state::Map::new(),
     };
 
     // set the host release with the details from the target
@@ -95,8 +97,10 @@ fn init_hostapp_release(
 fn install_hostapp_release(
     mut release: View<HostRelease>,
     Args(release_uuid): Args<String>,
+    Target(tgt): Target<HostRelease>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
+    registry_auth: Res<RegistryAuth>,
     host_runtime_dir: Res<HostRuntimeDir>,
 ) -> IO<HostRelease, HostUpdateError> {
     // this task is only applicable if the release is not already running
@@ -105,8 +109,22 @@ fn install_hostapp_release(
         "OS release already installed"
     );
 
+    // Stage every overlay before committing to the install. The reboot has its
+    // own check, so this is not about ordering the activation; it is about not
+    // installing a hostapp that a failing overlay will then abort. The install
+    // cannot be undone and this task only runs from `Created`, so a release
+    // installed alongside a failed overlay would sit at `Installed` with no way
+    // forward short of a reboot.
+    let overlays_ready = tgt.overlays.keys().all(|name| {
+        release
+            .overlays
+            .get(name)
+            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
+    });
+    enforce!(overlays_ready, "overlays not yet deployed");
+
     // increase the install counter
-    release.install_attempts += 1;
+    release.hostapp.install_attempts += 1;
     with_io(release, async move |mut release| {
         let docker = docker
             .as_ref()
@@ -127,21 +145,27 @@ fn install_hostapp_release(
         let _ = release.commit().await;
 
         // Pull the docker image for the updater
-        debug!("pull hostapp updater script from '{}'", release.updater);
+        debug!(
+            "pull hostapp updater script from '{}'",
+            release.hostapp.updater
+        );
+        let credentials = registry_auth
+            .as_ref()
+            .and_then(|auth| auth.credentials(&release.hostapp.updater));
         docker
             .image()
-            .pull(&release.updater, None)
+            .pull(&release.hostapp.updater, credentials)
             .await
             .with_context(|| {
                 format!(
                     "failed to pull hostapp updater script from '{}",
-                    release.updater
+                    release.hostapp.updater
                 )
             })?;
 
         // create a `balenahup` container from the update image
         let id = container_helper
-            .create_tmp(BALENAHUP, &release.updater)
+            .create_tmp(BALENAHUP, &release.hostapp.updater)
             .await?;
 
         // configure the target dir in $RUNTIME_DIR/balenahup
@@ -183,9 +207,8 @@ fn install_hostapp_release(
                 "--release-commit",
                 release_uuid.as_str(),
                 "--target-image-uri",
-                release.image.as_str(),
-                // FIXME: this needs to be re-added after helios handles update-locks
-                // "--no-reboot"
+                release.hostapp.image.as_str(),
+                "--no-reboot",
             ])
             .workdir(host_target_dir);
         systemd::run("os-update", &hup_cmd).await?;
@@ -229,7 +252,7 @@ fn update_script_uri(
     );
 
     // the only change that this applies is to the updater script
-    rel.updater = tgt.updater;
+    rel.hostapp.updater = tgt.hostapp.updater;
 
     with_io(rel, async move |rel| {
         // write the release data into the store
@@ -303,7 +326,7 @@ pub fn cleanup_hostapp(
                 .await?
             {
                 // remove the updater image if it exists
-                docker.image().remove(&rel.updater).await?;
+                docker.image().remove(&rel.hostapp.updater).await?;
             }
 
             // if the release does not exist in the target state
@@ -337,6 +360,11 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("install host OS release '{release_uuid}'")
                     },
                 ),
+                job::update(reboot_to_activate).with_description(
+                    |Args(release_uuid): Args<String>| {
+                        format!("reboot to activate host OS release '{release_uuid}'")
+                    },
+                ),
                 job::update(update_script_uri).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("update metadata for host OS release '{release_uuid}'")
@@ -345,6 +373,22 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 job::delete(remove_old_metadata).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("remove metadata for host OS release '{release_uuid}'",)
+                    },
+                ),
+            ],
+        )
+        .jobs(
+            "/host/releases/{release_uuid}/overlays/{name}",
+            [
+                job::create(deploy_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("deploy overlay '{name}' for host OS release '{release_uuid}'")
+                    },
+                ),
+                job::update(redeploy_overlay),
+                job::delete(remove_overlay).with_description(
+                    |Args((release_uuid, name)): Args<(String, String)>| {
+                        format!("remove overlay '{name}' for host OS release '{release_uuid}'")
                     },
                 ),
             ],
@@ -359,18 +403,49 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             exception::delete(|| true)
                 .with_description(|| "target host release is invalid or missing"),
         )
-        // ignore requests to update the host if it has already been installed (we are waiting for
-        // a reboot) or we reached the number of install attempts
-        .exception(
-            "/host/releases/{release_uuid}",
-            exception::update(|rel: View<HostRelease>| rel.status == HostReleaseStatus::Installed)
-                .with_description(|| "update needs a reboot to complete"),
-        )
+        // ignore requests to update the host if we reached the number of install attempts
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>| {
-                rel.status == HostReleaseStatus::Created && rel.install_attempts >= 3
+                rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
             })
             .with_description(|| "too many failed installs, check device"),
+        )
+        // abort the release if an overlay failed to activate at the target image
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>, Target(tgt): Target<HostRelease>| {
+                tgt.overlays.iter().any(|(name, tgt_overlay)| {
+                    rel.overlays.get(name).is_some_and(|ov| {
+                        ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image
+                    })
+                })
+            })
+            .with_description(|Args(release_uuid): Args<String>| {
+                format!(
+                    "overlay activation failed for host OS release '{release_uuid}', check device"
+                )
+            }),
+        )
+        // wait for an in-progress host OS update (the OS is validating a staged
+        // update and may still roll back); do not start more host work.
+        //
+        // TODO: an exception is not a defer: the apply reports `aborted` and is
+        // not retried, so host work skipped here waits for the next target
+        // change, the daily poll re-emit, or a manual update (up to 24h after
+        // the validation finishes). Revisit with the reboot control work item
+        // (public id 4536), whose blocking top-level reboot task should model
+        // the wait instead of excepting it.
+        .exception(
+            "/host/releases/{release_uuid}",
+            // The validation window is a device-global condition, so the guard
+            // reads the host-level flag rather than a per-release copy: this
+            // also defers a release that first appears in the target during the
+            // window (its `create` writes harmless metadata, but the `install`
+            // and reboot it would otherwise chain are held off).
+            exception::update(|System(device): System<Device>| {
+                device.host.is_some_and(|host| host.os_validating)
+            })
+            .with_description(|| "host OS update in progress, waiting for validation"),
         )
 }

@@ -180,12 +180,25 @@ pub struct ImageConfig {
 
     /// User-defined key/value metadata
     pub labels: Option<HashMap<String, String>>,
+
+    pub volumes: Vec<String>,
 }
 
 impl From<bollard::config::ImageConfig> for ImageConfig {
     fn from(value: bollard::config::ImageConfig) -> Self {
-        let bollard::config::ImageConfig { cmd, labels, .. } = value;
-        Self { cmd, labels }
+        let bollard::config::ImageConfig {
+            cmd,
+            labels,
+            volumes,
+            ..
+        } = value;
+        let mut volumes: Vec<String> = volumes.unwrap_or_default();
+        volumes.sort();
+        Self {
+            cmd,
+            labels,
+            volumes,
+        }
     }
 }
 

@@ -149,6 +149,28 @@ impl<N: Namespace> Container<'_, N> {
         }
     }
 
+    /// Block until the container exits and return its exit code.
+    ///
+    /// bollard reports a non-zero exit as `DockerContainerWaitError` rather than
+    /// a normal stream item, so both encodings are normalized back to the exit
+    /// code here and the caller decides what a non-zero code means.
+    pub async fn wait(&self, id: &str) -> Result<i64> {
+        let mut stream = self
+            .client
+            .inner()
+            .wait_container(id, None::<bollard::query_parameters::WaitContainerOptions>);
+        match stream.next().await {
+            Some(Ok(resp)) => Ok(resp.status_code),
+            Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => Ok(code),
+            Some(Err(e)) => {
+                Err(Error::from(e).context(format!("failed to wait for container '{id}'")))
+            }
+            None => Err(Error::from(format!(
+                "container '{id}' exited without a wait status"
+            ))),
+        }
+    }
+
     /// Stop the container with the given name
     pub async fn stop(&self, name: &str) -> Result<()> {
         match self.client.inner().stop_container(name, None).await {
@@ -669,6 +691,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             error: state.error,
             healthy,
             status,
+            exit_code: state.exit_code,
         };
 
         Ok(Self {
@@ -721,6 +744,7 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.
@@ -1024,6 +1048,9 @@ pub enum Mount {
         nocopy: bool,
         /// Subpath inside the volume to mount
         subpath: Option<String>,
+        /// Labels to apply to the volume when the engine auto-creates it.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        labels: HashMap<String, String>,
     },
     Bind {
         target: String,
@@ -1118,11 +1145,13 @@ impl From<Mount> for bollard::models::Mount {
                 read_only,
                 nocopy,
                 subpath,
+                labels,
             } => {
-                let volume_options = if nocopy || subpath.is_some() {
+                let volume_options = if nocopy || subpath.is_some() || !labels.is_empty() {
                     Some(MountVolumeOptions {
                         no_copy: nocopy.then_some(true),
                         subpath,
+                        labels: (!labels.is_empty()).then_some(labels),
                         ..Default::default()
                     })
                 } else {
@@ -1201,16 +1230,23 @@ impl TryFrom<bollard::models::Mount> for Mount {
         match value.typ {
             Some(MountType::VOLUME) => {
                 let source = value.source.unwrap_or_default();
-                let (nocopy, subpath) = value
+                let (nocopy, subpath, labels) = value
                     .volume_options
-                    .map(|o| (o.no_copy.unwrap_or_default(), o.subpath))
-                    .unwrap_or((false, None));
+                    .map(|o| {
+                        (
+                            o.no_copy.unwrap_or_default(),
+                            o.subpath,
+                            o.labels.unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or((false, None, HashMap::new()));
                 Ok(Mount::Volume {
                     target,
                     source,
                     read_only,
                     nocopy,
                     subpath,
+                    labels,
                 })
             }
             Some(MountType::BIND) => {

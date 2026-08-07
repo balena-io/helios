@@ -107,10 +107,12 @@ fn report_host_app(
     authorized_apps: &[Uuid],
     apps: &mut HashMap<Uuid, AppReport>,
 ) {
+    use crate::state::models::OverlayStatus;
+
     let release_uuid = host_state
         .releases
         .iter()
-        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.build))
+        .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.hostapp.build))
         .map(|(uuid, _)| uuid.clone());
 
     for (rel_uuid, release) in host_state.releases {
@@ -139,19 +141,41 @@ fn report_host_app(
             releases: HashMap::new(),
         });
 
+        // Overlay extensions are services of the host release, mirroring the
+        // target format where they arrive as services of the hostapp release.
+        let services = std::iter::once((
+            "hostapp".to_owned(),
+            ServiceReport {
+                image: release.hostapp.image.repo(),
+                status: service_status,
+                download_progress: None,
+            },
+        ))
+        .chain(release.overlays.iter().map(|(name, overlay)| {
+            (
+                name.clone(),
+                ServiceReport {
+                    image: overlay.image.repo(),
+                    status: match overlay.status {
+                        // carried by the running kernel
+                        OverlayStatus::Active => ServiceStatus::Running,
+                        // staged on its ext_* volume, awaiting the reboot
+                        OverlayStatus::Deployed => ServiceStatus::Installed,
+                        // the activation container did not exit cleanly: a
+                        // terminal failure, not work still in progress
+                        OverlayStatus::Failed => ServiceStatus::Dead,
+                    },
+                    download_progress: None,
+                },
+            )
+        }))
+        .collect();
+
         app.releases.insert(
             rel_uuid,
             ReleaseReport {
                 update_status,
-                services: [(
-                    "hostapp".to_owned(),
-                    ServiceReport {
-                        image: release.image.repo(),
-                        status: service_status,
-                        download_progress: None,
-                    },
-                )]
-                .into(),
+                services,
             },
         );
     }

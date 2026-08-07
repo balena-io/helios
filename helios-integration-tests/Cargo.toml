@@ -59,6 +59,7 @@ tokio-stream = { version = "0.1.18", default-features = false, features = [
 ] }
 tracing = "0.1.44"
 uuid = { version = "1.23", features = ["v4"] }
+walkdir = { version = "2.5", default-features = false }
 zbus = { version = "5.15", default-features = false, features = ["tokio"] }
 
 # workspace dev dependencies
@@ -92,3 +93,4 @@ serde_json.workspace = true
 tar.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
+zbus.workspace = true

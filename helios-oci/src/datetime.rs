@@ -1,5 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -21,6 +22,20 @@ impl FromStr for DateTime {
     }
 }
 
+impl DateTime {
+    /// Convert to a `std::time::SystemTime` for comparison against host clocks
+    pub fn as_system_time(&self) -> SystemTime {
+        self.0.into()
+    }
+}
+
+impl From<SystemTime> for DateTime {
+    /// Build a `DateTime` from a `std::time::SystemTime`.
+    fn from(v: SystemTime) -> Self {
+        DateTime(v.into())
+    }
+}
+
 impl Serialize for DateTime {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
@@ -37,6 +52,7 @@ impl<'de> Deserialize<'de> for DateTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn roundtrip_display_fromstr() {
@@ -57,5 +73,21 @@ mod tests {
     #[test]
     fn invalid_string_fails() {
         assert!("not-a-date".parse::<DateTime>().is_err());
+    }
+
+    #[test]
+    fn roundtrips_system_time_across_the_epoch() {
+        // The conversions delegate to chrono, which has to keep handling times
+        // before the epoch: a container created on a device whose clock had not
+        // yet synced reports one.
+        for offset in [
+            Duration::from_secs(0),
+            Duration::from_nanos(1),
+            Duration::from_secs(1_700_000_000),
+        ] {
+            for t in [UNIX_EPOCH + offset, UNIX_EPOCH - offset] {
+                assert_eq!(DateTime::from(t).as_system_time(), t);
+            }
+        }
     }
 }
