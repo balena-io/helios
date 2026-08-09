@@ -43,6 +43,36 @@ fn find_blocking_lock(locks: &LockSet, runtime_dir: &Path) -> io::Result<Option<
     Ok(None)
 }
 
+/// Issue the coordinated host-OS reboot, honoring user update locks.
+///
+/// A forced update overrides those locks, so the gate is skipped entirely
+/// rather than consulted and ignored.
+async fn guarded_reboot(
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> Result<(), RebootError> {
+    let force = force_acquire_locks
+        .as_ref()
+        .expect("force_acquire_locks should be available")
+        .enabled();
+
+    if !force {
+        // Scan the container-visible runtime dir, not the host-side path
+        let runtime_dir = runtime_dir();
+        let held = run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            find_blocking_lock(locks, &runtime_dir)
+        })
+        .await?;
+        if let Some(path) = held {
+            return Err(RebootError::Locked(path));
+        }
+    }
+
+    systemd::reboot().await?;
+    Ok(())
+}
+
 /// Issue the single coordinated host-OS reboot to activate a release's
 /// reboot-requiring overlays.
 // TODO: Replace with a device level `requires_reboot` flag and a top level task
@@ -79,29 +109,7 @@ pub(crate) fn reboot_to_activate(
     }
 
     with_io(release, async move |release| {
-        let force = force_acquire_locks
-            .as_ref()
-            .expect("force_acquire_locks should be available")
-            .enabled();
-
-        // Honor the user update lock. A forced update overrides those locks, so
-        // there is nothing to wait for and the gate is skipped entirely rather
-        // than consulted and ignored.
-        if !force {
-            // Scan the container-visible runtime dir, not the host-side path
-            let runtime_dir = runtime_dir();
-            let held = run_async(move || {
-                let locks = locks.as_ref().expect("locks resource should be available");
-                find_blocking_lock(locks, &runtime_dir)
-            })
-            .await?;
-            if let Some(path) = held {
-                return Err(RebootError::Locked(path));
-            }
-        }
-
-        // Issue the single coordinated reboot.
-        systemd::reboot().await?;
+        guarded_reboot(locks, force_acquire_locks).await?;
         Ok(release)
     })
 }
