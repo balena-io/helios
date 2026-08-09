@@ -6,13 +6,14 @@ use crate::common_types::Uuid;
 use crate::oci::{self, Client as Docker};
 
 use crate::store::{self, DocumentStore};
-use crate::util::dirs::runtime_dir;
+use crate::util::breadcrumb;
 use crate::util::proc;
 use crate::util::systemd;
 
 use super::BALENAHUP;
 use super::models::{
-    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, overlay_from_container,
+    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, OVERLAY_REBOOT_BREADCRUMB,
+    overlay_from_container,
 };
 
 /// The systemd unit running the OS rollback validation after a HUP.
@@ -51,6 +52,23 @@ fn validation_in_progress(unit: &systemd::UnitStatus) -> bool {
     unit.is_inactive() && !unit.conditions_evaluated()
 }
 
+/// Query the rollback validation state.
+///
+/// A unit that cannot be queried is reported as not validating: refusing host
+/// work on a failed query would strand the device on any OS where the unit is
+/// unreachable.
+pub(crate) async fn os_validation_in_progress() -> bool {
+    match systemd::unit_status(ROLLBACK_HEALTH_UNIT).await {
+        Ok(unit) => validation_in_progress(&unit),
+        Err(e) => {
+            tracing::warn!(
+                "could not query {ROLLBACK_HEALTH_UNIT}.service, assuming no rollback validation in progress: {e}"
+            );
+            false
+        }
+    }
+}
+
 /// Read the hostapp data from the store
 pub async fn from_store(
     host: &mut Host,
@@ -81,10 +99,8 @@ pub async fn from_store(
                 release.status = if host.meta.build.as_ref() == Some(&release.hostapp.build) {
                     // if the hostapp build is the current OS build then the release is running
                     HostReleaseStatus::Running
-                } else if tokio::fs::try_exists(
-                    runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")),
-                )
-                .await?
+                } else if breadcrumb::exists(&format!("{BALENAHUP}-{release_uuid}-breadcrumb"))
+                    .await?
                 {
                     // if there is a balenahup breadcrumb, then we are still waiting for a
                     // reboot
@@ -136,15 +152,9 @@ pub async fn from_store(
     // A helios-issued reboot during the validation window would trigger the
     // OS rollback, so host work defers while the validation runs. The condition
     // is device-global (one rollback-health unit), so it lives on the host.
-    host.os_validating = match systemd::unit_status(ROLLBACK_HEALTH_UNIT).await {
-        Ok(unit) => validation_in_progress(&unit),
-        Err(e) => {
-            tracing::warn!(
-                "could not query {ROLLBACK_HEALTH_UNIT}.service, assuming no rollback validation in progress: {e}"
-            );
-            false
-        }
-    };
+    host.os_validating = os_validation_in_progress().await;
+
+    host.pending_reboot = breadcrumb::exists(OVERLAY_REBOOT_BREADCRUMB).await?;
 
     Ok(())
 }

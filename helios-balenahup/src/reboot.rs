@@ -114,6 +114,36 @@ pub(crate) fn reboot_to_activate(
     })
 }
 
+/// Reboot to apply an overlay removal.
+///
+/// The only condition is the flag itself, and that is deliberate.
+pub(crate) fn reboot_to_apply_overlays(
+    mut pending: View<bool>,
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> IO<bool, RebootError> {
+    enforce!(*pending, "no overlay change awaiting a reboot");
+    *pending = false;
+
+    with_io(pending, async move |pending| {
+        guarded_reboot(locks, force_acquire_locks).await?;
+        Ok(pending)
+    })
+}
+
+/// Record that an overlay change is waiting for the reboot that applies it.
+///
+/// Pure state, no IO: the breadcrumb backing the flag is written by
+/// `remove_overlay`. A task may only write its own subtree, so the removal
+/// cannot raise this flag itself. Expanding both from one method is what lets
+/// the planner see the flag rise during simulation and sequence
+/// `reboot_to_apply_overlays` into the same workflow, instead of waiting for
+/// the next state read to surface the breadcrumb.
+pub(crate) fn mark_pending_reboot(mut pending: View<bool>) -> View<bool> {
+    *pending = true;
+    pending
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RebootError {
     #[error("a user update-lock forbids rebooting: {}", .0.display())]

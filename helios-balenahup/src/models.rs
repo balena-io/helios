@@ -22,6 +22,11 @@ const IMAGE_LABEL: &str = "io.balena.private.image";
 /// ships.
 const KERNEL_ABI_ID_LABEL: &str = "io.balena.image.kernel-abi-id";
 
+/// breadcrumb marking that an overlay was removed and the root overlay
+/// composition is stale until a reboot. Written by `remove_overlay`, read
+/// into `Host::pending_reboot`, cleared by the tmpfs on boot.
+pub(crate) const OVERLAY_REBOOT_BREADCRUMB: &str = "overlay-reboot-breadcrumb";
+
 /// Alternative Device definition to avoid cicular dependencies
 /// DO NOT use this outside the `System` extractor
 #[derive(State, Debug, Clone)]
@@ -42,12 +47,16 @@ pub struct Host {
     /// perform.
     pub releases: Map<Uuid, HostRelease>,
 
+    /// True while an overlay removal awaits the reboot that applies it.
+    #[mahler(default)]
+    pub pending_reboot: bool,
+
     /// Whether the running OS release is still on trial: the rollback
     /// validation has not finished, so the OS may yet roll back. This is a
     /// device-global condition (a single `rollback-health` unit), derived fresh
     /// on every read; a helios-issued reboot during the window would trigger
     /// the rollback, so all host work defers while it is set.
-    #[mahler(internal, default)]
+    #[mahler(default)]
     pub os_validating: bool,
 }
 
@@ -56,6 +65,7 @@ impl Host {
         Host {
             meta,
             releases: Map::new(),
+            pending_reboot: false,
             os_validating: false,
         }
     }
@@ -66,6 +76,11 @@ impl From<Host> for HostTarget {
         let Host { releases, .. } = app;
         HostTarget {
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
+            // A target never asks for a reboot; the diff against a derived
+            // `true` is what schedules one.
+            pending_reboot: false,
+            // Nor for a validation in flight
+            os_validating: false,
         }
     }
 }
@@ -108,7 +123,14 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
             },
         );
 
-        HostTarget { releases }
+        HostTarget {
+            releases,
+            // A remote target never asks for a reboot; the diff against a
+            // derived `true` is what schedules one.
+            pending_reboot: false,
+            // Nor for a validation in flight
+            os_validating: false,
+        }
     }
 }
 
@@ -435,12 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_kernel_claim_from_the_container_labels() {
-        let labels = HashMap::from([(KERNEL_ABI_ID_LABEL.to_string(), "329ceda170ac".to_string())]);
-        assert_eq!(kernel_claim(&labels), Some("329ceda170ac"));
-    }
-
-    #[test]
     fn a_created_container_with_an_engine_error_is_still_no_overlay() {
         // A start the engine could not carry out leaves an error on the
         // container, but says nothing about the extension: a refused
@@ -456,6 +472,12 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(derive_overlay_status(&st, boot, None, None), None);
+    }
+
+    #[test]
+    fn reads_the_kernel_claim_from_the_container_labels() {
+        let labels = HashMap::from([(KERNEL_ABI_ID_LABEL.to_string(), "329ceda170ac".to_string())]);
+        assert_eq!(kernel_claim(&labels), Some("329ceda170ac"));
     }
 
     #[test]

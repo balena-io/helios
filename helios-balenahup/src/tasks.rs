@@ -10,18 +10,47 @@ use tracing::debug;
 use crate::common_types::{HostRuntimeDir, Uuid};
 use crate::oci::{self, Client as Docker, RegistryAuth, WithContext};
 use crate::store::{self as store, DocumentStore};
+use crate::util::breadcrumb;
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
-use crate::overlays::{deploy_overlay, redeploy_overlay, remove_overlay};
-use crate::reboot::reboot_to_activate;
+use crate::overlays::{
+    deploy_overlay, redeploy_overlay, remove_overlay, remove_overlay_and_mark_reboot,
+};
+use crate::reboot::{mark_pending_reboot, reboot_to_activate, reboot_to_apply_overlays};
 
 use super::BALENAHUP;
 use super::models::{
     Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
 };
+use super::read;
+
+/// Whether the OS is validating a staged update and may still roll back, so
+/// any helios-issued reboot would trigger that rollback.
+///
+fn os_validating(System(device): System<Device>) -> bool {
+    device.host.is_some_and(|host| host.os_validating)
+}
+
+/// Wait for the OS rollback validation to finish before doing host work.
+///
+/// The wait polls the unit rather than the state view: the view is a snapshot
+/// taken when the plan was built, so only a fresh query can observe the window
+/// closing.
+fn await_os_validation(mut validating: View<bool>) -> IO<bool, HostUpdateError> {
+    enforce!(*validating, "no host OS update is being validated");
+    *validating = false;
+
+    with_io(validating, async move |validating| {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        while read::os_validation_in_progress().await {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        Ok(validating)
+    })
+}
 
 #[derive(Debug, thiserror::Error)]
 enum HostUpdateError {
@@ -218,10 +247,7 @@ fn install_hostapp_release(
         // HUP after a rollback. Since the hup script may reboot immediately after finishing, this
         // step may be skipped, but that is fine since the breadcrumb is not longer needed at that
         // point
-        run_async(move || {
-            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))
-        })
-        .await?;
+        breadcrumb::set(&format!("{BALENAHUP}-{release_uuid}-breadcrumb")).await?;
 
         Ok(release)
     })
@@ -386,12 +412,31 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     },
                 ),
                 job::update(redeploy_overlay),
-                job::delete(remove_overlay).with_description(
+                job::delete(remove_overlay_and_mark_reboot),
+                // Reachable only through a method: `remove_overlay_and_mark_reboot`
+                // on delete, `redeploy_overlay` on an image change.
+                job::none(remove_overlay).with_description(
                     |Args((release_uuid, name)): Args<(String, String)>| {
                         format!("remove overlay '{name}' for host OS release '{release_uuid}'")
                     },
                 ),
             ],
+        )
+        .jobs(
+            "/host/pending_reboot",
+            [
+                job::update(reboot_to_apply_overlays)
+                    .with_description(|| "reboot to apply overlay changes"),
+                // The target never asks for the flag, so this is only ever
+                // reached by expansion from the overlay removal method.
+                job::none(mark_pending_reboot)
+                    .with_description(|| "mark overlay change as awaiting a reboot"),
+            ],
+        )
+        .job(
+            "/host/os_validating",
+            job::update(await_os_validation)
+                .with_description(|| "wait for the host OS update validation to finish"),
         )
         .job(
             "/host",
@@ -427,25 +472,18 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 )
             }),
         )
-        // wait for an in-progress host OS update (the OS is validating a staged
-        // update and may still roll back); do not start more host work.
-        //
-        // TODO: an exception is not a defer: the apply reports `aborted` and is
-        // not retried, so host work skipped here waits for the next target
-        // change, the daily poll re-emit, or a manual update (up to 24h after
-        // the validation finishes). Revisit with the reboot control work item
-        // (public id 4536), whose blocking top-level reboot task should model
-        // the wait instead of excepting it.
+        // hold off host work while the OS validates a staged update and may
+        // still roll back.
         .exception(
             "/host/releases/{release_uuid}",
-            // The validation window is a device-global condition, so the guard
-            // reads the host-level flag rather than a per-release copy: this
-            // also defers a release that first appears in the target during the
-            // window (its `create` writes harmless metadata, but the `install`
-            // and reboot it would otherwise chain are held off).
-            exception::update(|System(device): System<Device>| {
-                device.host.is_some_and(|host| host.os_validating)
-            })
-            .with_description(|| "host OS update in progress, waiting for validation"),
+            exception::update(os_validating)
+                .with_description(|| "host OS update in progress, waiting for validation"),
+        )
+        // Same guard on the overlay reboot path: a helios reboot during the
+        // rollback-health window would trigger the rollback.
+        .exception(
+            "/host/pending_reboot",
+            exception::update(os_validating)
+                .with_description(|| "host OS update in progress, waiting for validation"),
         )
 }

@@ -8,8 +8,11 @@ use crate::oci::{
     self, Client as Docker, ContainerConfig, LocalNamespace, Mount, Namespace, NetworkMode,
     RegistryAuth, WithContext,
 };
+use crate::reboot::mark_pending_reboot;
+use crate::util::breadcrumb;
+use crate::util::systemd;
 
-use super::models::{Overlay, OverlayStatus, overlay_labels};
+use super::models::{OVERLAY_REBOOT_BREADCRUMB, Overlay, OverlayStatus, overlay_labels};
 
 /// Prefix of the image labels copied onto the `ext_*` volumes at deploy time.
 ///
@@ -45,6 +48,12 @@ pub(crate) enum OverlayError {
 
     #[error("overlay '{name}' activation container exited with code {code}")]
     ActivationFailed { name: String, code: i64 },
+
+    #[error(transparent)]
+    Systemd(#[from] systemd::Error),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// Deploy a single overlay extension
@@ -148,33 +157,58 @@ pub(crate) fn deploy_overlay(
     })
 }
 
-/// Remove an overlay's container. The `ext_*` volumes are deliberately left
-/// behind: the OS reaps them at the HUP commit boundary, once the new release
-/// has passed validation (`balena-extension-manager cleanup --stale-os`).
-/// Removing them here would take the previous kernel's overlays with them,
-/// which is exactly what a rollback needs to find still on disk.
+/// Disarm an overlay extension through the OS extension manager, which also
+/// drops its container.
+///
+/// The manager aborts without removing if the hook fails, so a failure here
+/// leaves the extension armed and the calling task is retried, rather than
+/// ever leaving a half-removed extension behind.
+///
+/// The `ext_*` volumes are deliberately left behind
+async fn deactivate_overlay(release_uuid: &str, name: &str) -> Result<(), OverlayError> {
+    // The manager addresses the container by its composed identifier, so it is
+    // derived the same way the engine composes it for user services.
+    let container = LocalNamespace::from(release_uuid).to_identifier(name);
+    let cmd = systemd::Command::new("/usr/bin/balena-extension-manager")
+        .args(&["deactivate", &container]);
+    systemd::run(&format!("extension-remove-{name}-{release_uuid}"), &cmd).await?;
+
+    Ok(())
+}
+
+/// Remove an overlay and record the reboot that applies the removal.
+///
+/// The breadcrumb is written before the disarm, and the order matters. Written
+/// after, a disarm that succeeds followed by a failed breadcrumb write drops
+/// the container and leaves no record: the next read sees the overlay gone and
+/// the flag clear, calls the target reached, and the stale root composition
+/// survives with nothing left in the state to schedule a reboot from. Written
+/// first, the same failure costs one reboot that clears itself, and a disarm
+/// that keeps failing aborts the workflow before the reboot task it feeds, so
+/// no reboot lands while the extension is still armed.
 pub(crate) fn remove_overlay(
     overlay: View<Overlay>,
     Args((release_uuid, name)): Args<(String, String)>,
-    docker: Res<Docker>,
 ) -> IO<Option<Overlay>, OverlayError> {
     let overlay = overlay.delete();
 
     with_io(overlay, async move |overlay| {
-        let docker = docker
-            .as_ref()
-            .expect("docker resource should be available");
-
-        // The container is addressed by its composed identifier: the release
-        // uuid is encoded in the name (LocalNamespace), same as user services.
-        docker
-            .container()
-            .remove(&format!("{name}_{release_uuid}"))
-            .await
-            .with_context(|| format!("failed to remove overlay container '{name}'"))?;
+        breadcrumb::set(OVERLAY_REBOOT_BREADCRUMB).await?;
+        deactivate_overlay(&release_uuid, &name).await?;
 
         Ok(overlay)
     })
+}
+
+/// Remove an overlay and schedule the reboot that applies the removal.
+///
+/// The removal writes the overlay subtree and the flag writes
+/// `/host/pending_reboot`, and a task may only write its own subtree, so this
+/// takes two tasks. Their listed order carries no meaning: the two paths are
+/// disjoint, so the planner is free to branch them concurrently, and
+/// `mark_pending_reboot` performs no IO to race with.
+pub(crate) fn remove_overlay_and_mark_reboot() -> Vec<Task> {
+    vec![remove_overlay.into_task(), mark_pending_reboot.into_task()]
 }
 
 /// Reconcile an overlay that already exists in the state but does not match

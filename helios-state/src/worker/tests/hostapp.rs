@@ -271,8 +271,14 @@ fn it_deploys_a_missing_target_overlay_before_the_reboot() {
 fn it_removes_an_overlay_dropped_from_the_target() {
     // A live release keeps running while the target drops one of its overlays.
     // The overlay stays OS-compatible, so the stale-OS sweep would not reap it;
-    // helios must plan the teardown itself. Removal needs no reboot and no
-    // reinstall, so the plan is exactly the single remove step.
+    // helios must plan the teardown itself.
+    //
+    // The removal and its reboot land in one workflow. `mark_pending_reboot`
+    // raises the flag during planning, so the reboot is plannable from the
+    // simulated state rather than from the breadcrumb the removal writes at
+    // execution time, which the planner cannot see. The two method subtasks
+    // branch concurrently because their paths are disjoint; only the reboot,
+    // planned from the flag they raise, is ordered after them.
     init_tracing();
     assert_workflow(
         json!({
@@ -321,7 +327,183 @@ fn it_removes_an_overlay_dropped_from_the_target() {
                 }
             },
         }),
-        seq!("remove overlay 'kernel-modules' for host OS release 'target-release'"),
+        par!(
+            "remove overlay 'kernel-modules' for host OS release 'target-release'",
+            "mark overlay change as awaiting a reboot",
+        ) + seq!("reboot to apply overlay changes"),
+    );
+}
+
+#[test]
+fn it_reboots_to_apply_a_pending_overlay_removal() {
+    // The cycle after a removal: the container is gone, but the root overlay
+    // composition mobynit assembled at boot still carries it, so `read` derives
+    // `pending_reboot` from the breadcrumb `remove_overlay` left. The target
+    // never asks for a reboot, and that diff is the whole plan.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "pending_reboot": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {}
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        seq!("reboot to apply overlay changes"),
+    );
+}
+
+#[test]
+fn it_defers_the_overlay_reboot_while_validation_runs() {
+    // A helios-issued reboot inside the rollback-health window would trigger
+    // the rollback, so the pending overlay reboot waits even though it is the
+    // only divergent work. Excepting the reboot path is what keeps it out of
+    // the same planning round as the wait, where the two could be scheduled
+    // concurrently.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "os_validating": true,
+                "pending_reboot": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {}
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        seq!("wait for the host OS update validation to finish"),
+    );
+}
+
+#[test]
+fn it_defers_an_overlay_removal_while_validation_runs() {
+    // The removal now pulls a reboot into its own workflow, so it must not
+    // escape the rollback-health gate. The release-level exception deferring
+    // all host work covers the overlay subtree, so the teardown does not start
+    // and no reboot can follow it inside the window.
+    //
+    // Deferring the whole removal, rather than running the teardown and
+    // excepting only the reboot, is what keeps the breadcrumb and the disarm
+    // paired: neither runs until the reboot they call for can run too.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "os_validating": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        seq!("wait for the host OS update validation to finish"),
     );
 }
 
@@ -767,9 +949,10 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
 #[test]
 fn it_waits_while_the_os_release_is_being_validated() {
     init_tracing();
-    // The in-progress exception defers the only divergent work (the install)
-    // and there is nothing to clean up, so the planner returns an empty plan.
-    assert_empty_workflow(
+    // The in-progress exception defers the only divergent work (the install),
+    // leaving the wait itself as the whole plan. It fails at run time, which is
+    // what brings the apply back once the window closes.
+    assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
@@ -811,6 +994,7 @@ fn it_waits_while_the_os_release_is_being_validated() {
                 }
             }
         }),
+        seq!("wait for the host OS update validation to finish"),
     );
 }
 
@@ -818,9 +1002,11 @@ fn it_waits_while_the_os_release_is_being_validated() {
 fn it_defers_installing_a_new_target_release_while_validation_runs() {
     init_tracing();
     // A release that first appears in the target during the validation window
-    // must not be installed or rebooted (the guard is device-global). The
-    // metadata `create` is harmless and still runs, so the plan initializes the
-    // release and stops there: no install, no reboot mid-validation.
+    // must not be installed or rebooted (the guard is device-global). The wait
+    // heads the plan, so the install and the reboot behind it are unreachable:
+    // the wait fails and the workflow stops there. They are planned at all only
+    // because the planner simulates the wait succeeding, which is what puts
+    // them in the right order for the retry that follows.
     assert_workflow(
         json!({
             "name": "device-name",
@@ -852,7 +1038,12 @@ fn it_defers_installing_a_new_target_release_while_validation_runs() {
                 }
             }
         }),
-        seq!("initialize host OS release 'new-release'"),
+        seq!(
+            "wait for the host OS update validation to finish",
+            "initialize host OS release 'new-release'",
+            "install host OS release 'new-release'",
+            "reboot to activate host OS release 'new-release'"
+        ),
     );
 }
 
@@ -989,5 +1180,144 @@ fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
                 }
             },
         }),
+    );
+}
+
+#[test]
+fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
+    // A target change that drops one overlay and adds another, on the cycle
+    // after the removal ran: its breadcrumb is already there, so
+    // `pending_reboot` is set while the overlay the target wants is still
+    // missing.
+    //
+    // The removal reboot does not wait for that deploy. It sits on its own
+    // branch and may run first, in which case the device comes back without the
+    // incoming overlay and `reboot_to_activate` reboots again once the deploy
+    // lands. That second reboot is the deliberate price of keeping the reboot
+    // plannable from the flag alone: any wait added here becomes a precondition
+    // that can go permanently unsatisfiable, and mahler answers an unreachable
+    // target by planning nothing at all, for the whole device.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "pending_reboot": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {}
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "incoming": {
+                                "image": "registry2.balena-cloud.com/v2/incoming@sha256:d444444444444444444444444444444444444444444444444444444444444444",
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        par!(
+            "reboot to apply overlay changes",
+            "deploy overlay 'incoming' for host OS release 'target-release'",
+        ) + seq!("reboot to activate host OS release 'target-release'"),
+    );
+}
+
+#[test]
+fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
+    // Regression guard for the whole-device freeze. A pending removal reboot
+    // next to an overlay stuck at `Failed` at the target image: the release is
+    // frozen by the activation-failed exception, so nothing can ever stage that
+    // overlay. Gating the reboot on it left the `pending_reboot` divergence
+    // unclosable, and mahler answers an unreachable target with no workflow at
+    // all, which stops every other change on the device too. The reboot must
+    // stay plannable regardless of what the rest of the target is doing.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "pending_reboot": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "incoming": {
+                                "image": "registry2.balena-cloud.com/v2/incoming@sha256:d444444444444444444444444444444444444444444444444444444444444444",
+                                "status": "failed",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "incoming": {
+                                "image": "registry2.balena-cloud.com/v2/incoming@sha256:d444444444444444444444444444444444444444444444444444444444444444",
+                                "status": "active",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("reboot to apply overlay changes"),
     );
 }
