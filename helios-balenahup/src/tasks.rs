@@ -291,7 +291,32 @@ fn update_script_uri(
     })
 }
 
-/// handle an `delete(/host/releases/<commit>)`
+/// Forget a release: remove the artifacts it owns, then its metadata.
+///
+/// Applies to `delete(/host/releases/<commit>)`.
+fn remove_release(rel: View<HostRelease>) -> Vec<Task> {
+    let mut tasks: Vec<Task> = rel
+        .overlays
+        .keys()
+        .map(|name| remove_overlay.with_arg("name", name.clone()))
+        .collect();
+
+    // Only a mounted overlay needs the reboot: removing a container that never
+    // made it into the root changes nothing about the running system.
+    if rel
+        .overlays
+        .values()
+        .any(|overlay| overlay.status == OverlayStatus::Active)
+    {
+        tasks.push(mark_pending_reboot.into_task());
+    }
+
+    tasks.push(remove_old_metadata.into_task());
+    tasks
+}
+
+/// Reached only through `remove_release`, which removes the release's overlays
+/// first.
 fn remove_old_metadata(
     rel: View<HostRelease>,
     Args(release_uuid): Args<String>,
@@ -309,6 +334,15 @@ fn remove_old_metadata(
 
         Ok(rel)
     })
+}
+
+/// Whether this release's record is still the device's account of what it is
+/// running, or might yet return to.
+fn release_still_accounted_for(rel: View<HostRelease>, System(device): System<Device>) -> bool {
+    // Booted on it: the update has not been activated yet, or has rolled back.
+    rel.status == HostReleaseStatus::Running
+        // Activated but unratified, so a rollback can still return to it.
+        || device.host.is_some_and(|host| host.os_validating)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -396,7 +430,12 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("update metadata for host OS release '{release_uuid}'")
                     },
                 ),
-                job::delete(remove_old_metadata).with_description(
+                job::delete(remove_release).with_description(|Args(release_uuid): Args<String>| {
+                    format!("remove host OS release '{release_uuid}'")
+                }),
+                // Reachable only through `remove_release`, which removes the
+                // release's overlays before forgetting it.
+                job::none(remove_old_metadata).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("remove metadata for host OS release '{release_uuid}'",)
                     },
@@ -478,6 +517,16 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             "/host/releases/{release_uuid}",
             exception::update(os_validating)
                 .with_description(|| "host OS update in progress, waiting for validation"),
+        )
+        // keep the record of the release the device is running, or may roll
+        // back to; forgetting it strands that release's overlay containers
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::delete(release_still_accounted_for).with_description(
+                |Args(release_uuid): Args<String>| {
+                    format!("host OS release '{release_uuid}' is still running or validating")
+                },
+            ),
         )
         // Same guard on the overlay reboot path: a helios reboot during the
         // rollback-health window would trigger the rollback.
