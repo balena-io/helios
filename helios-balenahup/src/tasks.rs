@@ -39,48 +39,6 @@ pub(crate) fn host_is_validating(device: &Device) -> bool {
         .is_some_and(|host| host.host_validating)
 }
 
-/// The release exceeded its install budget and is left alone until an
-/// operator looks at the device.
-pub(crate) fn too_many_failed_installs(rel: &HostRelease) -> bool {
-    rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
-}
-
-/// An overlay failed to activate at the image the target still asks for, so
-/// the release is left alone rather than retried.
-pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
-    tgt.overlays.iter().any(|(name, tgt_overlay)| {
-        rel.overlays
-            .get(name)
-            .is_some_and(|ov| ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image)
-    })
-}
-
-/// True while some overlay the target dropped is still present and the planner
-/// is free to remove it.
-///
-/// This mirrors the exceptions registered on `/host/releases/{release_uuid}`
-/// below: a removal those exceptions hold back must not hold back the reboot,
-/// or the reboot becomes unplannable and, with it, every other change on the
-/// device. Keep the two in step when adding an exception on that path.
-pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) -> bool {
-    let Some(host) = device.host.as_ref() else {
-        return false;
-    };
-    let Some(target_host) = target.host.as_ref() else {
-        return false;
-    };
-    host.releases.iter().any(|(uuid, rel)| {
-        target_host.releases.get(uuid).is_some_and(|tgt| {
-            !too_many_failed_installs(rel)
-                && !overlay_activation_failed(rel, tgt)
-                && rel
-                    .overlays
-                    .keys()
-                    .any(|name| !tgt.overlays.contains_key(name))
-        })
-    })
-}
-
 /// Wait for the host validation to finish before doing host work.
 ///
 /// The task fails rather than blocking until the window closes, and the
@@ -343,7 +301,36 @@ fn update_script_uri(
     })
 }
 
-/// handle an `delete(/host/releases/<commit>)`
+/// Forget a release: remove the artifacts it owns, then its metadata.
+///
+/// Applies to `delete(/host/releases/<commit>)`.
+fn remove_release(rel: View<HostRelease>, System(device): System<Device>) -> Vec<Task> {
+    if host_is_validating(&device) {
+        return Vec::new();
+    }
+
+    let mut tasks: Vec<Task> = rel
+        .overlays
+        .keys()
+        .map(|name| remove_overlay.with_arg("name", name.clone()))
+        .collect();
+
+    // Only a mounted overlay needs the reboot: removing a container that never
+    // made it into the root changes nothing about the running system.
+    if rel
+        .overlays
+        .values()
+        .any(|overlay| overlay.status == OverlayStatus::Active)
+    {
+        tasks.push(mark_pending_reboot.into_task());
+    }
+
+    tasks.push(remove_old_metadata.into_task());
+    tasks
+}
+
+/// Reached only through `remove_release`, which removes the release's overlays
+/// first.
 fn remove_old_metadata(
     rel: View<HostRelease>,
     Args(release_uuid): Args<String>,
@@ -360,6 +347,64 @@ fn remove_old_metadata(
             .await?;
 
         Ok(rel)
+    })
+}
+
+/// Whether this release's record is still the device's account of what it is
+/// running.
+fn release_still_accounted_for(rel: View<HostRelease>) -> bool {
+    release_is_accounted_for(&rel)
+}
+
+/// Booted on it: the update has not been activated yet, or has rolled back.
+pub(crate) fn release_is_accounted_for(rel: &HostRelease) -> bool {
+    rel.status == HostReleaseStatus::Running
+}
+
+/// The release exceeded its install budget and is left alone until an
+/// operator looks at the device.
+pub(crate) fn too_many_failed_installs(rel: &HostRelease) -> bool {
+    rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
+}
+
+/// An overlay failed to activate at the image the target still asks for, so
+/// the release is left alone rather than retried.
+pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    tgt.overlays.iter().any(|(name, tgt_overlay)| {
+        rel.overlays
+            .get(name)
+            .is_some_and(|ov| ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image)
+    })
+}
+
+/// True while some overlay the target dropped is still present and the planner
+/// is free to remove it.
+///
+/// This mirrors the exceptions registered on `/host/releases/{release_uuid}`
+/// below: a removal those exceptions hold back must not hold back the reboot,
+/// or the reboot becomes unplannable and, with it, every other change on the
+/// device. Keep the two in step when adding an exception on that path.
+pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) -> bool {
+    let Some(host) = device.host.as_ref() else {
+        return false;
+    };
+    let target_releases = target.host.as_ref().map(|h| &h.releases);
+    host.releases.iter().any(|(uuid, rel)| {
+        match target_releases.and_then(|releases| releases.get(uuid)) {
+            // The target keeps the release: its dropped overlays are removed one
+            // by one, unless the release is frozen.
+            Some(tgt) => {
+                !too_many_failed_installs(rel)
+                    && !overlay_activation_failed(rel, tgt)
+                    && rel
+                        .overlays
+                        .keys()
+                        .any(|name| !tgt.overlays.contains_key(name))
+            }
+            // The target forgets the release: its overlays go with it, once the
+            // device no longer depends on it.
+            None => !release_is_accounted_for(rel) && !rel.overlays.is_empty(),
+        }
     })
 }
 
@@ -448,7 +493,12 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("update metadata for host OS release '{release_uuid}'")
                     },
                 ),
-                job::delete(remove_old_metadata).with_description(
+                job::delete(remove_release).with_description(|Args(release_uuid): Args<String>| {
+                    format!("remove host OS release '{release_uuid}'")
+                }),
+                // Reachable only through `remove_release`, which removes the
+                // release's overlays before forgetting it.
+                job::none(remove_old_metadata).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("remove metadata for host OS release '{release_uuid}'",)
                     },
@@ -517,5 +567,15 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     "overlay activation failed for host OS release '{release_uuid}', check device"
                 )
             }),
+        )
+        // keep the record of the release the device is running; forgetting it
+        // strands that release's overlay containers
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::delete(release_still_accounted_for).with_description(
+                |Args(release_uuid): Args<String>| {
+                    format!("host OS release '{release_uuid}' is still running")
+                },
+            ),
         )
 }
