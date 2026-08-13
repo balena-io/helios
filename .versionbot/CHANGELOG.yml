@@ -1,4 +1,133 @@
 - commits:
+    - subject: Reject depends_on cycles and unknown references
+      hash: 84dd06cf2fe0644b8e60e3e25505c5aca0ce905f
+      body: >
+        Validate the cross-service depends_on graph when deserializing a
+        release.
+
+        Every referenced service must exist and the graph must be acyclic.
+
+        An invalid graph fails release deserialization, so the release is
+        rejected.
+
+        Mirrors docker-compose depends_on validation w/slightly different error
+        messages.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Fail fast when an awaited dependency cannot satisfy its condition
+      hash: f67c400dc627723b15f2a35560a64657eeb5b6bc
+      body: >
+        An await would otherwise poll forever on a dependency that has
+        definitively
+
+        failed. evaluate_condition returns Failed for a terminal state:
+        unhealthy,
+
+        non-zero exit, or a running container with no healthcheck. await_healthy
+        and
+
+        await_completed error on those instead of polling, so the stuck
+        dependent
+
+        surfaces.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Await service_healthy and service_completed_successfully dependencies
+      hash: f521028c923ea3e0b8b9e73b78c8e26b57ce3c4d
+      body: >
+        The start gate alone can't reach these, so the planner would deadlock.
+
+
+        - await_healthy / await_completed poll the engine until the condition
+        holds, then
+          record it in oci via IO::map so dependents can sequence
+        - condition_met gates on that same observed state via evaluate_condition
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Gate service start on service_started dependencies
+      hash: 418dee346e5871573c7ef7a0fa5baa2b173d6d16
+      body: >
+        - Add dependencies_satisfied helper evaluating each dependency's
+          started/healthy/completed condition against the current release state
+        - Gate start_service_when_requirements_are_met on
+        dependencies_satisfied.
+            - An unmet required dependency blocks the start,
+            - An optional dependency with required false never blocks
+        - Add service_started support
+
+
+        NOTE: healthy & completed conditions require additional framework
+
+        to be implemented in a subsequent commit
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Surface container health status
+      hash: d6b44c6e0b7e53bfb55b2c71be90885121540ca6
+      body: >
+        - Model engine health as a Health enum, none/starting/healthy/unhealthy,
+        in
+          oci ContainerState. This replaces the bool that conflated "no healthcheck"
+          with "unhealthy"
+        - Re-export oci::Health from helios-state rather than defining a
+        parallel
+          enum, keeping a single source of truth
+        - Default missing health to none when deserializing observed state
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Wire depends_on config into remote and state models
+      hash: 76f9e87f6fd1bf1c693fdd9d26a9d8e443856d95
+      body: >
+        - Add DependsOn support in helios-remote-model and helios-state. Not in
+          helios-oci, as depends_on is not an Engine concept
+        - Support both long and short syntax depends_on
+
+        - Store config in io.balena.private.depends-on container label
+
+        - Compare depends_on in service_matches_target to detect drift
+
+
+        NOTE: required/restart/start ordering are not implemented in this
+        commit,
+
+        it's just for types/deserialization/config storage.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+    - subject: Capture container exit_code on ContainerState
+      hash: 514fd58a6def4783c34d820ce6294e25e21f6e7f
+      body: >
+        - Read the engine's exit code into oci ContainerState and mirror it on
+        the
+          state Container
+        - Only meaningful once status is Stopped, since the engine reports 0 for
+        a
+          container that has not exited
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+  version: 0.26.0
+  title: ""
+  date: 2026-08-13T15:38:18.300Z
+- commits:
     - subject: Avoid spurious restarts on helios takeover exec error
       hash: 9f835e0845c977b330cd0614ddb64757a8fe3a05
       body: |
