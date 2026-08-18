@@ -3,7 +3,7 @@ use serde::Deserialize;
 /// Service `cgroup` namespace mode as defined by the Compose spec.
 ///
 /// Compose accepts `host` or `private`
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Cgroup {
     Host,

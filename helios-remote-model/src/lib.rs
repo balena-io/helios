@@ -127,7 +127,7 @@ impl<'de> Deserialize<'de> for AppMap {
 }
 
 /// An app with an invalid target release
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RejectedApp {
     pub id: u32,
     pub name: String,

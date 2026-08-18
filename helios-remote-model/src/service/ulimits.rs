@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer};
 
 /// A single resource limit override, with the soft/hard values already
 /// resolved. The limit name is the key of the enclosing `ulimits` map.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Ulimit {
     /// Soft limit, enforced by the kernel for the container's processes
     pub soft: i64,

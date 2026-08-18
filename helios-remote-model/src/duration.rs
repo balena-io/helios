@@ -24,7 +24,7 @@ impl Duration {
 macro_rules! duration {
     ($(#[$doc:meta])* $name:ident, $nanos_per_unit:expr) => {
         $(#[$doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[derive(Debug, PartialEq)]
         pub struct $name(i64);
 
         impl $name {

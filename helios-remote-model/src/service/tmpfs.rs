@@ -11,7 +11,7 @@ use std::str::FromStr;
 pub type Tmpfs = (String, TmpfsOptions);
 
 /// Recognized tmpfs mount options.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct TmpfsOptions {
     /// File system permissions, as octal digits (e.g. `755`)
     pub mode: Option<String>,

@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer};
 
 /// A host device mapped into the container, with the cgroup permissions
 /// default already resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct DeviceMapping {
     /// Path of the device on the host
     pub source: String,
