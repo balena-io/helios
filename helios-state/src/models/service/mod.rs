@@ -27,14 +27,17 @@ pub use depends_on::*;
 use config::LABEL_DEPENDS_ON;
 
 /// The container runtime status. This is a simplified state over what the container engine returns
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
-#[serde(rename_all = "lowercase")]
+///
+/// `Stopped` carries the exit code of the main process, so it cannot be read for a
+/// container that has not exited.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(tag = "status", content = "exit_code", rename_all = "lowercase")]
 pub enum ContainerStatus {
     #[default]
     Created,
     Running,
     Stopping,
-    Stopped,
+    Stopped(i64),
     Dead,
 }
 
@@ -44,7 +47,7 @@ impl From<oci::ContainerStatus> for ContainerStatus {
         match value {
             Created => Self::Created,
             Running => Self::Running,
-            Stopped => Self::Stopped,
+            Stopped(exit_code) => Self::Stopped(exit_code),
             Dead => Self::Dead,
         }
     }
@@ -54,25 +57,19 @@ impl From<oci::ContainerStatus> for ContainerStatus {
 pub struct Container {
     pub name: String,
     pub created: DateTime,
+    #[serde(flatten)]
     pub status: ContainerStatus,
-    pub exit_code: Option<i64>,
     #[serde(default)]
     pub health: Health,
 }
 
 impl Container {
     /// A mock container summary to use as part of planning tasks.
-    ///
-    /// A freshly created container reports `exit_code` 0, so modelling it as
-    /// `Some(0)` keeps planning consistent with the real container
-    /// `start_service` observes at runtime, making an `await_completed` effect a
-    /// no-op in both so their patches match.
     pub fn mock() -> Self {
         Self {
             name: String::default(),
             created: DateTime::default(),
             status: ContainerStatus::Created,
-            exit_code: Some(0),
             health: Health::None,
         }
     }
@@ -84,7 +81,6 @@ impl From<(&str, oci::ContainerState)> for Container {
         let oci::ContainerState {
             status,
             created,
-            exit_code,
             health,
             ..
         } = container_state;
@@ -93,7 +89,6 @@ impl From<(&str, oci::ContainerState)> for Container {
             name: container_id,
             status: status.into(),
             created,
-            exit_code,
             health,
         }
     }

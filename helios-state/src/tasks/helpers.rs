@@ -57,14 +57,10 @@ fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> Condition
                 _ => Pending,
             }
         }
-        // A non-stopped container always reports exit code 0, so we
-        // need to read the exit code in conjunction with stop status.
         DependsOnCondition::ServiceCompletedSuccessfully => {
-            match dep.oci.as_ref().map(|c| (&c.status, c.exit_code)) {
-                Some((ContainerStatus::Stopped, Some(0))) => Satisfied,
-                Some((ContainerStatus::Stopped, Some(code))) => {
-                    Failed(format!("exited with code {code}"))
-                }
+            match dep.oci.as_ref().map(|c| &c.status) {
+                Some(ContainerStatus::Stopped(0)) => Satisfied,
+                Some(ContainerStatus::Stopped(code)) => Failed(format!("exited with code {code}")),
                 // running, or no container yet
                 _ => Pending,
             }
@@ -488,8 +484,8 @@ mod tests {
             ConditionOutcome::Failed("exited with code 137".into())
         );
 
-        // exit code is not meaningful until the container has stopped
-        let s = svc_with_oci(json!({"status": "running", "exit_code": 0}));
+        // a running container carries no exit code
+        let s = svc_with_oci(json!({"status": "running"}));
         assert_eq!(evaluate_condition(&s, completed), ConditionOutcome::Pending);
 
         // no container observed yet

@@ -1104,44 +1104,40 @@ fn await_healthy(
 }
 
 /// Wait for a started service container to exit with status 0. Scoped to the
-/// container's `oci/status` subfield; `exit_code` is already `Some(0)` in the
-/// planning model, so setting `status = Stopped` satisfies the gate while the
-/// poll verifies the real exit code.
+/// container's `oci` subfield, as the status and its exit code are adjacent
+/// fields in the serialized container.
 fn await_completed(
-    status: View<ContainerStatus>,
+    container: View<Container>,
     docker: Res<Docker>,
     Args((_app_uuid, commit, service_name)): Args<(Uuid, Uuid, String)>,
-) -> IO<ContainerStatus, OciError> {
+) -> IO<Container, OciError> {
     enforce!(
-        *status != ContainerStatus::Stopped,
+        container.status != ContainerStatus::Stopped(0),
         "service container should not be confirmed stopped yet"
     );
 
     let container_id = LocalNamespace::from(commit.as_str()).to_identifier(&service_name);
-    with_io(status, async move |status| {
+    with_io(container, async move |container| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
         loop {
             let state = docker.container().inspect(&container_id).await?.state;
-            // exit code is only meaningful once the container has stopped
-            if state.status == OciContainerStatus::Stopped {
-                match state.exit_code {
-                    Some(0) => break,
-                    Some(code) => {
-                        return Err(format!("exited with error code {code}").into());
-                    }
-                    None => {}
+            match state.status {
+                OciContainerStatus::Stopped(0) => break,
+                OciContainerStatus::Stopped(code) => {
+                    return Err(format!("exited with error code {code}").into());
                 }
+                _ => {}
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
-        Ok(status)
+        Ok(container)
     })
-    .map(|mut status| {
-        *status = ContainerStatus::Stopped;
-        status
+    .map(|mut container| {
+        container.status = ContainerStatus::Stopped(0);
+        container
     })
 }
 
@@ -1187,7 +1183,8 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
     let container_id = if let Some(container) = svc.oci.as_mut()
         && container.status == ContainerStatus::Running
     {
-        container.status = ContainerStatus::Stopped;
+        // the real exit code is read back from the engine after the stop below
+        container.status = ContainerStatus::Stopped(0);
         container.name.clone()
     } else {
         return IO::abort("service container should exist and should be running");
@@ -1568,7 +1565,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             ),
         )
         .job(
-            "/apps/{app_uuid}/releases/{commit}/services/{service_name}/oci/status",
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}/oci",
             job::none(await_completed).with_description(
                 |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                     format!(

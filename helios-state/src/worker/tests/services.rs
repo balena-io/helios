@@ -890,16 +890,15 @@ fn it_emits_separate_awaits_for_a_shared_dependency_under_two_conditions() {
                 "install service 'shared' for release 'my-release-uuid'",
             )
             + seq!("start service 'shared' for release 'my-release-uuid'")
-            // the two conditions on 'shared' are scoped to distinct oci
-            // subfields, so their awaits run concurrently
-            + par!(
-                "wait until service 'shared' for release 'my-release-uuid' has completed",
-                "wait until service 'shared' for release 'my-release-uuid' is healthy",
-            )
+            // the completion await is scoped to the whole oci subfield, since
+            // the exit code sits next to the status, so it cannot run
+            // concurrently with the health await
+            + seq!("wait until service 'shared' for release 'my-release-uuid' has completed")
             + par!(
                 "start service 'on-completed' for release 'my-release-uuid'",
-                "start service 'on-healthy' for release 'my-release-uuid'",
+                "wait until service 'shared' for release 'my-release-uuid' is healthy",
             )
+            + seq!("start service 'on-healthy' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
@@ -1043,9 +1042,9 @@ fn it_orders_a_realistic_dependency_graph() {
 }
 
 #[test]
-fn it_finds_no_workflow_when_a_dependency_condition_terminally_fails() {
+fn it_awaits_a_dependency_that_has_already_failed_its_condition() {
     init_tracing();
-    assert_no_workflow(
+    assert_workflow(
         json!({
             "uuid": "my-device-uuid",
             "apps": {
@@ -1057,7 +1056,9 @@ fn it_finds_no_workflow_when_a_dependency_condition_terminally_fails() {
                             "installed": true,
                             "services": {
                                 // already exited non-zero, so
-                                // `service_completed_successfully` can never hold
+                                // `service_completed_successfully` can never hold. the await
+                                // is still emitted so the exit code surfaces at runtime
+                                // instead of the search dead-ending
                                 "migrate": {
                                     "id": 1,
                                     "image": "alpine:latest",
@@ -1121,5 +1122,13 @@ fn it_finds_no_workflow_when_a_dependency_condition_terminally_fails() {
                 }
             },
         }),
+        release_update(
+            "my-release-uuid",
+            "my-app-uuid",
+            seq!(
+                "wait until service 'migrate' for release 'my-release-uuid' has completed",
+                "start service 'web' for release 'my-release-uuid'",
+            ),
+        ),
     );
 }
