@@ -9,7 +9,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::state::{SeekRequest, TargetState, UpdateOpts};
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
-use crate::util::request::{self, Get};
+use crate::util::request::{self, Get, GetError};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
@@ -59,9 +59,9 @@ async fn poll_remote(
     // poll if we have a client
     let value = match poll_client.get(Some(interrupt)).await {
         Ok(res) if req.reemit || res.modified => res.value,
-        Ok(_) => None,
+        Ok(_) | Err(GetError::Cancelled) => None,
         Err(e) => {
-            error!("poll failed: {e}");
+            error!("{e}");
             None
         }
     };
