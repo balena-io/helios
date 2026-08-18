@@ -1,4 +1,20 @@
 - commits:
+    - subject: Do not log error for cancelled poll
+      hash: 734c005007d007ff9583a2a33347f3d980a8197c
+      body: |
+        Poll cancellation is a part of the normal operation of the service. A
+        poll can get cancelled if a new poll request is triggered from the user,
+        this avoids logging in that case to avoid having a confusing error that
+        shows on the dashboard logs
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.1
+  title: ""
+  date: 2026-08-18T18:07:37.577Z
+- commits:
     - subject: Reject depends_on cycles and unknown references
       hash: 84dd06cf2fe0644b8e60e3e25505c5aca0ce905f
       body: >
