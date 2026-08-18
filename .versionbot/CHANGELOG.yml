@@ -1,4 +1,18 @@
 - commits:
+    - subject: Remove unnecessary derives in helios-remote-model
+      hash: bc492f52168956a9d2757884b6d78d9033790d70
+      body: |
+        Unused derives are dead code and increase binary sizes. This just does a
+        small cleanup of the types defined in the helios-remote-model sub-crate
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.2
+  title: ""
+  date: 2026-08-18T19:15:17.394Z
+- commits:
     - subject: Do not log error for cancelled poll
       hash: 734c005007d007ff9583a2a33347f3d980a8197c
       body: |
