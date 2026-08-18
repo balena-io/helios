@@ -2,7 +2,7 @@ target "default" {
   context = "./"
   dockerfile = "Dockerfile"
   args = {
-    HELIOS_FEATURES = "balenahup"
+    HELIOS_FEATURES = "balenahup,v3-api"
   }
   platforms = [
     "linux/386",
