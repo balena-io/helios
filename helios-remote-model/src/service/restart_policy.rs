@@ -4,7 +4,7 @@ use serde::de;
 /// Docker compose restart policy.
 ///
 /// Supports `no`, `always`, `on-failure[:max-retries]`, and `unless-stopped`.
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub enum RestartPolicy {
     No,
     #[default]

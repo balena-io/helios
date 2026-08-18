@@ -85,7 +85,6 @@ struct LongPort {
 
 /// A port or inclusive port range (`start == end` for a single port),
 /// accepted as a number or as a `"80"`/`"8000-9000"` string.
-#[derive(Clone, Copy)]
 struct PortOrRange(u16, u16);
 
 impl PortOrRange {

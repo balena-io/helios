@@ -14,7 +14,7 @@ use serde::{
 use std::fmt;
 
 /// Bind mount propagation mode.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
     Private,
@@ -26,7 +26,7 @@ pub enum BindPropagation {
 }
 
 /// Volume-type mount (references a named volume declared in the top-level `volumes`).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct VolumeMount {
     pub source: String,
     pub target: String,
@@ -36,7 +36,7 @@ pub struct VolumeMount {
 }
 
 /// Bind-type mount (maps a host path into the container).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct BindMount {
     pub source: String,
     pub target: String,
@@ -47,7 +47,7 @@ pub struct BindMount {
 }
 
 /// Tmpfs-type mount (in-memory filesystem).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct TmpfsMount {
     pub target: String,
     pub size: Option<i64>,
@@ -55,7 +55,7 @@ pub struct TmpfsMount {
 }
 
 /// A single service mount entry.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum Mount {
     Volume(VolumeMount),
     Bind(BindMount),
@@ -92,7 +92,7 @@ fn is_allowed_bind_source(source: &str) -> bool {
 }
 
 /// Service mount list.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct VolumesConfig(Vec<Mount>);
 
 impl VolumesConfig {

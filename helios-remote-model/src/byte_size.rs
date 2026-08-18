@@ -17,7 +17,7 @@ enum RawByteSize {
 }
 
 /// A byte quantity from the remote model, stored canonically as whole bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ByteSize(i64);
 
 impl ByteSize {

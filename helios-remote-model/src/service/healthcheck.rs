@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer};
 ///   - if a list not starting with `CMD` / `CMD-SHELL` / `NONE`,  
 ///     it's valid but is treated as exec args by the Engine
 /// - or the special `disable: true` flag, which produces `["NONE"]`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Healthcheck {
     pub test: Option<Vec<String>>,
     pub interval: Option<DurationNanos>,
@@ -27,7 +27,7 @@ enum Test {
     List(Vec<String>),
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 struct RawHealthcheck {
     test: Option<Test>,
     #[serde(default)]

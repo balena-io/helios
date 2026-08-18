@@ -6,7 +6,7 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 /// Condition under which a `depends_on` dependency is considered satisfied.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Deserialize, Debug, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DependsOnCondition {
     #[default]
@@ -16,7 +16,7 @@ pub enum DependsOnCondition {
 }
 
 /// Long form entry. Every field falls back to the `Default` impl below.
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Debug)]
 #[serde(default)]
 pub struct LongFormDependsOn {
     pub condition: DependsOnCondition,
@@ -45,7 +45,7 @@ impl Default for LongFormDependsOn {
 ///   `condition: service_started`, `restart: false`, `required: true`.
 /// - long form: `{ "svc1": { "condition": "service_healthy", ... } }`, where every
 ///   field is optional and falls back to the short-form defaults.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 pub struct DependsOn(HashMap<String, LongFormDependsOn>);
 
 impl Deref for DependsOn {
