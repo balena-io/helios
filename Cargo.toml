@@ -85,7 +85,7 @@ features = [ "tokio", "http1", "json", "query" ]
 [workspace.dependencies.chrono]
 version = "0.4"
 default-features = false
-features = [ "alloc", "core-error" ]
+features = [ "alloc", "core-error", "std" ]
 
 [workspace.dependencies.getrandom]
 version = "0.4"

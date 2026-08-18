@@ -232,6 +232,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     read_only: v.read_only,
                     nocopy: v.nocopy,
                     subpath: v.subpath,
+                    labels: Default::default(),
                 },
                 RemoteMount::Bind(b) => Mount::Bind {
                     target: b.target,
