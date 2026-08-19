@@ -15,7 +15,7 @@ members = [
 
 [workspace.package]
 version = "0.26.2"
-rust-version = "1.89"
+rust-version = "1.96"
 edition = "2024"
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"

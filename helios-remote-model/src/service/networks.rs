@@ -153,7 +153,7 @@ impl<'de> Deserialize<'de> for NetworkingConfig {
 
         // Sort by priority descending (highest first); stable sort preserves original
         // order for entries with equal priority
-        entries.sort_by(|a, b| b.2.cmp(&a.2));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.2));
 
         let map = entries
             .into_iter()
