@@ -1,7 +1,9 @@
+use mahler::state::Map;
+
 use crate::common_types::Uuid;
 use crate::models::{
-    ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health, ImageRef,
-    Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
+    Container, ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health,
+    ImageRef, Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
 };
 use crate::oci::Mount;
 
@@ -22,10 +24,9 @@ pub fn find_installed_service<'a>(
     })
 }
 
-/// Outcome of evaluating a dependency's observed container against a
-/// `depends_on` condition.
+/// Outcome of evaluating a `depends_on` condition.
 #[derive(Debug, PartialEq)]
-enum ConditionOutcome {
+pub enum ConditionOutcome {
     Satisfied,
     // terminal failure with reason
     Failed(String),
@@ -44,66 +45,143 @@ fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> Condition
                 Pending
             }
         }
-        DependsOnCondition::ServiceHealthy => {
-            match dep.oci.as_ref().map(|c| (&c.status, &c.health)) {
-                Some((_, Health::Healthy)) => Satisfied,
-                Some((_, Health::Unhealthy)) => Failed("unhealthy".to_owned()),
-                // a running container reporting no health has no healthcheck
-                // configured, which should fail fast in line with compose behavior
-                Some((ContainerStatus::Running, Health::None)) => {
-                    Failed("no healthcheck configured".to_owned())
-                }
-                // still starting, not yet running, or no container yet
-                _ => Pending,
-            }
-        }
-        // A non-stopped container always reports exit code 0, so we
-        // need to read the exit code in conjunction with stop status.
+        // the container conditions cannot have been reached while there is no
+        // container observed yet
+        DependsOnCondition::ServiceHealthy => dep.oci.as_ref().map_or(Pending, evaluate_health),
         DependsOnCondition::ServiceCompletedSuccessfully => {
-            match dep.oci.as_ref().map(|c| (&c.status, c.exit_code)) {
-                Some((ContainerStatus::Stopped, Some(0))) => Satisfied,
-                Some((ContainerStatus::Stopped, Some(code))) => {
-                    Failed(format!("exited with code {code}"))
-                }
-                // running, or no container yet
-                _ => Pending,
-            }
+            dep.oci.as_ref().map_or(Pending, evaluate_completion)
         }
     }
 }
 
-/// Whether a dependency's current state satisfies a `depends_on` condition.
-pub fn depends_on_condition_met(dep: &Service, condition: DependsOnCondition) -> bool {
+/// Evaluate an observed container against the `service_healthy` condition.
+pub fn evaluate_health(container: &Container) -> ConditionOutcome {
+    use ConditionOutcome::*;
+    match &container.health {
+        Health::Healthy => Satisfied,
+        Health::Unhealthy => Failed("unhealthy".to_owned()),
+        // a running container reporting no health has no healthcheck
+        // configured, which should fail fast in line with compose behavior
+        Health::None if container.status == ContainerStatus::Running => {
+            Failed("no healthcheck configured".to_owned())
+        }
+        // still starting, or not running yet
+        Health::Starting | Health::None => Pending,
+    }
+}
+
+/// Evaluate an observed container against the `service_completed_successfully`
+/// condition.
+pub fn evaluate_completion(container: &Container) -> ConditionOutcome {
+    use ConditionOutcome::*;
+    match (&container.status, container.exit_code) {
+        (ContainerStatus::Stopped, Some(0)) => Satisfied,
+        (ContainerStatus::Stopped, Some(code)) => Failed(format!("exited with code {code}")),
+        // still running
+        _ => Pending,
+    }
+}
+
+/// Whether a dependency may still reach a `depends_on` condition, i.e. the
+/// condition has neither been met nor terminally failed, so it is worth waiting
+/// for it.
+pub fn depends_on_condition_pending(dep: &Service, condition: DependsOnCondition) -> bool {
     matches!(
         evaluate_condition(dep, condition),
-        ConditionOutcome::Satisfied
+        ConditionOutcome::Pending
     )
 }
 
-/// Whether every `depends_on` entry of a service is satisfied by its dependencies
-/// in the same release. A required dependency must have reached its condition; an
-/// optional one never blocks.
+/// The services of a release, if the release exists.
+pub fn release_services<'a>(
+    device: &'a Device,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+) -> Option<&'a Map<String, Service>> {
+    device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(commit))
+        .map(|release| &release.services)
+}
+
+/// The target services of a release, if the release exists in the target.
+pub fn target_release_services<'a>(
+    t_device: &'a DeviceTarget,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+) -> Option<&'a Map<String, ServiceTarget>> {
+    t_device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(commit))
+        .map(|release| &release.services)
+}
+
+/// Evaluate every required `depends_on` entry of a service against its
+/// dependencies in the same release. Optional dependencies never block, so they
+/// are not evaluated.
+///
+/// A single terminally failed dependency fails the whole set, otherwise the set
+/// is only satisfied once every dependency has reached its condition.
 ///
 /// TODO: full Compose parity for optional dependencies, waiting for resolution
 /// and warning on failure.
+fn dependencies_outcome(
+    device: &Device,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+    depends_on: &DependsOn,
+) -> ConditionOutcome {
+    let services = release_services(device, app_uuid, commit);
+
+    let mut outcome = ConditionOutcome::Satisfied;
+    for (dep_name, spec) in depends_on.iter().filter(|(_, spec)| spec.required) {
+        match services
+            .and_then(|services| services.get(dep_name))
+            .map(|dep| evaluate_condition(dep, spec.condition))
+        {
+            Some(ConditionOutcome::Satisfied) => {}
+            // a terminal failure cannot be recovered from, so no need to look
+            // at the remaining dependencies
+            Some(ConditionOutcome::Failed(reason)) => {
+                return ConditionOutcome::Failed(reason);
+            }
+            // still pending, or a dependency missing from the release
+            _ => outcome = ConditionOutcome::Pending,
+        }
+    }
+
+    outcome
+}
+
+/// Whether every required `depends_on` entry of a service has been satisfied by
+/// its dependencies in the same release.
 pub fn dependencies_satisfied(
     device: &Device,
     app_uuid: &Uuid,
     commit: &Uuid,
     depends_on: &DependsOn,
 ) -> bool {
-    let services = device
-        .apps
-        .get(app_uuid)
-        .and_then(|app| app.releases.get(commit))
-        .map(|release| &release.services);
+    matches!(
+        dependencies_outcome(device, app_uuid, commit, depends_on),
+        ConditionOutcome::Satisfied
+    )
+}
 
-    depends_on.iter().all(|(dep_name, spec)| {
-        !spec.required
-            || services
-                .and_then(|services| services.get(dep_name))
-                .is_some_and(|dep| depends_on_condition_met(dep, spec.condition))
-    })
+/// Whether any required `depends_on` entry of a service has terminally failed its
+/// condition, e.g. a dependency that is unhealthy, running with no healthcheck
+/// configured, or has exited with an error.
+pub fn any_dependency_failed(
+    device: &Device,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+    depends_on: &DependsOn,
+) -> bool {
+    matches!(
+        dependencies_outcome(device, app_uuid, commit, depends_on),
+        ConditionOutcome::Failed(_)
+    )
 }
 
 /// Find a new network for a different commit

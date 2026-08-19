@@ -16,8 +16,7 @@ use crate::models::{
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
 use crate::oci::{
-    Client as Docker, ContainerStatus as OciContainerStatus, Error as OciError, LocalNamespace,
-    Mount, Namespace, WithContext,
+    Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
 };
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
@@ -25,9 +24,11 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    any_images_are_pending_download, dependencies_satisfied, depends_on_condition_met,
+    ConditionOutcome, any_dependency_failed, any_images_are_pending_download,
+    dependencies_satisfied, depends_on_condition_pending, evaluate_completion, evaluate_health,
     find_future_network, find_future_service, find_future_volume, find_installed_network,
-    find_installed_service, find_installed_volume, service_matches_target, services_need_stopping,
+    find_installed_service, find_installed_volume, release_services, service_matches_target,
+    services_need_stopping, target_release_services,
 };
 use super::image::create_image;
 
@@ -147,11 +148,7 @@ fn service_needs_image_download<'a>(
     tgt_svc: &'a ServiceTarget,
 ) -> Option<&'a ImageUri> {
     // service must exist in current state without a container yet
-    let svc = device
-        .apps
-        .get(app_uuid)
-        .and_then(|app| app.releases.get(rel_uuid))
-        .and_then(|rel| rel.services.get(svc_name))?;
+    let svc = release_services(device, app_uuid, rel_uuid).and_then(|svcs| svcs.get(svc_name))?;
     if svc.oci.is_some() {
         return None;
     }
@@ -357,7 +354,7 @@ fn any_volume_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
 }
 
 /// The services of a release, if the release exists.
-pub fn release_already_installed<'a>(device: &'a Device, app_uuid: &Uuid, commit: &Uuid) -> bool {
+pub fn release_already_installed(device: &Device, app_uuid: &Uuid, commit: &Uuid) -> bool {
     device
         .apps
         .get(app_uuid)
@@ -991,6 +988,30 @@ fn start_service_when_requirements_are_met(
     await_runtime_dependencies(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
 }
 
+/// Whether starting a service should be skipped because one of its required
+/// `depends_on` dependencies has terminally failed its condition.
+///
+/// A dependency that is unhealthy, running with no healthcheck configured, or that
+/// exited with an error can never meet its condition, so awaiting it is bound to
+/// fail. Skip the start instead of planning a workflow that cannot succeed.
+fn start_is_blocked_by_a_failed_dependency(
+    Target(started): Target<bool>,
+    System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+) -> bool {
+    // only a start is gated on dependencies
+    if !started {
+        return false;
+    }
+
+    target_release_services(&t_device, &app_uuid, &rel_uuid)
+        .and_then(|svcs| svcs.get(&svc_name))
+        .is_some_and(|tgt_svc| {
+            any_dependency_failed(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
+        })
+}
+
 /// Start the service if it is not running yet
 fn start_service(
     mut svc: View<Service>,
@@ -1057,11 +1078,7 @@ fn await_runtime_dependencies(
     rel_uuid: &Uuid,
     depends_on: &DependsOn,
 ) -> Vec<Task> {
-    let services = device
-        .apps
-        .get(app_uuid)
-        .and_then(|app| app.releases.get(rel_uuid))
-        .map(|rel| &rel.services);
+    let services = release_services(device, app_uuid, rel_uuid);
 
     // emit in a stable order so the plan is reproducible — `depends_on` is a
     // HashMap whose iteration order is otherwise non-deterministic
@@ -1071,11 +1088,11 @@ fn await_runtime_dependencies(
     deps.into_iter()
         // started deps are driven by their own start; optional deps never block
         .filter(|(_, spec)| spec.required && spec.condition != DependsOnCondition::ServiceStarted)
-        // await only a started dependency that hasn't reached its condition yet
+        // await only a started dependency that may still reach its condition.
         .filter(|(dep_name, spec)| {
             services
                 .and_then(|s| s.get(*dep_name))
-                .is_some_and(|dep| dep.started && !depends_on_condition_met(dep, spec.condition))
+                .is_some_and(|dep| dep.started && depends_on_condition_pending(dep, spec.condition))
         })
         .filter_map(|(dep_name, spec)| match spec.condition {
             DependsOnCondition::ServiceHealthy => {
@@ -1106,22 +1123,7 @@ fn await_healthy(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-        loop {
-            let state = docker.container().inspect(&container_id).await?.state;
-            match state.health {
-                Health::Healthy => break,
-                Health::Unhealthy => return Err("service is unhealthy".into()),
-                // a running container reporting no health has no healthcheck
-                // configured, so it can never become healthy. fail fast rather
-                // than poll forever, mirroring `evaluate_condition`
-                Health::None if state.status == OciContainerStatus::Running => {
-                    return Err("service has no healthcheck configured".into());
-                }
-                Health::Starting | Health::None => {}
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
+        poll_until_condition_met(docker, &container_id, evaluate_health).await?;
         Ok(health)
     })
     .map(|mut health| {
@@ -1149,27 +1151,32 @@ fn await_completed(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-        loop {
-            let state = docker.container().inspect(&container_id).await?.state;
-            // exit code is only meaningful once the container has stopped
-            if state.status == OciContainerStatus::Stopped {
-                match state.exit_code {
-                    Some(0) => break,
-                    Some(code) => {
-                        return Err(format!("exited with error code {code}").into());
-                    }
-                    None => {}
-                }
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
+        poll_until_condition_met(docker, &container_id, evaluate_completion).await?;
         Ok(status)
     })
     .map(|mut status| {
         *status = ContainerStatus::Stopped;
         status
     })
+}
+
+/// Poll a container until `evaluate` reports its condition satisfied, erroring as
+/// soon as the condition has terminally failed rather than polling forever.
+async fn poll_until_condition_met(
+    docker: &Docker,
+    container_id: &str,
+    evaluate: fn(&Container) -> ConditionOutcome,
+) -> Result<(), OciError> {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+    loop {
+        let state = docker.container().inspect(container_id).await?.state;
+        match evaluate(&Container::from((container_id, state))) {
+            ConditionOutcome::Satisfied => return Ok(()),
+            ConditionOutcome::Failed(reason) => return Err(reason.into()),
+            ConditionOutcome::Pending => {}
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 /// Change a service configuration by uninstalling and re-installing the service
@@ -1627,5 +1634,15 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 },
             )
             .with_description(|| "app has an invalid target release"),
+        )
+        .exception(
+            "/apps/{app_uuid}/releases/{commit}/services/{service_name}/started",
+            exception::update(start_is_blocked_by_a_failed_dependency).with_description(
+                |Args((_, _, service_name)): Args<(Uuid, Uuid, String)>| {
+                    format!(
+                        "service '{service_name}' depends on a service that can no longer meet its condition"
+                    )
+                },
+            ),
         )
 }
