@@ -1,4 +1,4 @@
-FROM alpine:3.23 AS builder
+FROM alpine:3.24 AS builder
 
 RUN apk add --update --no-cache \
 		build-base \
@@ -12,10 +12,9 @@ COPY helios-util ./helios-util
 
 RUN cargo build --release --bin mock-remote
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 RUN apk add --no-cache wget libstdc++
-
 
 COPY --from=builder /usr/src/app/target/release/mock-remote /usr/local/bin/mock-remote
 
