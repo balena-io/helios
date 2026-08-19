@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::Args;
 use tracing::{debug, info, instrument, warn};
 
@@ -42,6 +44,9 @@ const RESTART_PENDING_FLAG: &str = "helios-legacy-takeover-breadcrumb";
 /// Override values written verbatim to the legacy supervisor's config DB.
 #[derive(Clone, Debug, Args)]
 pub struct TakeoverConfig {
+    /// Host OS runtime directory for locks and update scripts, e.g. "/tmp/helios"
+    #[arg(long = "host-runtime-dir", value_name = "path")]
+    pub host_runtime_dir: Option<PathBuf>,
     /// Api endpoint to write as the supervisor's `apiEndpointOverride`.
     #[arg(long = "override-host", value_name = "url")]
     pub host_override: Uri,
@@ -70,6 +75,11 @@ pub enum TakeoverError {
     Io(#[from] std::io::Error),
     #[error("supervisor exec failed (exit {code}): {stderr}")]
     Exec { code: i64, stderr: String },
+    #[error("expected local socket {socket} to be a file under {runtime_dir}")]
+    SocketPath {
+        socket: String,
+        runtime_dir: PathBuf,
+    },
 }
 
 /// Take over the legacy supervisor: point it at helios via its own config DB,
@@ -103,7 +113,25 @@ pub async fn takeover(oci: &Client, cfg: TakeoverConfig) -> Result<TakeoverOutco
 
     debug!(container = %supervisor.name, "configuring legacy supervisor");
 
-    let host_env = format!("HOST_OVERRIDE={}", cfg.host_override);
+    let host_runtime_dir = cfg.host_runtime_dir.unwrap_or(dirs::runtime_dir());
+    let host_override = cfg.host_override.to_string();
+    let host_override = if host_override.starts_with("/") {
+        // if host override is a path, then set the corresponding
+        // host path as the override on the legacy supervisor by first stripping
+        // the runtime dir
+        let suffix = Path::new(&host_override)
+            .strip_prefix(dirs::runtime_dir())
+            .map_err(|_| TakeoverError::SocketPath {
+                socket: host_override.clone(),
+                runtime_dir: dirs::runtime_dir(),
+            })?;
+        // and then prepending the host runtime_dir
+        host_runtime_dir.join(suffix).to_string_lossy().to_string()
+    } else {
+        host_override
+    };
+
+    let host_env = format!("HOST_OVERRIDE={}", host_override);
     let port_env = format!("PORT_OVERRIDE={}", cfg.port_override);
 
     // Create a flag in the runtime dir to detect a pending restart in case of a crash
