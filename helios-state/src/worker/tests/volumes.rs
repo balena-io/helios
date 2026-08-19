@@ -136,13 +136,9 @@ fn it_finds_a_workflow_to_create_and_remove_volumes() {
                 }
             },
         }),
-        release_update(
-            "my-release-uuid",
-            "my-app-uuid",
-            par!(
-                "remove volume 'volume-a' for app 'my-app-uuid'",
-                "setup volume 'volume-b' for app 'my-app-uuid'",
-            ),
+        par!(
+            "remove volume 'volume-a' for app 'my-app-uuid'",
+            "setup volume 'volume-b' for app 'my-app-uuid'",
         ),
     );
 }

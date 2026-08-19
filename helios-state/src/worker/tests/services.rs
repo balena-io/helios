@@ -186,6 +186,83 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
     );
 }
 
+// this should only happen if the someone manually removed the container at some
+// point after install
+#[test]
+fn it_finds_a_workflow_to_reinstall_a_removed_service() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service2": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "started": true,
+                                    "oci": running_container("my-release-uuid_service2"),
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                },
+                "ubuntu:latest": {
+                    "oci_id": "defgh",
+                    "download_progress": 100
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                 "service2": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "started": true,
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "initialize service 'service1' for release 'my-release-uuid'",
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "install service 'service1' for release 'my-release-uuid'",
+            "start service 'service1' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+        ),
+    );
+}
+
 // this never really happens, but it's useful for testing that the tasks
 // are well defined
 #[test]
@@ -400,11 +477,7 @@ fn it_finds_a_workflow_to_update_services_image_metadata() {
                 }
             },
         }),
-        release_update(
-            "my-release-uuid",
-            "my-app-uuid",
-            seq!("update image metadata for service 'one' of release 'my-release-uuid'",),
-        ),
+        seq!("update image metadata for service 'one' of release 'my-release-uuid'",),
     );
 }
 

@@ -356,22 +356,22 @@ fn any_volume_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
     })
 }
 
+/// The services of a release, if the release exists.
+pub fn release_already_installed<'a>(device: &'a Device, app_uuid: &Uuid, commit: &Uuid) -> bool {
+    device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(commit))
+        .is_some_and(|rel| rel.installed)
+}
+
 /// If modifying a release, make sure `release.installed` is set to false to
 /// ensure the release gets finished afterwards
-fn ensure_release_is_finalized(
-    mut rel: View<Release>,
-    Target(tgt_rel): Target<Release>,
-) -> View<Release> {
-    if any_service_differs(&rel, &tgt_rel)
-        || any_network_differs(&rel, &tgt_rel)
-        || any_volume_differs(&rel, &tgt_rel)
-    {
-        // We only modify the release in memory to avoid writing to disk.
-        // If something interrupts the update, services/network/volumes won't match
-        // so this task will be executed again
-        rel.installed = false;
-    }
-
+fn ensure_release_is_finalized(mut rel: View<Release>) -> View<Release> {
+    // We only modify the release in memory to avoid writing to disk.
+    // If something interrupts the update, services/network/volumes won't match
+    // so this task will be executed again
+    rel.installed = false;
     rel
 }
 
@@ -484,11 +484,22 @@ fn create_network(
 /// Reconfigure a network by uninstalling it when the config has changed
 ///
 /// After uninstall, the planner will re-create the network with the new config.
-fn reconfigure_network(net: View<Network>, Target(tgt): Target<Network>) -> Option<Task> {
+fn reconfigure_network(
+    net: View<Network>,
+    Target(tgt): Target<Network>,
+    System(device): System<Device>,
+    Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
     if net.config != tgt.config {
-        return Some(remove_network_when_requirements_are_met.into_task());
+        // set release.installed to false if a reconfiguration is needed
+        if release_already_installed(&device, &app_uuid, &rel_uuid) {
+            tasks.push(ensure_release_is_finalized.into_task());
+        }
+
+        tasks.push(remove_network_when_requirements_are_met.into_task());
     }
-    None
+    tasks
 }
 
 /// Uninstall a network from Docker and the state tree
@@ -565,11 +576,21 @@ fn create_volume(
 /// Reconfigure a volume by uninstalling it when the config has changed
 ///
 /// After uninstall, the planner will re-create the volume with the new config.
-fn reconfigure_volume(vol: View<Volume>, Target(tgt): Target<Volume>) -> Option<Task> {
+fn reconfigure_volume(
+    vol: View<Volume>,
+    Target(tgt): Target<Volume>,
+    System(device): System<Device>,
+    Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
     if vol.config != tgt.config {
-        return Some(remove_volume_when_requirements_are_met.into_task());
+        // set release.installed to false if a reconfiguration is needed
+        if release_already_installed(&device, &app_uuid, &rel_uuid) {
+            tasks.push(ensure_release_is_finalized.into_task());
+        }
+        tasks.push(remove_volume_when_requirements_are_met.into_task());
     }
-    None
+    tasks
 }
 
 /// Uninstall a volume from Docker and the state tree
@@ -789,9 +810,10 @@ fn install_service_when_requirements_are_met(
     SystemTarget(tgt_device): SystemTarget<Device>,
     Target(tgt): Target<Service>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
-) -> Option<Task> {
+) -> Vec<Task> {
+    let mut tasks = Vec::new();
     if svc.oci.is_some() {
-        return None;
+        return tasks;
     }
 
     let release = device
@@ -805,7 +827,7 @@ fn install_service_when_requirements_are_met(
 
     // the service image has already been pulled
     let ImageRef::Uri(tgt_img) = &tgt.image else {
-        return None;
+        return tasks;
     };
     let image_pulled = device.images.contains_key(tgt_img);
 
@@ -847,10 +869,15 @@ fn install_service_when_requirements_are_met(
         });
 
     if networks_ready && volumes_ready && image_pulled && no_migratable_predecessor {
-        Some(install_service.with_target(tgt))
-    } else {
-        None
+        // set release.installed to false just in case the service is being recreated
+        if let Some(rel) = release
+            && rel.installed
+        {
+            tasks.push(ensure_release_is_finalized.into_task());
+        }
+        tasks.push(install_service.with_target(tgt));
     }
+    tasks
 }
 
 /// Install the service
@@ -1146,9 +1173,19 @@ fn await_completed(
 }
 
 /// Change a service configuration by uninstalling and re-installing the service
-fn reconfigure_service(svc: View<Service>, Target(tgt): Target<Service>) -> Vec<Task> {
+fn reconfigure_service(
+    svc: View<Service>,
+    Target(tgt): Target<Service>,
+    System(device): System<Device>,
+    Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
+) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc.config != tgt.config {
+        // set release.installed to false if a reconfiguration is needed
+        if release_already_installed(&device, &app_uuid, &rel_uuid) {
+            tasks.push(ensure_release_is_finalized.into_task());
+        }
+
         if let Some(container) = svc.oci.as_ref()
             && container.status == ContainerStatus::Running
         {
@@ -1434,7 +1471,7 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("initialize release '{commit}' for app with uuid '{uuid}'")
                     },
                 ),
-                job::update(ensure_release_is_finalized).with_description(
+                job::none(ensure_release_is_finalized).with_description(
                     |Args((uuid, commit)): Args<(Uuid, Uuid)>| {
                         format!("prepare release '{commit}' for app with uuid '{uuid}'")
                     },
