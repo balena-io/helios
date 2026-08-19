@@ -28,11 +28,11 @@ axum = { version = "0.8.9", default-features = false, features = [
   "query",
 ] }
 dirs = "6.0.0"
-fastrand = "2.4.1"
+fastrand = "2.5.0"
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
 mahler = "0.25"
 nix = { version = "0.31", default-features = false, features = ["fs"] }
-regex = "1.12"
+regex = "1.13"
 reqwest = { version = "0.13", default-features = false, features = [
   "json",
   "rustls",
@@ -45,7 +45,7 @@ sha2 = { version = "0.11", default-features = false }
 tar = "0.4"
 tempfile = { version = "3", default-features = false }
 thiserror = "2"
-tokio = { version = "1.52.2", default-features = false, features = [
+tokio = { version = "1.53.1", default-features = false, features = [
   "rt-multi-thread",
   "macros",
   "time",
@@ -54,12 +54,12 @@ tokio = { version = "1.52.2", default-features = false, features = [
   "net",
   "io-util",
 ] }
-tokio-stream = { version = "0.1.18", default-features = false, features = [
+tokio-stream = { version = "0.1.19", default-features = false, features = [
   "sync",
 ] }
 tracing = "0.1.44"
-uuid = { version = "1.23", features = ["v4"] }
-zbus = { version = "5.15", default-features = false, features = ["tokio"] }
+uuid = { version = "1.24", features = ["v4"] }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 
 # workspace dev dependencies
 bollard = "0.21"
