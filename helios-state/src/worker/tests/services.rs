@@ -1,7 +1,7 @@
 use super::helpers::*;
 
 use mahler::dag::{Dag, dag, par, seq};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn it_finds_a_workflow_to_fetch_and_install_services() {
@@ -1114,94 +1114,107 @@ fn it_orders_a_realistic_dependency_graph() {
     );
 }
 
-#[test]
-fn it_awaits_a_dependency_that_has_already_failed_its_condition() {
-    init_tracing();
-    assert_workflow(
-        json!({
-            "uuid": "my-device-uuid",
-            "apps": {
-                "my-app-uuid": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "my-release-uuid": {
-                            "installed": true,
-                            "services": {
-                                // already exited non-zero, so
-                                // `service_completed_successfully` can never hold. the await
-                                // is still emitted so the exit code surfaces at runtime
-                                // instead of the search dead-ending
-                                "migrate": {
-                                    "id": 1,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "oci": {
-                                        "name": "migrate_my-release-uuid",
-                                        "status": "stopped",
-                                        "exit_code": 137,
-                                        "created": "2026-02-11T15:03:43Z",
-                                    },
-                                    "config": {},
+/// Assert the planner skips the start of `web`, which is installed but not started
+/// and depends on `dep` under `condition`, because `dep` is observed in a container
+/// state that can never meet that condition.
+fn assert_start_skipped(condition: &str, dep_container: Value) {
+    let current = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {
+                            "dep": {
+                                "id": 1,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "oci": dep_container,
+                                "config": {},
+                            },
+                            "web": {
+                                "id": 2,
+                                "image": "alpine:latest",
+                                "started": false,
+                                "depends_on": {
+                                    "dep": {"condition": condition, "restart": false, "required": true}
                                 },
-                                "web": {
-                                    "id": 2,
-                                    "image": "alpine:latest",
-                                    "started": false,
-                                    "depends_on": {
-                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
-                                    },
-                                    "oci": {
-                                        "name": "web_my-release-uuid",
-                                        "status": "created",
-                                        "created": "2026-02-11T15:03:43Z",
-                                    },
-                                    "config": {},
-                                },
-                            }
+                                "oci": created_container("web_my-release-uuid"),
+                                "config": {},
+                            },
                         }
                     }
                 }
-            },
-        }),
-        json!({
-            "uuid": "my-device-uuid",
-            "apps": {
-                "my-app-uuid": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "my-release-uuid": {
-                            "installed": true,
-                            "services": {
-                                "migrate": {
-                                    "id": 1,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "config": {},
+            }
+        },
+    });
+
+    let target = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {
+                            "dep": {
+                                "id": 1,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "config": {},
+                            },
+                            "web": {
+                                "id": 2,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "depends_on": {
+                                    "dep": {"condition": condition, "restart": false, "required": true}
                                 },
-                                "web": {
-                                    "id": 2,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "depends_on": {
-                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
-                                    },
-                                    "config": {},
-                                },
-                            }
+                                "config": {},
+                            },
                         }
                     }
                 }
-            },
-        }),
-        release_update(
-            "my-release-uuid",
-            "my-app-uuid",
-            seq!(
-                "wait until service 'migrate' for release 'my-release-uuid' has completed",
-                "start service 'web' for release 'my-release-uuid'",
-            ),
-        ),
+            }
+        },
+    });
+
+    assert_exception(
+        current,
+        target,
+        "/apps/my-app-uuid/releases/my-release-uuid/services/web/started",
+        "service 'web' depends on a service that can no longer meet its condition",
     );
+}
+
+#[test]
+fn it_skips_a_start_gated_on_a_dependency_with_no_healthcheck() {
+    init_tracing();
+    // a running dependency reporting no health has no healthcheck configured, so
+    // `service_healthy` can never hold
+    assert_start_skipped("service_healthy", running_container("dep_my-release-uuid"));
+}
+
+#[test]
+fn it_skips_a_start_gated_on_an_unhealthy_dependency() {
+    init_tracing();
+    let mut dep = running_container("dep_my-release-uuid");
+    dep["health"] = json!("unhealthy");
+
+    assert_start_skipped("service_healthy", dep);
+}
+
+#[test]
+fn it_skips_a_start_gated_on_a_dependency_that_exited_with_an_error() {
+    init_tracing();
+    // already exited non-zero, so `service_completed_successfully` can never hold
+    let mut dep = stopped_container("dep_my-release-uuid");
+    dep["exit_code"] = json!(137);
+
+    assert_start_skipped("service_completed_successfully", dep);
 }

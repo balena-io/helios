@@ -1,7 +1,7 @@
 use crate::models::{Device, DeviceTarget};
 
 use mahler::dag::{Dag, seq};
-use mahler::worker::FindPlan;
+use mahler::worker::{FindPlan, Workflow};
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -20,7 +20,7 @@ pub(super) fn init_tracing() {
         .unwrap_or(());
 }
 
-pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>) {
+pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>) -> Workflow {
     let current = serde_json::from_value::<Device>(current).unwrap();
     let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
     let (_, workflow) = super::super::worker()
@@ -33,6 +33,23 @@ pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>
         expected.to_string(),
         "unexpected plan:\n{workflow}"
     );
+
+    workflow
+}
+
+/// Assert the planner skips the operation on `path` with the given reason and
+/// finds no other work to do. Used for targets the planner cannot reach, e.g. a
+/// service start gated on a `depends_on` condition that has terminally failed.
+pub(super) fn assert_exception(current: Value, target: Value, path: &str, reason: &str) {
+    let workflow = assert_workflow(current, target, Dag::new([]));
+    let exceptions = workflow.exceptions();
+    assert_eq!(
+        exceptions.len(),
+        1,
+        "expected a single exception, found {exceptions:?}"
+    );
+    assert_eq!(exceptions[0].operation.path().as_str(), path);
+    assert_eq!(exceptions[0].reason.as_deref(), Some(reason));
 }
 
 /// Wraps a DAG with `prepare release` and `finish release` steps,
@@ -60,6 +77,14 @@ pub(super) fn stopped_container(name: &str) -> Value {
         "name": name,
         "status": "stopped",
         "exit_code": 0,
+        "created": "2026-02-11T15:03:43Z",
+    })
+}
+
+pub(super) fn created_container(name: &str) -> Value {
+    serde_json::json!({
+        "name": name,
+        "status": "created",
         "created": "2026-02-11T15:03:43Z",
     })
 }
