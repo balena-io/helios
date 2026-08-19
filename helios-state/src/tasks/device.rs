@@ -165,6 +165,6 @@ pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unini
         )
     }
 
-    worker = worker.with_cleanup(perform_cleanup);
+    worker = worker.hook(perform_cleanup);
     worker
 }

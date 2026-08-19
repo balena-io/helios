@@ -30,7 +30,7 @@ axum = { version = "0.8.9", default-features = false, features = [
 dirs = "6.0.0"
 fastrand = "2.5.0"
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
-mahler = "0.25"
+mahler = "0.26"
 nix = { version = "0.31", default-features = false, features = ["fs"] }
 regex = "1.13"
 reqwest = { version = "0.13", default-features = false, features = [

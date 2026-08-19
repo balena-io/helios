@@ -680,9 +680,9 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "futures"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
+checksum = "a88cf1f829d945f548cf8fec32c61b1f202b6d93b45848602fc02af4b12ad218"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -711,9 +711,9 @@ checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
 name = "futures-executor"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf29c38818342a3b26b5b923639e7b1f4a61fc5e76102d4b1981c6dc7a7579d"
+checksum = "6754879cc9f2c66f88c6e5c35344bb0bdb0708b0352b1201815667c7eabc7458"
 dependencies = [
  "futures-core",
  "futures-task",
@@ -1444,9 +1444,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mahler"
-version = "0.25.12"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3e75209ebadc0d517f76d4a650614db768483f5c8bc565e4bca37083868f5ba"
+checksum = "e5f5a4ce6763fb9e4245ab947de74fd808c9bece643922cfb2c83ae1a1e7d2c8"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1463,9 +1463,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-core"
-version = "0.25.12"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36747dbb67649e28d31af55959db2bc250e139b7d8e437839669af32c5d0ed97"
+checksum = "9d2850edef5543638e24b31b8604fce40600ffba6262b1e9dbc99830798d9ef0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1479,9 +1479,9 @@ dependencies = [
 
 [[package]]
 name = "mahler-derive"
-version = "0.25.12"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfcb4292999b8e7c3ad67d881c244a243a2c222d091b896b03aa7e6947d6f979"
+checksum = "9ab05bf8d893d2513212c45ff1e0e260f78f6064446c75cd6d7ab1e60613cd53"
 dependencies = [
  "proc-macro2",
  "quote",
