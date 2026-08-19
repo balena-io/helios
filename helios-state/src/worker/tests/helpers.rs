@@ -1,7 +1,7 @@
 use crate::models::{Device, DeviceTarget};
 
 use mahler::dag::{Dag, seq};
-use mahler::worker::FindWorkflow;
+use mahler::worker::{FindPlan, FindWorkflow};
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -25,14 +25,9 @@ pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>
     let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
     let (_, workflow) = super::super::worker()
         .initial_state(current)
-        .find_workflow(target)
+        .find_plan(target)
         .unwrap();
     let workflow = workflow.expect("workflow should be found");
-    let expected = expected
-        + seq!(
-            "clean-up host metadata and images",
-            "clean-up app metadata and images"
-        );
     assert_eq!(
         workflow.to_string(),
         expected.to_string(),
