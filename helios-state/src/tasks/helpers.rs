@@ -26,7 +26,7 @@ pub fn find_installed_service<'a>(
 
 /// Outcome of evaluating a `depends_on` condition.
 #[derive(Debug, PartialEq)]
-pub enum ConditionOutcome {
+pub enum DependsOnConditionOutcome {
     Satisfied,
     // terminal failure with reason
     Failed(String),
@@ -34,8 +34,8 @@ pub enum ConditionOutcome {
 }
 
 /// Evaluate a dependency against a `depends_on` condition from its observed state.
-fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> ConditionOutcome {
-    use ConditionOutcome::*;
+fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> DependsOnConditionOutcome {
+    use DependsOnConditionOutcome::*;
     match condition {
         // once the container leaves `created`, `started` stays true
         DependsOnCondition::ServiceStarted => {
@@ -55,8 +55,8 @@ fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> Condition
 }
 
 /// Evaluate an observed container against the `service_healthy` condition.
-pub fn evaluate_health(container: &Container) -> ConditionOutcome {
-    use ConditionOutcome::*;
+pub fn evaluate_health(container: &Container) -> DependsOnConditionOutcome {
+    use DependsOnConditionOutcome::*;
     match &container.health {
         Health::Healthy => Satisfied,
         Health::Unhealthy => Failed("unhealthy".to_owned()),
@@ -72,8 +72,8 @@ pub fn evaluate_health(container: &Container) -> ConditionOutcome {
 
 /// Evaluate an observed container against the `service_completed_successfully`
 /// condition.
-pub fn evaluate_completion(container: &Container) -> ConditionOutcome {
-    use ConditionOutcome::*;
+pub fn evaluate_completion(container: &Container) -> DependsOnConditionOutcome {
+    use DependsOnConditionOutcome::*;
     match &container.status {
         ContainerStatus::Stopped(0) => Satisfied,
         ContainerStatus::Stopped(code) => Failed(format!("exited with code {code}")),
@@ -88,7 +88,7 @@ pub fn evaluate_completion(container: &Container) -> ConditionOutcome {
 pub fn depends_on_condition_pending(dep: &Service, condition: DependsOnCondition) -> bool {
     matches!(
         evaluate_condition(dep, condition),
-        ConditionOutcome::Pending
+        DependsOnConditionOutcome::Pending
     )
 }
 
@@ -132,23 +132,23 @@ fn dependencies_outcome(
     app_uuid: &Uuid,
     commit: &Uuid,
     depends_on: &DependsOn,
-) -> ConditionOutcome {
+) -> DependsOnConditionOutcome {
     let services = release_services(device, app_uuid, commit);
 
-    let mut outcome = ConditionOutcome::Satisfied;
+    let mut outcome = DependsOnConditionOutcome::Satisfied;
     for (dep_name, spec) in depends_on.iter().filter(|(_, spec)| spec.required) {
         match services
             .and_then(|services| services.get(dep_name))
             .map(|dep| evaluate_condition(dep, spec.condition))
         {
-            Some(ConditionOutcome::Satisfied) => {}
+            Some(DependsOnConditionOutcome::Satisfied) => {}
             // a terminal failure cannot be recovered from, so no need to look
             // at the remaining dependencies
-            Some(ConditionOutcome::Failed(reason)) => {
-                return ConditionOutcome::Failed(reason);
+            Some(DependsOnConditionOutcome::Failed(reason)) => {
+                return DependsOnConditionOutcome::Failed(reason);
             }
             // still pending, or a dependency missing from the release
-            _ => outcome = ConditionOutcome::Pending,
+            _ => outcome = DependsOnConditionOutcome::Pending,
         }
     }
 
@@ -165,7 +165,7 @@ pub fn dependencies_satisfied(
 ) -> bool {
     matches!(
         dependencies_outcome(device, app_uuid, commit, depends_on),
-        ConditionOutcome::Satisfied
+        DependsOnConditionOutcome::Satisfied
     )
 }
 
@@ -180,7 +180,7 @@ pub fn any_dependency_failed(
 ) -> bool {
     matches!(
         dependencies_outcome(device, app_uuid, commit, depends_on),
-        ConditionOutcome::Failed(_)
+        DependsOnConditionOutcome::Failed(_)
     )
 }
 
@@ -511,9 +511,15 @@ mod tests {
     fn evaluate_condition_started() {
         let started = DependsOnCondition::ServiceStarted;
         let mut s = svc(json!({"id": 1, "image": "alpine:latest", "started": true, "config": {}}));
-        assert_eq!(evaluate_condition(&s, started), ConditionOutcome::Satisfied);
+        assert_eq!(
+            evaluate_condition(&s, started),
+            DependsOnConditionOutcome::Satisfied
+        );
         s.started = false;
-        assert_eq!(evaluate_condition(&s, started), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, started),
+            DependsOnConditionOutcome::Pending
+        );
     }
 
     #[test]
@@ -521,32 +527,44 @@ mod tests {
         let healthy = DependsOnCondition::ServiceHealthy;
 
         let s = svc_with_oci(json!({"status": "running", "health": "healthy"}));
-        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Satisfied);
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            DependsOnConditionOutcome::Satisfied
+        );
 
         let s = svc_with_oci(json!({"status": "running", "health": "unhealthy"}));
         assert_eq!(
             evaluate_condition(&s, healthy),
-            ConditionOutcome::Failed("unhealthy".into())
+            DependsOnConditionOutcome::Failed("unhealthy".into())
         );
 
         // still waiting on healthcheck outcome
         let s = svc_with_oci(json!({"status": "running", "health": "starting"}));
-        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            DependsOnConditionOutcome::Pending
+        );
 
         // no configured healthcheck fails fast at runtime
         let s = svc_with_oci(json!({"status": "running", "health": "none"}));
         assert_eq!(
             evaluate_condition(&s, healthy),
-            ConditionOutcome::Failed("no healthcheck configured".into())
+            DependsOnConditionOutcome::Failed("no healthcheck configured".into())
         );
 
         // container still starting
         let s = svc_with_oci(json!({"status": "created", "health": "none"}));
-        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            DependsOnConditionOutcome::Pending
+        );
 
         // no container observed yet
         let s = svc(json!({"id": 1, "image": "alpine:latest", "config": {}}));
-        assert_eq!(evaluate_condition(&s, healthy), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, healthy),
+            DependsOnConditionOutcome::Pending
+        );
     }
 
     #[test]
@@ -556,23 +574,29 @@ mod tests {
         let s = svc_with_oci(json!({"status": "stopped", "exit_code": 0}));
         assert_eq!(
             evaluate_condition(&s, completed),
-            ConditionOutcome::Satisfied
+            DependsOnConditionOutcome::Satisfied
         );
 
         // failed due to non-zero exit
         let s = svc_with_oci(json!({"status": "stopped", "exit_code": 137}));
         assert_eq!(
             evaluate_condition(&s, completed),
-            ConditionOutcome::Failed("exited with code 137".into())
+            DependsOnConditionOutcome::Failed("exited with code 137".into())
         );
 
         // a running container carries no exit code
         let s = svc_with_oci(json!({"status": "running"}));
-        assert_eq!(evaluate_condition(&s, completed), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, completed),
+            DependsOnConditionOutcome::Pending
+        );
 
         // no container observed yet
         let s = svc(json!({"id": 1, "image": "alpine:latest", "config": {}}));
-        assert_eq!(evaluate_condition(&s, completed), ConditionOutcome::Pending);
+        assert_eq!(
+            evaluate_condition(&s, completed),
+            DependsOnConditionOutcome::Pending
+        );
     }
 
     #[test]
