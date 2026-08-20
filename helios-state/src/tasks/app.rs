@@ -225,8 +225,8 @@ fn take_locks(
         // that share each lock path so each lock is taken at most once.
         let service_locks: HashMap<PathBuf, Vec<String>> = app
             .releases
-            .iter()
-            .flat_map(|(_, rel)| rel.services.iter())
+            .values()
+            .flat_map(|rel| rel.services.iter())
             .filter(|(_, svc)| svc.oci.is_some())
             .filter_map(|(svc_name, svc)| {
                 let bind_source = svc.config.volumes.iter().find_map(|mount| match mount {

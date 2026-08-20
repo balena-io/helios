@@ -1,15 +1,26 @@
 [workspace]
 resolver = "3"
-members = [ "helios", "helios-api", "helios-balenahup", "helios-legacy", "helios-oci", "helios-remote", "helios-remote-model", "helios-state", "helios-store", "helios-util" ]
+members = [
+  "helios",
+  "helios-api",
+  "helios-balenahup",
+  "helios-legacy",
+  "helios-oci",
+  "helios-remote",
+  "helios-remote-model",
+  "helios-state",
+  "helios-store",
+  "helios-util",
+]
 
 [workspace.package]
 version = "0.26.2"
-rust-version = "1.89"
+rust-version = "1.96"
 edition = "2024"
 description = "Balena's on-device agent"
 homepage = "https://github.com/balena-io/helios"
 repository = "https://github.com/balena-io/helios"
-authors = [ "Balena Inc. <hello@balena.io>" ]
+authors = ["Balena Inc. <hello@balena.io>"]
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
@@ -20,11 +31,11 @@ shell-words = "1.1"
 tracing = "0.1.44"
 serde_json = "1.0"
 thiserror = "2"
-rand = "0.10.1"
+rand = "0.10.2"
 dirs = "6.0.0"
 bollard = "0.21"
-fastrand = "2.4.1"
-regex = "1.12"
+fastrand = "2.5.0"
+regex = "1.13"
 pretty_assertions = "1.4.1"
 tar = "0.4"
 go-parse-duration = "0.1"
@@ -33,7 +44,7 @@ parse-size = "1.1"
 [workspace.dependencies.nix]
 version = "0.31"
 default-features = false
-features = [ "fs" ]
+features = ["fs"]
 
 [workspace.dependencies.helios-balenahup]
 path = "./helios-balenahup"
@@ -80,65 +91,65 @@ default-features = false
 [workspace.dependencies.axum]
 version = "0.8.9"
 default-features = false
-features = [ "tokio", "http1", "json", "query" ]
+features = ["tokio", "http1", "json", "query"]
 
 [workspace.dependencies.chrono]
 version = "0.4"
 default-features = false
-features = [ "alloc", "core-error" ]
+features = ["alloc", "core-error"]
 
 [workspace.dependencies.getrandom]
 version = "0.4"
 default-features = false
-features = [ "std" ]
+features = ["std"]
 
 [workspace.dependencies.tempfile]
 version = "3"
 default-features = false
 
 [workspace.dependencies.tokio]
-version = "1.52"
+version = "1.53"
 default-features = false
-features = [ "time", "fs" ]
+features = ["time", "fs"]
 
 [workspace.dependencies.tokio-stream]
-version = "0.1.18"
+version = "0.1.19"
 default-features = false
 
 [workspace.dependencies.tower-http]
-version = "0.6.9"
+version = "0.7.0"
 default-features = false
-features = [ "trace" ]
+features = ["trace"]
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3.23"
-features = [ "env-filter", "fmt", "registry", "ansi" ]
+features = ["env-filter", "fmt", "registry", "ansi"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"
 default-features = false
-features = [ "json", "rustls", "brotli", "stream" ]
+features = ["json", "rustls", "brotli", "stream"]
 
 [workspace.dependencies.serde]
 version = "1.0"
-features = [ "derive" ]
+features = ["derive"]
 
 [workspace.dependencies.serde_with]
-version = "3.19"
+version = "3.22"
 default-features = false
-features = [ "macros" ]
+features = ["macros"]
 
 [workspace.dependencies.clap]
 version = "4.6"
 default-features = false
-features = [ "std", "help", "usage", "error-context", "derive", "env" ]
+features = ["std", "help", "usage", "error-context", "derive", "env"]
 
 [workspace.dependencies.uuid]
-version = "1.23"
-features = [ "v4" ]
+version = "1.24"
+features = ["v4"]
 
 [workspace.dependencies.mahler]
-version = "0.25"
+version = "0.26"
 
 [workspace.dependencies.sha2]
 version = "0.11"
@@ -150,7 +161,7 @@ default-features = false
 
 [workspace.dependencies.indexmap]
 version = "2"
-features = [ "serde" ]
+features = ["serde"]
 
 [workspace.dependencies.globset]
 version = "0.4"
@@ -161,9 +172,9 @@ version = "2.5"
 default-features = false
 
 [workspace.dependencies.zbus]
-version = "5.15"
+version = "5.19"
 default-features = false
-features = [ "tokio" ]
+features = ["tokio"]
 
 [profile.release]
 opt-level = "z"
