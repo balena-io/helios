@@ -1,0 +1,23 @@
+# Cargo build output. Multi-GB locally and never used by a build, which
+# copies sources and compiles from scratch.
+target/
+**/target/
+
+# VCS and CI metadata
+.git
+.gitignore
+.github
+.versionbot
+
+# Tooling and editor state
+.claude
+.vscode
+.idea
+.DS_Store
+
+# Build definitions. Not copied into any image; excluding them keeps an edit
+# to a Dockerfile from invalidating the source COPY layers.
+**/Dockerfile*
+.dockerignore
+docker-compose*.yml
+docker-bake.hcl
