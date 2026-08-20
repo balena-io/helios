@@ -24,7 +24,7 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    ConditionOutcome, any_dependency_failed, any_images_are_pending_download,
+    DependsOnConditionOutcome, any_dependency_failed, any_images_are_pending_download,
     dependencies_satisfied, depends_on_condition_pending, evaluate_completion, evaluate_health,
     find_future_network, find_future_service, find_future_volume, find_installed_network,
     find_installed_service, find_installed_volume, release_services, service_matches_target,
@@ -1165,15 +1165,15 @@ fn await_completed(
 async fn poll_until_condition_met(
     docker: &Docker,
     container_id: &str,
-    evaluate: fn(&Container) -> ConditionOutcome,
+    evaluate: fn(&Container) -> DependsOnConditionOutcome,
 ) -> Result<(), OciError> {
     const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
     loop {
         let state = docker.container().inspect(container_id).await?.state;
         match evaluate(&Container::from((container_id, state))) {
-            ConditionOutcome::Satisfied => return Ok(()),
-            ConditionOutcome::Failed(reason) => return Err(reason.into()),
-            ConditionOutcome::Pending => {}
+            DependsOnConditionOutcome::Satisfied => return Ok(()),
+            DependsOnConditionOutcome::Failed(reason) => return Err(reason.into()),
+            DependsOnConditionOutcome::Pending => {}
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
