@@ -1,7 +1,7 @@
 use super::helpers::*;
 
 use mahler::dag::{Dag, dag, par, seq};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn it_finds_a_workflow_to_fetch_and_install_services() {
@@ -183,6 +183,83 @@ fn it_finds_a_workflow_to_reconfigure_a_service() {
                 "start service 'my-service' for release 'my-release-uuid'",
             ),
         ) + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
+
+// this should only happen if the someone manually removed the container at some
+// point after install
+#[test]
+fn it_finds_a_workflow_to_reinstall_a_removed_service() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service2": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "started": true,
+                                    "oci": running_container("my-release-uuid_service2"),
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            "images": {
+                "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                },
+                "ubuntu:latest": {
+                    "oci_id": "defgh",
+                    "download_progress": 100
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app-name",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "service1": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {},
+                                },
+                                 "service2": {
+                                    "id": 2,
+                                    "image": "registry2.balena-cloud.com/v2/deafbeef@sha256:4923e45e976ab2c67aa0f2eebadab4a59d76b74064313f2c57fdd052c49cb080",
+                                    "started": true,
+                                    "config": {},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "initialize service 'service1' for release 'my-release-uuid'",
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "install service 'service1' for release 'my-release-uuid'",
+            "start service 'service1' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+        ),
     );
 }
 
@@ -400,11 +477,7 @@ fn it_finds_a_workflow_to_update_services_image_metadata() {
                 }
             },
         }),
-        release_update(
-            "my-release-uuid",
-            "my-app-uuid",
-            seq!("update image metadata for service 'one' of release 'my-release-uuid'",),
-        ),
+        seq!("update image metadata for service 'one' of release 'my-release-uuid'",),
     );
 }
 
@@ -1042,84 +1115,107 @@ fn it_orders_a_realistic_dependency_graph() {
     );
 }
 
-#[test]
-fn it_finds_no_workflow_when_a_dependency_condition_terminally_fails() {
-    init_tracing();
-    assert_no_workflow(
-        json!({
-            "uuid": "my-device-uuid",
-            "apps": {
-                "my-app-uuid": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "my-release-uuid": {
-                            "installed": true,
-                            "services": {
-                                // already exited non-zero, so
-                                // `service_completed_successfully` can never hold
-                                "migrate": {
-                                    "id": 1,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "oci": {
-                                        "name": "migrate_my-release-uuid",
-                                        "status": "stopped",
-                                        "exit_code": 137,
-                                        "created": "2026-02-11T15:03:43Z",
-                                    },
-                                    "config": {},
+/// Assert the planner skips the start of `web`, which is installed but not started
+/// and depends on `dep` under `condition`, because `dep` is observed in a container
+/// state that can never meet that condition.
+fn assert_start_skipped(condition: &str, dep_container: Value) {
+    let current = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {
+                            "dep": {
+                                "id": 1,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "oci": dep_container,
+                                "config": {},
+                            },
+                            "web": {
+                                "id": 2,
+                                "image": "alpine:latest",
+                                "started": false,
+                                "depends_on": {
+                                    "dep": {"condition": condition, "restart": false, "required": true}
                                 },
-                                "web": {
-                                    "id": 2,
-                                    "image": "alpine:latest",
-                                    "started": false,
-                                    "depends_on": {
-                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
-                                    },
-                                    "oci": {
-                                        "name": "web_my-release-uuid",
-                                        "status": "created",
-                                        "created": "2026-02-11T15:03:43Z",
-                                    },
-                                    "config": {},
-                                },
-                            }
+                                "oci": created_container("web_my-release-uuid"),
+                                "config": {},
+                            },
                         }
                     }
                 }
-            },
-        }),
-        json!({
-            "uuid": "my-device-uuid",
-            "apps": {
-                "my-app-uuid": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "my-release-uuid": {
-                            "installed": true,
-                            "services": {
-                                "migrate": {
-                                    "id": 1,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "config": {},
+            }
+        },
+    });
+
+    let target = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {
+                            "dep": {
+                                "id": 1,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "config": {},
+                            },
+                            "web": {
+                                "id": 2,
+                                "image": "alpine:latest",
+                                "started": true,
+                                "depends_on": {
+                                    "dep": {"condition": condition, "restart": false, "required": true}
                                 },
-                                "web": {
-                                    "id": 2,
-                                    "image": "alpine:latest",
-                                    "started": true,
-                                    "depends_on": {
-                                        "migrate": {"condition": "service_completed_successfully", "restart": false, "required": true}
-                                    },
-                                    "config": {},
-                                },
-                            }
+                                "config": {},
+                            },
                         }
                     }
                 }
-            },
-        }),
+            }
+        },
+    });
+
+    assert_exception(
+        current,
+        target,
+        "/apps/my-app-uuid/releases/my-release-uuid/services/web/started",
+        "service 'web' depends on a service that can no longer meet its condition",
     );
+}
+
+#[test]
+fn it_skips_a_start_gated_on_a_dependency_with_no_healthcheck() {
+    init_tracing();
+    // a running dependency reporting no health has no healthcheck configured, so
+    // `service_healthy` can never hold
+    assert_start_skipped("service_healthy", running_container("dep_my-release-uuid"));
+}
+
+#[test]
+fn it_skips_a_start_gated_on_an_unhealthy_dependency() {
+    init_tracing();
+    let mut dep = running_container("dep_my-release-uuid");
+    dep["health"] = json!("unhealthy");
+
+    assert_start_skipped("service_healthy", dep);
+}
+
+#[test]
+fn it_skips_a_start_gated_on_a_dependency_that_exited_with_an_error() {
+    init_tracing();
+    // already exited non-zero, so `service_completed_successfully` can never hold
+    let mut dep = stopped_container("dep_my-release-uuid");
+    dep["exit_code"] = json!(137);
+
+    assert_start_skipped("service_completed_successfully", dep);
 }

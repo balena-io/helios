@@ -142,13 +142,9 @@ fn it_finds_a_workflow_to_create_and_remove_networks() {
                 }
             },
         }),
-        release_update(
-            "my-release-uuid",
-            "my-app-uuid",
-            par!(
-                "remove network 'network-a' for app 'my-app-uuid'",
-                "setup network 'network-b' for app 'my-app-uuid'",
-            ),
+        par!(
+            "remove network 'network-a' for app 'my-app-uuid'",
+            "setup network 'network-b' for app 'my-app-uuid'",
         ),
     );
 }
