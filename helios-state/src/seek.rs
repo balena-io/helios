@@ -75,6 +75,13 @@ fn api_cancel_default() -> bool {
     false
 }
 
+impl UpdateOpts {
+    /// Whether this request is allowed to interrupt an apply already in progress.
+    fn may_interrupt(&self) -> bool {
+        self.cancel || self.force
+    }
+}
+
 impl Default for UpdateOpts {
     fn default() -> Self {
         Self {
@@ -485,9 +492,9 @@ pub async fn start_seek(
                 }
 
                 if matches!(update_status, UpdateStatus::ApplyingChanges) {
-                    // A new target came while applying.
-                    // Interrupt the target if we are asked to cancel.
-                    if update_req.opts.cancel {
+                    // A new target came while applying. Both cancel and force need a new
+                    // worker to take effect.
+                    if update_req.opts.may_interrupt() {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
                         prev_seek_state = apply_future.await?;
@@ -665,4 +672,36 @@ pub async fn start_seek(
 
     info!("terminating");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancel_request_interrupts_a_running_apply() {
+        let opts = UpdateOpts {
+            force: false,
+            cancel: true,
+        };
+        assert!(opts.may_interrupt());
+    }
+
+    #[test]
+    fn a_forced_request_interrupts_a_running_apply() {
+        let opts = UpdateOpts {
+            force: true,
+            cancel: false,
+        };
+        assert!(opts.may_interrupt());
+    }
+
+    #[test]
+    fn a_plain_request_waits_for_the_running_apply() {
+        let opts = UpdateOpts {
+            force: false,
+            cancel: false,
+        };
+        assert!(!opts.may_interrupt());
+    }
 }
