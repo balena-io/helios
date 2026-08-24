@@ -25,7 +25,7 @@ use crate::reboot::{mark_pending_reboot, reboot_to_activate, reboot_to_apply_ove
 use super::BALENAHUP;
 use super::models::{
     Device, DeviceTarget, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget,
-    OverlayStatus,
+    HostTarget, OverlayStatus,
 };
 
 /// Whether the host is still validating this boot.
@@ -377,13 +377,58 @@ pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarg
     })
 }
 
+/// The runtimes the target's overlays ask for, deduplicated.
+fn requested_runtimes(tgt: &HostReleaseTarget) -> Vec<&str> {
+    let mut wanted: Vec<&str> = tgt
+        .overlays
+        .values()
+        .map(|ov| ov.runtime.as_str())
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    wanted
+}
+
+/// An overlay the target brings asks for a runtime this engine does not
+/// register, so the release cannot be deployed on this host at all.
+fn overlay_runtime_unavailable(registered: &[String], tgt: &HostReleaseTarget) -> bool {
+    requested_runtimes(tgt)
+        .iter()
+        .any(|wanted| !registered.iter().any(|name| name == wanted))
+}
+
+/// The reason an operator reads when a release's overlays name a runtime the
+/// engine does not register. It lists every runtime the release asks for: a
+/// description sees the target, not the device, so it cannot single out the
+/// missing one.
+fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
+    format!(
+        "host OS engine does not register a runtime the overlays ask for ('{}'), update the OS first",
+        requested_runtimes(tgt).join("', '")
+    )
+}
+
+/// Drop the target releases this host cannot run, and say why for each.
+///
+/// The release the device runs is kept: `release_still_accounted_for` declines
+/// to forget one the target no longer names.
+pub fn reject_unsupported_releases(tgt: &mut HostTarget, host: &Host) -> Vec<String> {
+    let mut reasons = Vec::new();
+    tgt.releases.retain(|_, rel| {
+        if overlay_runtime_unavailable(&host.engine_runtimes, rel) {
+            reasons.push(unavailable_runtime_reason(rel));
+            return false;
+        }
+        true
+    });
+    reasons
+}
+
 /// True while some overlay the target dropped is still present and the planner
 /// is free to remove it.
 ///
-/// This mirrors the exceptions registered on `/host/releases/{release_uuid}`
-/// below: a removal those exceptions hold back must not hold back the reboot,
-/// or the reboot becomes unplannable and, with it, every other change on the
-/// device. Keep the two in step when adding an exception on that path.
+/// This mirrors the exceptions on `/host/releases/{release_uuid}` below. A
+/// removal they hold back must not hold back the reboot. Keep the two in step.
 pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) -> bool {
     let Some(host) = device.host.as_ref() else {
         return false;
@@ -578,4 +623,144 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 },
             ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::common_types::{ImageUri, OperatingSystem};
+    use crate::models::{HostAppTarget, OverlayTarget};
+    use mahler::state::Map;
+
+    /// A host whose engine registers the given runtimes.
+    fn host(engine_runtimes: &[&str]) -> Host {
+        let mut host = Host::new(OperatingSystem {
+            name: "balenaOS".to_string(),
+            version: Some("6.5.0".to_string()),
+            build: None,
+        });
+        host.engine_runtimes = engine_runtimes.iter().map(|r| r.to_string()).collect();
+        host
+    }
+
+    /// A device whose engine registers the given runtimes.
+    fn device(engine_runtimes: &[&str]) -> Device {
+        Device {
+            host: Some(host(engine_runtimes)),
+        }
+    }
+
+    /// A target release carrying one overlay per entry, each asking for the
+    /// runtime named beside it.
+    fn target(overlays: &[(&str, &str)]) -> HostReleaseTarget {
+        HostReleaseTarget {
+            app: Uuid::from("1b2c3d4e5f60718293a4b5c6d7e8f900"),
+            hostapp: HostAppTarget {
+                image: ImageUri::from_static("registry2.balena-cloud.com/v2/hostapp:latest"),
+                build: "abc1234".to_string(),
+                updater: ImageUri::from_static("registry2.balena-cloud.com/v2/updater:latest"),
+            },
+            status: HostReleaseStatus::Running,
+            overlays: overlays
+                .iter()
+                .map(|(name, runtime)| {
+                    (
+                        name.to_string(),
+                        OverlayTarget {
+                            image: ImageUri::from_static(
+                                "registry2.balena-cloud.com/v2/overlay:latest",
+                            ),
+                            status: OverlayStatus::Active,
+                            runtime: runtime.to_string(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn unavailable(engine: &[&str], overlays: &[(&str, &str)]) -> bool {
+        let d = device(engine);
+        let registered = &d.host.as_ref().unwrap().engine_runtimes;
+        overlay_runtime_unavailable(registered, &target(overlays))
+    }
+
+    #[test]
+    fn a_runtime_the_engine_does_not_register_is_unavailable() {
+        assert!(unavailable(&["runc"], &[("ebpf", "extension")]));
+    }
+
+    #[test]
+    fn an_engine_that_registers_nothing_satisfies_no_request() {
+        // A host that predates extensions: the list was read, and it is empty.
+        assert!(unavailable(&[], &[("ebpf", "extension")]));
+    }
+
+    #[test]
+    fn a_release_without_overlays_asks_for_nothing() {
+        // An ordinary host OS update reaches a host that predates extensions
+        // untouched by either guard.
+        assert!(!unavailable(&[], &[]));
+    }
+
+    #[test]
+    fn every_runtime_the_overlays_name_is_registered() {
+        let overlays = [("ebpf", "extension"), ("tracing", "extension")];
+        assert!(!unavailable(&["runc", "extension"], &overlays));
+    }
+
+    /// A target carrying one release with the given overlays.
+    fn host_target(overlays: &[(&str, &str)]) -> HostTarget {
+        let mut releases = Map::new();
+        releases.insert(Uuid::from("target-release"), target(overlays));
+        HostTarget {
+            releases,
+            pending_reboot: false,
+            host_validating: false,
+        }
+    }
+
+    #[test]
+    fn a_release_the_engine_can_run_is_kept() {
+        let mut tgt = host_target(&[("ebpf", "extension")]);
+        let reasons = reject_unsupported_releases(&mut tgt, &host(&["runc", "extension"]));
+        assert!(reasons.is_empty());
+        assert_eq!(tgt.releases.len(), 1);
+    }
+
+    #[test]
+    fn a_release_naming_an_unregistered_runtime_is_dropped() {
+        // X-04: a profile activated on a pre-extension OS.
+        let mut tgt = host_target(&[("ebpf", "extension")]);
+        let reasons = reject_unsupported_releases(&mut tgt, &host(&[]));
+        assert!(tgt.releases.is_empty());
+        assert_eq!(
+            reasons,
+            vec![
+                "host OS engine does not register a runtime the overlays ask for ('extension'), update the OS first"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pruning_leaves_the_reboot_request_alone() {
+        // The pending_reboot diff schedules a reboot already due.
+        let mut tgt = host_target(&[("ebpf", "extension")]);
+        reject_unsupported_releases(&mut tgt, &host(&[]));
+        assert!(!tgt.pending_reboot);
+    }
+
+    #[test]
+    fn the_reason_names_every_runtime_the_release_asked_for() {
+        // The description cannot see the device, so it cannot single out the
+        // missing one; it must not claim any of them is missing either.
+        let tgt = target(&[("ebpf", "extension"), ("tracing", "runc")]);
+        assert_eq!(
+            unavailable_runtime_reason(&tgt),
+            "host OS engine does not register a runtime the overlays ask for \
+             ('extension', 'runc'), update the OS first"
+        );
+    }
 }

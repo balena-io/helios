@@ -549,6 +549,11 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
+                            let refused = device_target.test_runtime_support(current_state);
+                            for reason in &refused {
+                                error!("{reason}");
+                            }
+
                             device_target.add_runtime_context(current_state, &host_runtime_dir);
 
                             // Look for a plan to the target
@@ -562,6 +567,11 @@ pub async fn start_seek(
                                 state_reader,
                             )
                             .await?;
+
+                            // Refusing part of the target is not success
+                            if !refused.is_empty() && matches!(update_status, UpdateStatus::Done) {
+                                update_status = UpdateStatus::Aborted;
+                            }
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

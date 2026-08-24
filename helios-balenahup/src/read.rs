@@ -116,6 +116,8 @@ pub async fn from_store(
         }
     }
 
+    host.engine_runtimes = docker.runtimes().await?.names;
+
     // Derive overlay extensions from engine reality and attach them to their
     // release. The release uuid is encoded in the container name at deploy
     // time (see overlays.rs).
