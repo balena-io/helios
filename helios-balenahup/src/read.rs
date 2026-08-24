@@ -151,6 +151,17 @@ pub async fn from_store(
         }
     }
 
+    // An unreadable engine leaves the list unknown rather than empty: an empty
+    // list is a host that registers nothing, and the two decline for different
+    // reasons.
+    host.engine_runtimes = match docker.runtimes().await {
+        Ok(oci::Runtimes { names }) => Some(names),
+        Err(e) => {
+            tracing::warn!("could not read the runtimes the engine registers: {e}");
+            None
+        }
+    };
+
     // Derive overlay extensions from engine reality and attach them to their
     // release. The release uuid is encoded in the container name at deploy
     // time (see overlays.rs).

@@ -57,6 +57,9 @@ pub struct Host {
     /// Whether the host is still validating what this boot brought up
     #[mahler(default)]
     pub host_validating: bool,
+
+    #[mahler(internal, default)]
+    pub engine_runtimes: Option<Vec<String>>,
 }
 
 impl Host {
@@ -66,6 +69,7 @@ impl Host {
             releases: Map::new(),
             pending_reboot: false,
             host_validating: false,
+            engine_runtimes: None,
         }
     }
 }

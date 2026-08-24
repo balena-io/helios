@@ -16,6 +16,7 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -60,6 +61,7 @@ fn it_deploys_and_activates_overlays_without_install_when_already_running_the_ta
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -107,6 +109,7 @@ fn it_deploys_overlays_before_installing_the_hostapp() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -155,6 +158,7 @@ fn it_deploys_multiple_overlays_before_installing() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -217,6 +221,7 @@ fn it_deploys_a_missing_target_overlay_before_the_reboot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -297,6 +302,7 @@ fn it_removes_an_overlay_dropped_from_the_target() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -492,6 +498,7 @@ fn it_removes_two_overlays_dropped_from_the_target() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -739,6 +746,7 @@ fn it_reboots_to_apply_a_pending_overlay_removal() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -799,6 +807,7 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -873,6 +882,7 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -939,6 +949,7 @@ fn it_defers_the_overlay_reboot_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "pending_reboot": true,
                 "releases": {
@@ -998,6 +1009,7 @@ fn it_defers_an_overlay_removal_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "target-release": {
@@ -1056,6 +1068,7 @@ fn it_aborts_when_an_overlay_activation_failed() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1121,6 +1134,7 @@ fn it_redeploys_an_overlay_whose_activation_failed_at_a_new_image() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1190,6 +1204,7 @@ fn it_redeploys_an_overlay_whose_target_image_changed() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1261,6 +1276,7 @@ fn it_redeploys_an_overlay_whose_kernel_did_not_boot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1327,6 +1343,7 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1383,6 +1400,7 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1446,6 +1464,7 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1507,6 +1526,7 @@ fn it_waits_while_the_os_release_is_being_validated() {
                     "version": "5.7.3",
                     "build": "abcd1234"
                 },
+                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "target-release": {
@@ -1562,6 +1582,7 @@ fn it_defers_installing_a_new_target_release_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "abcd1234"
                 },
+                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {}
             }
@@ -1605,6 +1626,7 @@ fn it_ignores_a_target_that_deletes_the_hostapp() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1644,6 +1666,7 @@ fn it_adopts_a_running_release_with_no_recorded_state() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {}
             },
         }),
@@ -1682,6 +1705,7 @@ fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1757,6 +1781,7 @@ fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -1825,6 +1850,7 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -1888,6 +1914,7 @@ fn it_removes_a_superseded_releases_overlays_when_it_forgets_the_release() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1960,6 +1987,7 @@ fn it_keeps_the_running_releases_overlays_while_its_replacement_installs() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -2018,6 +2046,7 @@ fn it_keeps_a_superseded_release_while_the_new_one_is_validating() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "old-release": {
@@ -2084,6 +2113,7 @@ fn it_removes_a_dropped_overlay_while_forgetting_a_superseded_release() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -2165,6 +2195,7 @@ fn it_reboots_for_a_removal_while_a_frozen_release_holds_a_dropped_overlay() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -2232,6 +2263,7 @@ fn it_reboots_for_a_removal_while_the_running_release_awaits_its_replacement() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "old-release": {
@@ -2284,6 +2316,418 @@ fn it_reboots_for_a_removal_while_the_running_release_awaits_its_replacement() {
         seq!(
             "reboot to apply overlay changes",
             "reboot to activate host OS release 'new-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_declines_a_release_with_overlays_on_a_pre_extension_host() {
+    // X-04: the profile was activated for a fleet whose device still runs an OS
+    // that predates hostapp extensions.
+    init_tracing();
+    assert_aborted(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "engine_runtimes": [],
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "ebpf": {
+                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        "host OS engine does not register a runtime the overlays ask for ('extension'), update the OS first",
+    );
+}
+
+#[test]
+fn it_declines_a_release_with_overlays_when_the_engine_could_not_be_read() {
+    // The same target as above, on a device whose engine did not answer: the
+    // runtime list is unknown rather than empty, so the release is declined
+    // with the reason that matches, and not with a claim about the OS the read
+    // never established.
+    init_tracing();
+    assert_aborted(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "ebpf": {
+                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        "no container engine runtimes available, cannot deploy overlays",
+    );
+}
+
+#[test]
+fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() {
+    // Identical target plans normally on a host whose engine registers the runtime
+    // the overlay names.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "engine_runtimes": ["extension"],
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "ebpf": {
+                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "initialize host OS release 'target-release'",
+            "deploy overlay 'ebpf' for host OS release 'target-release'",
+            "install host OS release 'target-release'",
+            "reboot to activate host OS release 'target-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_declines_an_initialized_release_with_overlays_on_a_pre_extension_host() {
+    // Same case one pass later, once `initialize host OS release` has run: the
+    // release record exists, so the operation the planner declines is an update
+    // on the release rather than its creation.
+    init_tracing();
+    assert_aborted(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "engine_runtimes": [],
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "created",
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "ebpf": {
+                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        "host OS engine does not register a runtime the overlays ask for ('extension'), update the OS first",
+    );
+}
+
+#[test]
+fn it_installs_a_release_without_overlays_on_a_pre_extension_host() {
+    // The first step of the supported two-step migration: the vanilla release
+    // that brings the extension-capable OS must plan normally, or the device
+    // has no way out of the state above. A target with no overlays asks for no
+    // runtime, so the engine's empty list has nothing to decline.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "engine_runtimes": [],
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                    }
+                }
+            },
+        }),
+        seq!(
+            "initialize host OS release 'target-release'",
+            "install host OS release 'target-release'",
+            "reboot to activate host OS release 'target-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_reboots_for_a_removal_while_a_pre_extension_host_holds_a_declined_release() {
+    // The freeze guard for the runtime exception.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
+                "engine_runtimes": [],
+                "pending_reboot": true,
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "dropped": {
+                                "image": "registry2.balena-cloud.com/v2/dropped@sha256:e555555555555555555555555555555555555555555555555555555555555555",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "ebpf": {
+                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("reboot to apply overlay changes"),
+    );
+}
+
+#[test]
+fn it_withdraws_the_last_overlay_on_a_pre_extension_host() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": [],
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        par!(
+            "remove overlay 'kernel-modules' for host OS release 'target-release'",
+            "mark overlay change as awaiting a reboot",
+        ) + seq!("reboot to apply overlay changes"),
+    );
+}
+
+#[test]
+fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "engine_runtimes": [],
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    },
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running"
+                    }
+                }
+            },
+        }),
+        par!(
+            "remove overlay 'kernel-modules' for host OS release 'old-release'",
+            "mark overlay change as awaiting a reboot",
+        ) + seq!(
+            "remove metadata for host OS release 'old-release'",
+            "reboot to apply overlay changes",
         ),
     );
 }

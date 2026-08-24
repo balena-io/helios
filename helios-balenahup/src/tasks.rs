@@ -361,6 +361,63 @@ pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarg
     })
 }
 
+/// The runtimes the target's overlays ask for, deduplicated.
+fn requested_runtimes(tgt: &HostReleaseTarget) -> Vec<&str> {
+    let mut wanted: Vec<&str> = tgt
+        .overlays
+        .values()
+        .map(|ov| ov.runtime.as_str())
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    wanted
+}
+
+/// The engine could not be read, so nothing shows the runtimes the target
+/// names are there.
+fn engine_runtimes_unknown(device: &Device, tgt: &HostReleaseTarget) -> bool {
+    let Some(host) = device.host.as_ref() else {
+        return false;
+    };
+    host.engine_runtimes.is_none() && !tgt.overlays.is_empty()
+}
+
+/// An overlay the target brings asks for a runtime this engine does not
+/// register, so the release cannot be deployed on this host at all.
+pub(crate) fn overlay_runtime_unavailable(device: &Device, tgt: &HostReleaseTarget) -> bool {
+    let Some(registered) = device
+        .host
+        .as_ref()
+        .and_then(|host| host.engine_runtimes.as_ref())
+    else {
+        return false;
+    };
+    requested_runtimes(tgt)
+        .iter()
+        .any(|wanted| !registered.iter().any(|name| name == wanted))
+}
+
+/// Either reason the planner will not touch this release's overlays.
+fn overlay_runtime_unsettled(device: &Device, tgt: &HostReleaseTarget) -> bool {
+    engine_runtimes_unknown(device, tgt) || overlay_runtime_unavailable(device, tgt)
+}
+
+/// The reason an operator reads when the engine's runtimes could not be read
+/// at all, so no runtime can be shown to be available.
+const UNKNOWN_RUNTIMES_REASON: &str =
+    "no container engine runtimes available, cannot deploy overlays";
+
+/// The reason an operator reads when a release's overlays name a runtime the
+/// engine does not register. It lists every runtime the release asks for: a
+/// description sees the target, not the device, so it cannot single out the
+/// missing one.
+fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
+    format!(
+        "host OS engine does not register a runtime the overlays ask for ('{}'), update the OS first",
+        requested_runtimes(tgt).join("', '")
+    )
+}
+
 /// True while some overlay the target dropped is still present and the planner
 /// is free to remove it.
 ///
@@ -380,6 +437,7 @@ pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) ->
             Some(tgt) => {
                 !too_many_failed_installs(rel)
                     && !overlay_activation_failed(rel, tgt)
+                    && !overlay_runtime_unsettled(device, tgt)
                     && rel
                         .overlays
                         .keys()
@@ -552,6 +610,47 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 )
             }),
         )
+        // Decline a release whose overlays name a runtime the engine does not
+        // register.
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::create(
+                |System(device): System<Device>, Target(tgt): Target<HostRelease>| {
+                    overlay_runtime_unavailable(&device, &tgt)
+                },
+            )
+            .with_description(|Target(tgt): Target<HostRelease>| unavailable_runtime_reason(&tgt)),
+        )
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(
+                |System(device): System<Device>, Target(tgt): Target<HostRelease>| {
+                    overlay_runtime_unavailable(&device, &tgt)
+                },
+            )
+            .with_description(|Target(tgt): Target<HostRelease>| unavailable_runtime_reason(&tgt)),
+        )
+        // An engine that could not be read gets its own decline rather than
+        // being folded into the one above, because a description sees only the
+        // target and so cannot tell the two apart in one message.
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::create(
+                |System(device): System<Device>, Target(tgt): Target<HostRelease>| {
+                    engine_runtimes_unknown(&device, &tgt)
+                },
+            )
+            .with_description(|| UNKNOWN_RUNTIMES_REASON),
+        )
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(
+                |System(device): System<Device>, Target(tgt): Target<HostRelease>| {
+                    engine_runtimes_unknown(&device, &tgt)
+                },
+            )
+            .with_description(|| UNKNOWN_RUNTIMES_REASON),
+        )
         // Hold off host work while the host validates this boot.
         .exception(
             "/host/releases/{release_uuid}",
@@ -580,4 +679,107 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             exception::update(host_validating)
                 .with_description(|| "host validation in progress, waiting for it to finish"),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::common_types::{ImageUri, OperatingSystem};
+    use crate::models::{HostAppTarget, OverlayTarget};
+
+    /// A device whose engine registers the given runtimes. `None` is an engine
+    /// that could not be read, which is not the same as one registering none.
+    fn device(engine_runtimes: Option<&[&str]>) -> Device {
+        let mut host = Host::new(OperatingSystem {
+            name: "balenaOS".to_string(),
+            version: Some("6.5.0".to_string()),
+            build: None,
+        });
+        host.engine_runtimes = engine_runtimes.map(|rs| rs.iter().map(|r| r.to_string()).collect());
+        Device { host: Some(host) }
+    }
+
+    /// A target release carrying one overlay per entry, each asking for the
+    /// runtime named beside it.
+    fn target(overlays: &[(&str, &str)]) -> HostReleaseTarget {
+        HostReleaseTarget {
+            app: Uuid::from("1b2c3d4e5f60718293a4b5c6d7e8f900"),
+            hostapp: HostAppTarget {
+                image: ImageUri::from_static("registry2.balena-cloud.com/v2/hostapp:latest"),
+                build: "abc1234".to_string(),
+                updater: ImageUri::from_static("registry2.balena-cloud.com/v2/updater:latest"),
+            },
+            status: HostReleaseStatus::Running,
+            overlays: overlays
+                .iter()
+                .map(|(name, runtime)| {
+                    (
+                        name.to_string(),
+                        OverlayTarget {
+                            image: ImageUri::from_static(
+                                "registry2.balena-cloud.com/v2/overlay:latest",
+                            ),
+                            status: OverlayStatus::Active,
+                            runtime: runtime.to_string(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn unavailable(engine: Option<&[&str]>, overlays: &[(&str, &str)]) -> bool {
+        overlay_runtime_unavailable(&device(engine), &target(overlays))
+    }
+
+    fn unknown(engine: Option<&[&str]>, overlays: &[(&str, &str)]) -> bool {
+        engine_runtimes_unknown(&device(engine), &target(overlays))
+    }
+
+    #[test]
+    fn a_runtime_the_engine_does_not_register_is_unavailable() {
+        assert!(unavailable(Some(&["runc"]), &[("ebpf", "extension")]));
+    }
+
+    #[test]
+    fn an_engine_that_registers_nothing_satisfies_no_request() {
+        // A host that predates extensions: the list was read, and it is empty.
+        assert!(unavailable(Some(&[]), &[("ebpf", "extension")]));
+    }
+
+    #[test]
+    fn a_release_without_overlays_asks_for_nothing() {
+        // An ordinary host OS update reaches a host that predates extensions
+        // untouched by either guard.
+        assert!(!unavailable(Some(&[]), &[]));
+        assert!(!unknown(None, &[]));
+    }
+
+    #[test]
+    fn every_runtime_the_overlays_name_is_registered() {
+        let overlays = [("ebpf", "extension"), ("tracing", "extension")];
+        assert!(!unavailable(Some(&["runc", "extension"]), &overlays));
+    }
+
+    #[test]
+    fn an_unreadable_engine_is_unknown_and_not_unavailable() {
+        // The two conditions are disjoint, so a release trips exactly one and
+        // the operator gets the reason that matches the device.
+        let overlays = [("ebpf", "extension")];
+        assert!(unknown(None, &overlays));
+        assert!(!unavailable(None, &overlays));
+    }
+
+    #[test]
+    fn the_reason_names_every_runtime_the_release_asked_for() {
+        // The description cannot see the device, so it cannot single out the
+        // missing one; it must not claim any of them is missing either.
+        let tgt = target(&[("ebpf", "extension"), ("tracing", "runc")]);
+        assert_eq!(
+            unavailable_runtime_reason(&tgt),
+            "host OS engine does not register a runtime the overlays ask for \
+             ('extension', 'runc'), update the OS first"
+        );
+    }
 }
