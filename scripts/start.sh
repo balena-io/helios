@@ -64,6 +64,16 @@ if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   export HELIOS_REMOTE_API_KEY
 fi
 
+# runtime dir and local socket
+runtime_dir="/tmp/run"
+helios_socket="$runtime_dir/helios.sock"
+
+# Set XDG variables to directories on volumes
+export XDG_CACHE_HOME=/cache
+export XDG_CONFIG_HOME=/config
+export XDG_STATE_HOME=/local
+export XDG_RUNTIME_DIR=$runtime_dir
+
 # Set up the legacy Supervisor proxy and hand over via the takeover applet.
 legacy_port=${HELIOS_LEGACY_PORT:-48480}
 unset HELIOS_LEGACY_PORT
@@ -71,23 +81,22 @@ if [ -n "$BALENA_SUPERVISOR_API_KEY" ] && [ -n "$BALENA_SUPERVISOR_HOST" ] && [ 
   export HELIOS_LEGACY_API_ENDPOINT="http://${BALENA_SUPERVISOR_HOST}:${legacy_port}"
   export HELIOS_LEGACY_API_KEY="${BALENA_SUPERVISOR_API_KEY}"
 
-  # One-shot migration, busybox-style (argv[0] selects the applet).
-  helios-legacy-takeover \
-    --override-host "http://127.0.0.1:${BALENA_SUPERVISOR_PORT}" \
-    --override-port "${legacy_port}"
+  # use $@ to manage takeover arguments
+  set -- --override-host "$helios_socket" --override-port "$legacy_port"
+
+  if [ -n "${HELIOS_HOST_RUNTIME_DIR}" ]; then
+    set -- "$@" --host-runtime-dir "$HELIOS_HOST_RUNTIME_DIR"
+  fi
+
+  # trigger takeover (an error code will prevent helios start by design)
+  helios-legacy-takeover "$@"
 fi
 
 # Make variables available for the new process
 export HELIOS_REMOTE_POLL_INTERVAL_MS
 
-# Set XDG variables to directories on volumes
-export XDG_CACHE_HOME=/cache
-export XDG_CONFIG_HOME=/config
-export XDG_STATE_HOME=/local
-export XDG_RUNTIME_DIR=/tmp/run
-
 # Remove the socket if it exists (we will need some proper handover at some point)
-rm /tmp/run/helios.sock 2>/dev/null || true
+rm "$helios_socket" 2>/dev/null || true
 
 # Start the new supervisor
-exec helios --local-api-address /tmp/run/helios.sock
+exec helios --local-api-address "$helios_socket"
