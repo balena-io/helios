@@ -56,23 +56,18 @@ pub struct LocalState {
 /// Options for controlling processing of a new target
 /// by the main loop
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct UpdateOpts {
     /// Ignore locks on the next apply.
-    ///
-    /// Defaults to false
-    #[serde(default)]
     pub force: bool,
 
-    /// Cancel the current update if any.
+    /// Cancel the update in progress, if any.
     ///
-    /// Defaults to true, unless the value is coming
-    /// from the API for backwards compatibility
-    #[serde(default = "api_cancel_default")]
+    /// The seek loop also forwards this to the legacy supervisor.
+    /// An explicit `false` leaves the running apply alone, legacy downloads
+    /// included. The lock override binds when the apply is built, so a force
+    /// that waits behind a running apply never takes effect.
     pub cancel: bool,
-}
-
-fn api_cancel_default() -> bool {
-    false
 }
 
 impl Default for UpdateOpts {
@@ -459,8 +454,7 @@ pub async fn start_seek(
                 }
 
                 if matches!(update_status, UpdateStatus::ApplyingChanges) {
-                    // A new target came while applying.
-                    // Interrupt the target if we are asked to cancel.
+                    // Cancel restarts the worker to rebind resources
                     if update_req.opts.cancel {
                         // interrupt the existing target and wait for it to finish
                         interrupt.trigger();
@@ -475,6 +469,7 @@ pub async fn start_seek(
                     }
                     // Otherwise just store the target state for the next iteration
                     else {
+                        info!("apply in progress, deferring the new target");
                         next_target.set(update_req);
                         continue;
                     }
@@ -639,4 +634,49 @@ pub async fn start_seek(
 
     info!("terminating");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_opts(value: Value) -> UpdateOpts {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn an_empty_request_cancels() {
+        let opts = parse_opts(serde_json::json!({}));
+        assert!(!opts.force);
+        assert!(opts.cancel);
+    }
+
+    #[test]
+    fn a_forced_request_cancels_by_default() {
+        // Otherwise a force would queue behind a locked apply
+        let opts = parse_opts(serde_json::json!({"force": true}));
+        assert!(opts.cancel);
+    }
+
+    #[test]
+    fn a_forced_request_honours_an_explicit_cancel() {
+        // Overrides locks without aborting the legacy apply
+        let opts = parse_opts(serde_json::json!({"force": true, "cancel": false}));
+        assert!(opts.force);
+        assert!(!opts.cancel);
+    }
+
+    #[test]
+    fn an_unforced_request_can_opt_out_of_cancel() {
+        let opts = parse_opts(serde_json::json!({"cancel": false}));
+        assert!(!opts.force);
+        assert!(!opts.cancel);
+    }
+
+    #[test]
+    fn the_internal_default_cancels() {
+        let opts = UpdateOpts::default();
+        assert!(!opts.force);
+        assert!(opts.cancel);
+    }
 }
