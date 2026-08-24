@@ -1,4 +1,23 @@
 - commits:
+    - subject: Allow using a local socket as the takeover host-override arg
+      hash: 67056fc1ab124b5894687f1701113ad32eec8aed
+      body: |
+        The takeover command now looks for a starting `/` on the host override
+        configuration. If found, a socket is assumed and it uses the socket path
+        on the host to configure the API override on the legacy supervisor.
+
+        This allows the legacy supervisor to communicate directly to the socket
+        without the need for the intermediate `service-relay` container avoiding
+        a point of failure.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.3
+  title: ""
+  date: 2026-08-24T18:11:26.454Z
+- commits:
     - subject: Remove unnecessary derives in helios-remote-model
       hash: bc492f52168956a9d2757884b6d78d9033790d70
       body: |
