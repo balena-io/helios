@@ -1,4 +1,28 @@
 - commits:
+    - subject: Update alpine to 3.24 and the rust-version to 1.96
+      hash: c18c35d102b8ce0d3fb97c333c1fde4259910764
+      body: |
+        Includes changes recommended by the newest version of clippy
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Update mahler to v0.26.0
+      hash: 5da1af19618aa50098642a0c6d4c9cd6cb72ed78
+      body: |
+        Note that this now means the cleanup hooks will always be executed, even
+        if there is nothing to do for the plan. A future change should split the
+        tasks and make them conditional
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.4
+  title: ""
+  date: 2026-08-26T17:56:45.082Z
+- commits:
     - subject: Allow using a local socket as the takeover host-override arg
       hash: 67056fc1ab124b5894687f1701113ad32eec8aed
       body: |
