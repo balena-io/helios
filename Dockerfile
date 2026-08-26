@@ -1,8 +1,9 @@
 # Comma-separated list of features
 ARG HELIOS_FEATURES=all
 ARG HELIOS_BUILD=release
+ARG ALPINE_VERSION=3.24
 
-FROM alpine:3.23 AS build
+FROM alpine:${ALPINE_VERSION} AS build
 
 ARG HELIOS_FEATURES
 ARG HELIOS_BUILD
@@ -33,7 +34,7 @@ COPY helios-store ./helios-store
 RUN cargo build --no-default-features --features $HELIOS_FEATURES --locked $(test "$HELIOS_BUILD" = "release" && echo "--release")
 
 # Release target
-FROM alpine:3.23
+FROM alpine:${ALPINE_VERSION}
 
 ARG HELIOS_BUILD
 

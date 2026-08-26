@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: ./helios-integration-tests/Dockerfile
+      target: sut
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
       DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
@@ -73,7 +74,8 @@ services:
   mock-remote:
     build:
       context: .
-      dockerfile: ./helios-integration-tests/Dockerfile.mock-remote
+      dockerfile: ./helios-integration-tests/Dockerfile
+      target: mock-remote
     environment:
       RUST_LOG: debug
     healthcheck:
