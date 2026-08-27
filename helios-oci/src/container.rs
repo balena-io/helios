@@ -659,18 +659,19 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|health| health.status)
             .map(Health::from)
             .unwrap_or_default();
-        let status = state
-            .status
-            .ok_or("container status should not be nil")?
+        // the engine reports exit code 0 for a container that has not exited, so it is only
+        // read into `Stopped`
+        let status = (
+            state.status.ok_or("container status should not be nil")?,
+            state.exit_code.unwrap_or_default(),
+        )
             .into();
-        let exit_code = state.exit_code;
 
         let state = ContainerState {
             created,
             error: state.error,
             health,
             status,
-            exit_code,
         };
 
         Ok(Self {
@@ -684,27 +685,30 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
 }
 
 /// The container runtime status. This is a simplified state over what the container engine returns
-#[derive(Debug, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
+///
+/// `Stopped` carries the exit code of the main process, which the engine only reports
+/// meaningfully once the container has exited.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ContainerStatus {
     #[default]
     Created,
     Running,
-    Stopped,
+    Stopped(i64),
     Dead,
 }
 
-impl From<ContainerStateStatusEnum> for ContainerStatus {
-    fn from(value: ContainerStateStatusEnum) -> Self {
+impl From<(ContainerStateStatusEnum, i64)> for ContainerStatus {
+    fn from((value, exit_code): (ContainerStateStatusEnum, i64)) -> Self {
         use ContainerStateStatusEnum::*;
         match value {
             EMPTY => ContainerStatus::Created,
             CREATED => ContainerStatus::Created,
             RUNNING => ContainerStatus::Running,
-            PAUSED => ContainerStatus::Stopped,
+            PAUSED => ContainerStatus::Stopped(exit_code),
             RESTARTING => ContainerStatus::Running,
-            STOPPING => ContainerStatus::Stopped,
-            REMOVING => ContainerStatus::Stopped,
-            EXITED => ContainerStatus::Stopped,
+            STOPPING => ContainerStatus::Stopped(exit_code),
+            REMOVING => ContainerStatus::Stopped(exit_code),
+            EXITED => ContainerStatus::Stopped(exit_code),
             DEAD => ContainerStatus::Dead,
         }
     }
@@ -744,11 +748,6 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
-    /// Exit code of the container's main process, as reported by the engine.
-    /// The engine reports `0` for a container that has not exited, whether still
-    /// running or never started, so this is only a meaningful exit status once
-    /// `status` is `Stopped`.
-    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.
@@ -1914,9 +1913,8 @@ mod tests {
         assert!(!c.config.tty);
     }
 
-    #[test]
-    fn inspect_captures_exit_code() {
-        let resp = ContainerInspectResponse {
+    fn inspect_exited_with(exit_code: Option<i64>) -> ContainerInspectResponse {
+        ContainerInspectResponse {
             id: Some("cid".to_string()),
             name: Some("/svc".to_string()),
             image: Some("img".to_string()),
@@ -1924,20 +1922,32 @@ mod tests {
             host_config: Some(HostConfig::default()),
             state: Some(bollard::models::ContainerState {
                 status: Some(ContainerStateStatusEnum::EXITED),
-                exit_code: Some(0),
+                exit_code,
                 ..Default::default()
             }),
             ..Default::default()
-        };
-        let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.state.status, ContainerStatus::Stopped);
-        assert_eq!(c.state.exit_code, Some(0));
+        }
     }
 
     #[test]
-    fn inspect_exit_code_is_none_when_absent() {
+    fn inspect_captures_exit_code() {
+        let c: LocalContainer = inspect_exited_with(Some(0)).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Stopped(0));
+
+        let c: LocalContainer = inspect_exited_with(Some(137)).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Stopped(137));
+    }
+
+    #[test]
+    fn inspect_defaults_a_missing_exit_code_to_zero() {
+        let c: LocalContainer = inspect_exited_with(None).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Stopped(0));
+    }
+
+    #[test]
+    fn inspect_reports_no_exit_code_for_a_running_container() {
         let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
-        assert_eq!(c.state.exit_code, None);
+        assert_eq!(c.state.status, ContainerStatus::Running);
     }
 
     #[test]

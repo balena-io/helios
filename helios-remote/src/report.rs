@@ -226,7 +226,7 @@ impl From<LocalState> for DeviceReport {
                             Some(LocalServiceStatus::Created) => (ServiceStatus::Installed, None),
                             Some(LocalServiceStatus::Running) => (ServiceStatus::Running, None),
                             Some(LocalServiceStatus::Stopping) => (ServiceStatus::Stopping, None),
-                            Some(LocalServiceStatus::Stopped) => (ServiceStatus::Stopped, None),
+                            Some(LocalServiceStatus::Stopped(_)) => (ServiceStatus::Stopped, None),
                             Some(LocalServiceStatus::Dead) => (ServiceStatus::Dead, None),
                         };
 

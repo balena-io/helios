@@ -1,7 +1,7 @@
 use crate::models::{Device, DeviceTarget};
 
 use mahler::dag::{Dag, seq};
-use mahler::worker::{FindPlan, FindWorkflow};
+use mahler::worker::FindPlan;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tracing_subscriber::fmt::{self, format::FmtSpan};
@@ -35,23 +35,6 @@ pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>
     );
 }
 
-/// Assert the planner cannot reach the target at all. Used for targets made
-/// unreachable by state the planner cannot act on, e.g. a `depends_on`
-/// condition that has terminally failed.
-pub(super) fn assert_no_workflow(current: Value, target: Value) {
-    let current = serde_json::from_value::<Device>(current).unwrap();
-    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
-    let (_, workflow) = super::super::worker()
-        .initial_state(current)
-        .find_workflow(target)
-        .unwrap();
-    assert!(
-        workflow.is_none(),
-        "expected no workflow, found:\n{}",
-        workflow.unwrap()
-    );
-}
-
 /// Wraps a DAG with `prepare release` and `finish release` steps,
 /// matching the pattern for updates to an existing release.
 pub(super) fn release_update(
@@ -76,6 +59,7 @@ pub(super) fn stopped_container(name: &str) -> Value {
     serde_json::json!({
         "name": name,
         "status": "stopped",
+        "exit_code": 0,
         "created": "2026-02-11T15:03:43Z",
     })
 }
