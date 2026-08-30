@@ -10,22 +10,69 @@ use tracing::debug;
 use crate::common_types::{HostRuntimeDir, Uuid};
 use crate::oci::{self, Client as Docker, RegistryAuth, WithContext};
 use crate::store::{self as store, DocumentStore};
+use crate::util::breadcrumb;
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
 use crate::util::systemd;
 use crate::util::tar;
 
-use crate::overlays::{deploy_overlay, redeploy_overlay, remove_overlay};
-use crate::reboot::reboot_to_activate;
+use crate::overlays::{
+    deploy_overlay, overlays_ready, redeploy_overlay, remove_overlay,
+    remove_overlay_and_mark_reboot,
+};
+use crate::reboot::{mark_pending_reboot, reboot_to_activate, reboot_to_apply_overlays};
 
 use super::BALENAHUP;
 use super::models::{
-    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, OverlayStatus,
+    Device, DeviceTarget, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget,
+    OverlayStatus,
 };
 
 /// Whether the host is still validating this boot.
 fn host_validating(System(device): System<Device>) -> bool {
     device.host.is_some_and(|host| host.host_validating)
+}
+
+/// The release exceeded its install budget and is left alone until an
+/// operator looks at the device.
+pub(crate) fn too_many_failed_installs(rel: &HostRelease) -> bool {
+    rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
+}
+
+/// An overlay failed to activate at the image the target still asks for, so
+/// the release is left alone rather than retried.
+pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    tgt.overlays.iter().any(|(name, tgt_overlay)| {
+        rel.overlays
+            .get(name)
+            .is_some_and(|ov| ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image)
+    })
+}
+
+/// True while some overlay the target dropped is still present and the planner
+/// is free to remove it.
+///
+/// This mirrors the exceptions registered on `/host/releases/{release_uuid}`
+/// below: a removal those exceptions hold back must not hold back the reboot,
+/// or the reboot becomes unplannable and, with it, every other change on the
+/// device. Keep the two in step when adding an exception on that path.
+pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) -> bool {
+    let Some(host) = device.host.as_ref() else {
+        return false;
+    };
+    let Some(target_host) = target.host.as_ref() else {
+        return false;
+    };
+    host.releases.iter().any(|(uuid, rel)| {
+        target_host.releases.get(uuid).is_some_and(|tgt| {
+            !too_many_failed_installs(rel)
+                && !overlay_activation_failed(rel, tgt)
+                && rel
+                    .overlays
+                    .keys()
+                    .any(|name| !tgt.overlays.contains_key(name))
+        })
+    })
 }
 
 /// Wait for the host validation to finish before doing host work.
@@ -143,13 +190,7 @@ fn install_hostapp_release(
     // cannot be undone and this task only runs from `Created`, so a release
     // installed alongside a failed overlay would sit at `Installed` with no way
     // forward short of a reboot.
-    let overlays_ready = tgt.overlays.keys().all(|name| {
-        release
-            .overlays
-            .get(name)
-            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
-    });
-    enforce!(overlays_ready, "overlays not yet deployed");
+    enforce!(overlays_ready(&release, &tgt), "overlays not yet deployed");
 
     // increase the install counter
     release.hostapp.install_attempts += 1;
@@ -246,10 +287,7 @@ fn install_hostapp_release(
         // HUP after a rollback. Since the hup script may reboot immediately after finishing, this
         // step may be skipped, but that is fine since the breadcrumb is not longer needed at that
         // point
-        run_async(move || {
-            fs::File::create(runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")))
-        })
-        .await?;
+        breadcrumb::set(&format!("{BALENAHUP}-{release_uuid}-breadcrumb")).await?;
 
         Ok(release)
     })
@@ -414,11 +452,25 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     },
                 ),
                 job::update(redeploy_overlay),
-                job::delete(remove_overlay).with_description(
+                job::delete(remove_overlay_and_mark_reboot),
+                // Reachable only through a method: `remove_overlay_and_mark_reboot`
+                // on delete, `redeploy_overlay` on an image change.
+                job::none(remove_overlay).with_description(
                     |Args((release_uuid, name)): Args<(String, String)>| {
                         format!("remove overlay '{name}' for host OS release '{release_uuid}'")
                     },
                 ),
+            ],
+        )
+        .jobs(
+            "/host/pending_reboot",
+            [
+                job::update(reboot_to_apply_overlays)
+                    .with_description(|| "reboot to apply overlay changes"),
+                // The target never asks for the flag, so this is only ever
+                // reached by expansion from the overlay removal method.
+                job::none(mark_pending_reboot)
+                    .with_description(|| "mark overlay change as awaiting a reboot"),
             ],
         )
         .job(
@@ -439,20 +491,14 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         // ignore requests to update the host if we reached the number of install attempts
         .exception(
             "/host/releases/{release_uuid}",
-            exception::update(|rel: View<HostRelease>| {
-                rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
-            })
-            .with_description(|| "too many failed installs, check device"),
+            exception::update(|rel: View<HostRelease>| too_many_failed_installs(&rel))
+                .with_description(|| "too many failed installs, check device"),
         )
         // abort the release if an overlay failed to activate at the target image
         .exception(
             "/host/releases/{release_uuid}",
             exception::update(|rel: View<HostRelease>, Target(tgt): Target<HostRelease>| {
-                tgt.overlays.iter().any(|(name, tgt_overlay)| {
-                    rel.overlays.get(name).is_some_and(|ov| {
-                        ov.status == OverlayStatus::Failed && ov.image == tgt_overlay.image
-                    })
-                })
+                overlay_activation_failed(&rel, &tgt)
             })
             .with_description(|Args(release_uuid): Args<String>| {
                 format!(
@@ -463,6 +509,13 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         // Hold off host work while the host validates this boot.
         .exception(
             "/host/releases/{release_uuid}",
+            exception::update(host_validating)
+                .with_description(|| "host validation in progress, waiting for it to finish"),
+        )
+        // Same guard on the overlay reboot path: a helios reboot during the
+        // rollback-health window would trigger the rollback.
+        .exception(
+            "/host/pending_reboot",
             exception::update(host_validating)
                 .with_description(|| "host validation in progress, waiting for it to finish"),
         )

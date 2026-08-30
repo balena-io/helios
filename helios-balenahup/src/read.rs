@@ -6,13 +6,14 @@ use crate::common_types::Uuid;
 use crate::oci::{self, Client as Docker};
 
 use crate::store::{self, DocumentStore};
-use crate::util::dirs::runtime_dir;
+use crate::util::breadcrumb;
 use crate::util::proc;
 use crate::util::systemd;
 
 use super::BALENAHUP;
 use super::models::{
-    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, overlay_from_container,
+    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, OVERLAY_REBOOT_BREADCRUMB,
+    overlay_from_container,
 };
 
 /// The systemd unit running the OS rollback validation after a HUP. Skipped on
@@ -127,10 +128,8 @@ pub async fn from_store(
                 release.status = if host.meta.build.as_ref() == Some(&release.hostapp.build) {
                     // if the hostapp build is the current OS build then the release is running
                     HostReleaseStatus::Running
-                } else if tokio::fs::try_exists(
-                    runtime_dir().join(format!("{BALENAHUP}-{release_uuid}-breadcrumb")),
-                )
-                .await?
+                } else if breadcrumb::exists(&format!("{BALENAHUP}-{release_uuid}-breadcrumb"))
+                    .await?
                 {
                     // if there is a balenahup breadcrumb, then we are still waiting for a
                     // reboot
@@ -184,6 +183,8 @@ pub async fn from_store(
     // concurrent redeploy would race, so host work defers while either unit
     // runs. The condition is device-global, so it lives on the host.
     host.host_validating = host_validating().await;
+
+    host.pending_reboot = breadcrumb::exists(OVERLAY_REBOOT_BREADCRUMB).await?;
 
     Ok(())
 }

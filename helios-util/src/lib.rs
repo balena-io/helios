@@ -1,3 +1,4 @@
+pub mod breadcrumb;
 pub mod config;
 pub mod crypto;
 pub mod dirs;

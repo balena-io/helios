@@ -6,9 +6,14 @@ use crate::oci::{
     self, Client as Docker, ContainerConfig, ContainerStatus, LocalNamespace, Namespace,
     NetworkMode, RegistryAuth, WithContext,
 };
+use crate::reboot::mark_pending_reboot;
+use crate::util::breadcrumb;
 use crate::util::proc;
 
-use super::models::{Overlay, OverlayStatus, OverlayTarget, overlay_labels};
+use super::models::{
+    HostRelease, HostReleaseTarget, OVERLAY_REBOOT_BREADCRUMB, Overlay, OverlayStatus,
+    OverlayTarget, overlay_labels,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OverlayError {
@@ -154,12 +159,21 @@ async fn withdraw_overlay(
     .await
 }
 
-/// Remove an overlay: withdraw its extension.
+/// Remove an overlay and, if it was carried by the running kernel, record the
+/// reboot that applies the removal.
+///
+/// Only `Active` reached the live root. `Stale` and `Failed` never did, and a
+/// `Deployed` overlay the target drops is withdrawn before the reboot that
+/// would splice it in, so none of the three needs a reboot to undo.
+///
+/// The breadcrumb precedes the withdrawal: written after, a failed write would
+/// leave the container gone with no record left to reboot from.
 pub(crate) fn remove_overlay(
     overlay: View<Overlay>,
     Args((release_uuid, name)): Args<(String, String)>,
     docker: Res<Docker>,
 ) -> IO<Option<Overlay>, OverlayError> {
+    let was_active = overlay.status == OverlayStatus::Active;
     let overlay = overlay.delete();
 
     with_io(overlay, async move |overlay| {
@@ -167,10 +181,26 @@ pub(crate) fn remove_overlay(
             .as_ref()
             .expect("docker resource should be available");
 
+        if was_active {
+            breadcrumb::set(OVERLAY_REBOOT_BREADCRUMB).await?;
+        }
         withdraw_overlay(docker, &release_uuid, &name).await?;
 
         Ok(overlay)
     })
+}
+
+/// Remove an overlay and, if it was carried by the running kernel, schedule
+/// the reboot that applies the removal.
+///
+/// Two tasks because a task may only write its own subtree. The listed order
+/// carries no meaning: the paths are disjoint.
+pub(crate) fn remove_overlay_and_mark_reboot(overlay: View<Overlay>) -> Vec<Task> {
+    let mut tasks = vec![remove_overlay.into_task()];
+    if overlay.status == OverlayStatus::Active {
+        tasks.push(mark_pending_reboot.into_task());
+    }
+    tasks
 }
 
 /// Reconcile an overlay that already exists in the state but does not match
@@ -198,6 +228,17 @@ fn overlay_diverged(overlay: &Overlay, tgt: &OverlayTarget) -> bool {
     let wrong_runtime = overlay.runtime != tgt.runtime;
 
     wrong_image || arm_did_not_take || wrong_runtime
+}
+
+/// Whether every overlay named in the target has reached the release, either
+/// staged for activation or already active.
+pub(crate) fn overlays_ready(release: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    tgt.overlays.keys().all(|name| {
+        release
+            .overlays
+            .get(name)
+            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
+    })
 }
 
 #[cfg(test)]

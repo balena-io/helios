@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use mahler::extract::{Args, Res, Target, View};
+use mahler::extract::{Args, Res, System, SystemTarget, Target, View};
 use mahler::task::prelude::*;
 
 use crate::util::dirs::runtime_dir;
@@ -9,7 +9,9 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet, find_update_locks};
 use crate::util::systemd;
 
-use super::models::{HostRelease, HostReleaseStatus, OverlayStatus};
+use super::models::{Device, HostRelease, HostReleaseStatus, OverlayStatus};
+use super::overlays::overlays_ready;
+use super::tasks::overlay_removal_pending;
 
 /// Returns the path of a user-held update lock that forbids disrupting its
 /// service, or `None` if every lock under `runtime_dir` is free.
@@ -43,6 +45,36 @@ fn find_blocking_lock(locks: &LockSet, runtime_dir: &Path) -> io::Result<Option<
     Ok(None)
 }
 
+/// Issue the coordinated host-OS reboot, honoring user update locks.
+///
+/// A forced update overrides those locks, so the gate is skipped entirely
+/// rather than consulted and ignored.
+async fn guarded_reboot(
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> Result<(), RebootError> {
+    let force = force_acquire_locks
+        .as_ref()
+        .expect("force_acquire_locks should be available")
+        .enabled();
+
+    if !force {
+        // Scan the container-visible runtime dir, not the host-side path
+        let runtime_dir = runtime_dir();
+        let held = run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            find_blocking_lock(locks, &runtime_dir)
+        })
+        .await?;
+        if let Some(path) = held {
+            return Err(RebootError::Locked(path));
+        }
+    }
+
+    systemd::reboot().await?;
+    Ok(())
+}
+
 /// Issue the single coordinated host-OS reboot to activate a release's
 /// reboot-requiring overlays.
 // TODO: Replace with a device level `requires_reboot` flag and a top level task
@@ -63,13 +95,17 @@ pub(crate) fn reboot_to_activate(
                     .any(|o| o.status == OverlayStatus::Deployed)),
         "release is not staged for reboot and no overlay needs activation"
     );
-    let overlays_ready = tgt.overlays.keys().all(|name| {
+    enforce!(overlays_ready(&release, &tgt), "overlays not yet deployed");
+    // The reboot splices whatever is staged when it lands, so an overlay the
+    // target dropped has to be withdrawn before it, not after.
+    enforce!(
         release
             .overlays
-            .get(name)
-            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
-    });
-    enforce!(overlays_ready, "overlays not yet deployed");
+            .iter()
+            .all(|(name, o)| o.status != OverlayStatus::Deployed
+                || tgt.overlays.contains_key(name)),
+        "a dropped overlay is still staged"
+    );
 
     release.status = HostReleaseStatus::Running;
     for overlay in release.overlays.values_mut() {
@@ -79,31 +115,45 @@ pub(crate) fn reboot_to_activate(
     }
 
     with_io(release, async move |release| {
-        let force = force_acquire_locks
-            .as_ref()
-            .expect("force_acquire_locks should be available")
-            .enabled();
-
-        // Honor the user update lock. A forced update overrides those locks, so
-        // there is nothing to wait for and the gate is skipped entirely rather
-        // than consulted and ignored.
-        if !force {
-            // Scan the container-visible runtime dir, not the host-side path
-            let runtime_dir = runtime_dir();
-            let held = run_async(move || {
-                let locks = locks.as_ref().expect("locks resource should be available");
-                find_blocking_lock(locks, &runtime_dir)
-            })
-            .await?;
-            if let Some(path) = held {
-                return Err(RebootError::Locked(path));
-            }
-        }
-
-        // Issue the single coordinated reboot.
-        systemd::reboot().await?;
+        guarded_reboot(locks, force_acquire_locks).await?;
         Ok(release)
     })
+}
+
+/// Reboot to apply overlay removals, once every removal the planner can still
+/// make has been made.
+///
+pub(crate) fn reboot_to_apply_overlays(
+    mut pending: View<bool>,
+    System(device): System<Device>,
+    SystemTarget(target): SystemTarget<Device>,
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> IO<bool, RebootError> {
+    enforce!(*pending, "no overlay change awaiting a reboot");
+    enforce!(
+        !overlay_removal_pending(&device, &target),
+        "overlay removals still pending"
+    );
+    *pending = false;
+
+    with_io(pending, async move |pending| {
+        guarded_reboot(locks, force_acquire_locks).await?;
+        Ok(pending)
+    })
+}
+
+/// Record that an overlay change is waiting for the reboot that applies it.
+///
+/// Pure state, no IO: the breadcrumb backing the flag is written by
+/// `remove_overlay`. A task may only write its own subtree, so the removal
+/// cannot raise this flag itself. Expanding both from one method is what lets
+/// the planner see the flag rise during simulation and sequence
+/// `reboot_to_apply_overlays` into the same workflow, instead of waiting for
+/// the next state read to surface the breadcrumb.
+pub(crate) fn mark_pending_reboot(mut pending: View<bool>) -> View<bool> {
+    *pending = true;
+    pending
 }
 
 #[derive(Debug, thiserror::Error)]
