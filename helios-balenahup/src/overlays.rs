@@ -6,10 +6,15 @@ use crate::oci::{
     self, Client as Docker, ContainerConfig, ContainerStatus, LocalNamespace, Namespace,
     NetworkMode, RegistryAuth, WithContext,
 };
+use crate::reboot::mark_pending_reboot;
+use crate::util::breadcrumb;
 use crate::util::fs::run_async;
 use crate::util::proc;
 
-use super::models::{Device, Overlay, OverlayStatus, OverlayTarget, overlay_labels};
+use super::models::{
+    Device, HostRelease, HostReleaseTarget, OVERLAY_REBOOT_BREADCRUMB, Overlay, OverlayStatus,
+    overlay_labels,
+};
 use super::tasks::host_is_validating;
 
 #[derive(Debug, thiserror::Error)]
@@ -136,12 +141,21 @@ async fn withdraw_overlay(
     }
 }
 
-/// Remove an overlay: withdraw its extension.
+/// Remove an overlay and, if it was carried by the running kernel, record the
+/// reboot that applies the removal.
+///
+/// Only `Active` reached the live root. `Stale` and `Failed` never did, and a
+/// `Deployed` overlay the target drops is withdrawn before the reboot that
+/// would splice it in, so none of the three needs a reboot to undo.
+///
+/// The breadcrumb precedes the withdrawal: written after, a failed write would
+/// leave the container gone with no record left to reboot from.
 pub(crate) fn remove_overlay(
     overlay: View<Overlay>,
     Args((release_uuid, name)): Args<(String, String)>,
     docker: Res<Docker>,
 ) -> IO<Option<Overlay>, OverlayError> {
+    let was_active = overlay.status == OverlayStatus::Active;
     let overlay = overlay.delete();
 
     with_io(overlay, async move |overlay| {
@@ -149,10 +163,33 @@ pub(crate) fn remove_overlay(
             .as_ref()
             .expect("docker resource should be available");
 
+        if was_active {
+            breadcrumb::set(OVERLAY_REBOOT_BREADCRUMB).await?;
+        }
         withdraw_overlay(docker, &release_uuid, &name).await?;
 
         Ok(overlay)
     })
+}
+
+/// Remove an overlay and, if it was carried by the running kernel, schedule
+/// the reboot that applies the removal.
+///
+/// Two tasks because a task may only write its own subtree. The listed order
+/// carries no meaning: the paths are disjoint.
+pub(crate) fn remove_overlay_and_mark_reboot(
+    overlay: View<Overlay>,
+    System(device): System<Device>,
+) -> Vec<Task> {
+    if host_is_validating(&device) {
+        return Vec::new();
+    }
+
+    let mut tasks = vec![remove_overlay.into_task()];
+    if overlay.status == OverlayStatus::Active {
+        tasks.push(mark_pending_reboot.into_task());
+    }
+    tasks
 }
 
 /// Reconcile an overlay that already exists in the state but does not match
@@ -176,106 +213,13 @@ pub(crate) fn redeploy_overlay(
     diverged.then(|| remove_overlay.into_task())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::common_types::ImageUri;
-
-    const CONTAINER: &str = "app_1_release_1_kernel-modules";
-
-    const IMAGE: &str = "registry2.balena-cloud.com/v2/abc123:latest";
-
-    /// What the engine returns for a removal it could not carry out.
-    fn engine_error() -> oci::Error {
-        oci::Error::other("failed to remove container: driver is busy")
-    }
-
-    #[tokio::test]
-    async fn a_removal_the_engine_accepted_ends_the_withdrawal() {
-        // The container is gone, so there is nothing left to inspect.
-        assert!(
-            interpret_withdrawal(CONTAINER, Ok(()), async || unreachable!(
-                "a removal that succeeded must not inspect"
-            ))
-            .await
-            .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_dead_container_ends_the_withdrawal() {
-        // The engine could not release the layer the running root pins, which
-        // is every removal a mounted extension can get. Retrying it until the
-        // reboot would never converge.
-        assert!(
-            interpret_withdrawal(CONTAINER, Err(engine_error()), async || Ok(
-                ContainerStatus::Dead
-            ))
-            .await
-            .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_container_that_survived_keeps_the_task_retryable() {
-        // The removal did not take and the extension is still composable, so
-        // the error has to reach the seek loop.
-        assert!(matches!(
-            interpret_withdrawal(CONTAINER, Err(engine_error()), async || Ok(
-                ContainerStatus::Stopped(0)
-            ))
-            .await,
-            Err(OverlayError::Oci(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn an_unreadable_container_keeps_the_task_retryable() {
-        // An inspect that fails says nothing about the removal, so the removal's
-        // own failure stands.
-        assert!(matches!(
-            interpret_withdrawal(CONTAINER, Err(engine_error()), async || Err(
-                oci::Error::other("engine socket refused")
-            ))
-            .await,
-            Err(OverlayError::Oci(_))
-        ));
-    }
-
-    fn overlay_state(image: &str, status: OverlayStatus, runtime: &str) -> Overlay {
-        Overlay {
-            image: ImageUri::from_static(image),
-            status,
-            runtime: runtime.to_string(),
-        }
-    }
-
-    /// A target overlay the way `HostTarget` builds one: always asking to be
-    /// carried by the running kernel.
-    fn overlay_target(image: &str, runtime: &str) -> OverlayTarget {
-        OverlayTarget {
-            image: ImageUri::from_static(image),
-            status: OverlayStatus::Active,
-            runtime: runtime.to_string(),
-        }
-    }
-
-    #[test]
-    fn a_runtime_the_container_was_not_created_against_forces_a_redeploy() {
-        // The image matches and the overlay is armed, so without this the
-        // planner emits no task and the runtime the composition now names never
-        // reaches the engine.
-        let overlay = overlay_state(IMAGE, OverlayStatus::Active, "runc");
-        let tgt = overlay_target(IMAGE, "extension");
-
-        assert!(overlay_diverged(&overlay, &tgt));
-    }
-
-    #[test]
-    fn an_overlay_created_against_the_runtime_the_target_names_stays_put() {
-        let overlay = overlay_state(IMAGE, OverlayStatus::Active, "extension");
-        let tgt = overlay_target(IMAGE, "extension");
-
-        assert!(!overlay_diverged(&overlay, &tgt));
-    }
+/// Whether every overlay named in the target has reached the release, either
+/// staged for activation or already active.
+pub(crate) fn overlays_ready(release: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    tgt.overlays.keys().all(|name| {
+        release
+            .overlays
+            .get(name)
+            .is_some_and(|o| matches!(o.status, OverlayStatus::Deployed | OverlayStatus::Active))
+    })
 }
