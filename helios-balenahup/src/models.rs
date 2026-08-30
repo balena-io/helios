@@ -25,6 +25,11 @@ const RUNTIME_LABEL: &str = "io.balena.private.runtime";
 /// ships.
 const KERNEL_ABI_ID_LABEL: &str = "io.balena.image.kernel-abi-id";
 
+/// breadcrumb marking that an overlay was removed and the root overlay
+/// composition is stale until a reboot. Written by `remove_overlay`, read
+/// into `Host::pending_reboot`, cleared by the tmpfs on boot.
+pub(crate) const OVERLAY_REBOOT_BREADCRUMB: &str = "overlay-reboot-breadcrumb";
+
 /// Alternative Device definition to avoid cicular dependencies
 /// DO NOT use this outside the `System` extractor
 #[derive(State, Debug, Clone)]
@@ -45,6 +50,10 @@ pub struct Host {
     /// perform.
     pub releases: Map<Uuid, HostRelease>,
 
+    /// True while an overlay removal awaits the reboot that applies it.
+    #[mahler(default)]
+    pub pending_reboot: bool,
+
     /// Whether the host is still validating what this boot brought up
     #[mahler(default)]
     pub host_validating: bool,
@@ -55,6 +64,7 @@ impl Host {
         Host {
             meta,
             releases: Map::new(),
+            pending_reboot: false,
             host_validating: false,
         }
     }
@@ -65,7 +75,10 @@ impl From<Host> for HostTarget {
         let Host { releases, .. } = app;
         HostTarget {
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
-            // A target never asks for a validation in flight
+            // A target never asks for a reboot; the diff against a derived
+            // `true` is what schedules one.
+            pending_reboot: false,
+            // Nor for a validation in flight
             host_validating: false,
         }
     }
@@ -112,7 +125,10 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
 
         HostTarget {
             releases,
-            // Nor does a remote target
+            // A remote target never asks for a reboot; the diff against a
+            // derived `true` is what schedules one.
+            pending_reboot: false,
+            // Nor for a validation in flight
             host_validating: false,
         }
     }
