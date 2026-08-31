@@ -187,5 +187,5 @@ fn it_finds_a_workflow_to_move_between_apps_with_same_commit() {
             "start service 'service1' for release 'my-release-uuid'",
             "start service 'service2' for release 'my-release-uuid'",
         ) + seq!("finish release 'my-release-uuid' for app with uuid 'other-app-uuid'",),
-    )
+    );
 }
