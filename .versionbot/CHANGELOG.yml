@@ -1,4 +1,47 @@
 - commits:
+    - subject: Do not fail planning if a condition is not met
+      hash: e8703e37bb6f4f8f05a4d7e618dd4d6cd8ded8ad
+      body: |
+        Instead, this uses mahler's exception mechanism to identify an unmet
+        dependency and skip the service start task, communicating the unmet
+        dependency issue.
+
+        This provides better UX than reporting `workflow not found` in this
+        scenario.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Only add the "prepare release" step for new service or a re-configuration
+      hash: 172f6ddcb1559efb7e2bc2d42b82ad44c9f9eb82
+      body: >
+        The `prepare release ...` step provided by `ensure_release_is_finalized`
+
+        task is only necessary during a service install/reconfiguration where we
+        want to make
+
+        sure to add a final check for the services/network/volumes state before
+
+        marking the release as `installed`.
+
+
+        This moves the addition of the task as part of the
+
+        `install_service_`/`reconfigure_X`
+
+        methods, to avoid the check to run on every step of planning, but also,
+
+        to avoid it being added even when an exception on the plan happens.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.6
+  title: ""
+  date: 2026-08-31T18:19:34.998Z
+- commits:
     - subject: Fold container exit code into ContainerStatus::Stopped
       hash: 990ff0c4aa3c2a15a7ce0e681b823c383bac99f3
       body: >
