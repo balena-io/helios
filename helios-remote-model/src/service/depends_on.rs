@@ -23,8 +23,8 @@ pub struct LongFormDependsOn {
     /// When true, the dependent service is restarted after dependency restarts.
     /// Only applies to restarts issued through Helios. Defaults false.
     pub restart: bool,
-    /// When false, an unmet dependency only emits a warning instead of
-    /// blocking the dependent service from starting. Defaults true.
+    /// The dependent always waits while the condition is pending. When false, a
+    /// condition that then fails only warns instead of blocking. Defaults true.
     pub required: bool,
 }
 
