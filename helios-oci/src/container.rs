@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use bollard::{
     config::{
@@ -831,6 +832,34 @@ impl Healthcheck {
                 retries: None,
             }
         )
+    }
+
+    /// The longest the engine may leave a container `starting`: the grace
+    /// period, then a probe and its interval for every retry it takes to
+    /// declare the container unhealthy.
+    ///
+    /// Unset and zeroed fields fall back to the engine defaults.
+    pub fn max_time_to_unhealthy(&self) -> Duration {
+        const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
+        const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+        const DEFAULT_RETRIES: u32 = 3;
+
+        let duration = |nanos: Option<i64>| {
+            nanos
+                .and_then(non_zero)
+                .and_then(|n| u64::try_from(n).ok())
+                .map(Duration::from_nanos)
+        };
+        let interval = duration(self.interval).unwrap_or(DEFAULT_INTERVAL);
+        let timeout = duration(self.timeout).unwrap_or(DEFAULT_TIMEOUT);
+        let start_period = duration(self.start_period).unwrap_or_default();
+        let retries = match self.retries.and_then(non_zero) {
+            // a negative count is not meaningful, so it falls back to the default
+            Some(retries) if retries > 0 => u32::try_from(retries).unwrap_or(u32::MAX),
+            _ => DEFAULT_RETRIES,
+        };
+
+        start_period.saturating_add(interval.saturating_add(timeout).saturating_mul(retries))
     }
 }
 
@@ -1799,6 +1828,52 @@ mod tests {
     use super::*;
     use bollard::models::{HostConfig, Mount as EngineMount};
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn healthcheck_max_time_to_unhealthy() {
+        let secs = |n: u64| Some((n * 1_000_000_000) as i64);
+
+        // start_period + retries × (interval + probe timeout)
+        let hc = Healthcheck {
+            interval: secs(5),
+            timeout: secs(2),
+            start_period: secs(10),
+            retries: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(hc.max_time_to_unhealthy(), Duration::from_secs(10 + 4 * 7));
+
+        // engine defaults: no grace period, 3 retries of a 30s probe every 30s
+        let hc = Healthcheck::default();
+        assert_eq!(hc.max_time_to_unhealthy(), Duration::from_secs(3 * 60));
+
+        // a zeroed or negative field reads as unset
+        let hc = Healthcheck {
+            interval: Some(0),
+            timeout: Some(0),
+            start_period: Some(0),
+            retries: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(hc.max_time_to_unhealthy(), Duration::from_secs(3 * 60));
+
+        let hc = Healthcheck {
+            interval: Some(-1),
+            start_period: Some(-1),
+            retries: Some(-1),
+            ..Default::default()
+        };
+        assert_eq!(hc.max_time_to_unhealthy(), Duration::from_secs(3 * 60));
+
+        // a config that would overflow the arithmetic saturates
+        let hc = Healthcheck {
+            interval: Some(i64::MAX),
+            timeout: Some(i64::MAX),
+            retries: Some(i64::MAX),
+            ..Default::default()
+        };
+        assert_eq!(hc.max_time_to_unhealthy(), Duration::MAX);
+    }
 
     fn vol_mount(target: &str, source: &str) -> EngineMount {
         EngineMount {

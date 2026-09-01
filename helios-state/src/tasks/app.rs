@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use mahler::exception;
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
@@ -16,7 +17,8 @@ use crate::models::{
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
 use crate::oci::{
-    Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
+    Client as Docker, ContainerConfig, Error as OciError, Healthcheck, LocalNamespace, Mount,
+    Namespace, WithContext,
 };
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
@@ -24,11 +26,12 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    DependsOnConditionOutcome, any_dependency_failed, any_images_are_pending_download,
-    container_evaluator, dependencies_satisfied, depends_on_condition_pending, evaluate_completion,
-    evaluate_health, find_future_network, find_future_service, find_future_volume,
-    find_installed_network, find_installed_service, find_installed_volume, release_services,
-    service_matches_target, services_need_stopping, target_release_services,
+    ConditionEvaluator, DependsOnConditionOutcome, any_dependency_failed,
+    any_images_are_pending_download, container_evaluator, dependencies_satisfied,
+    depends_on_condition_pending, evaluate_completion, evaluate_health, find_future_network,
+    find_future_service, find_future_volume, find_installed_network, find_installed_service,
+    find_installed_volume, release_services, service_matches_target, services_need_stopping,
+    target_release_services,
 };
 use super::image::create_image;
 
@@ -1115,9 +1118,13 @@ fn await_healthy(container: View<Container>, docker: Res<Docker>) -> IO<Containe
         container.health != Health::Healthy,
         "container already healthy"
     );
-    await_condition(container, docker, evaluate_health, |container| {
-        container.health = Health::Healthy
-    })
+    await_condition(
+        container,
+        docker,
+        evaluate_health,
+        healthcheck_timeout,
+        |container| container.health = Health::Healthy,
+    )
 }
 
 /// Wait for a started service container to exit with status 0. Scoped to the
@@ -1133,28 +1140,52 @@ fn await_completed(container: View<Container>, docker: Res<Docker>) -> IO<Contai
         !matches!(container.status, ContainerStatus::Stopped(_)),
         "container exited with non-zero code"
     );
-    await_condition(container, docker, evaluate_completion, |container| {
-        container.status = ContainerStatus::Stopped(0)
-    })
+    await_condition(
+        container,
+        docker,
+        evaluate_completion,
+        no_timeout,
+        |container| container.status = ContainerStatus::Stopped(0),
+    )
+}
+
+/// The longest a condition may stay pending, from the container config, or
+/// `None` to wait indefinitely.
+type PendingTimeout = fn(&ContainerConfig) -> Option<Duration>;
+
+/// Past the time the engine itself needs to declare the container unhealthy,
+/// the healthcheck is not going to resolve. A container with no healthcheck
+/// fails the condition rather than waiting on it, so it needs no bound.
+fn healthcheck_timeout(config: &ContainerConfig) -> Option<Duration> {
+    config
+        .healthcheck
+        .as_ref()
+        .map(Healthcheck::max_time_to_unhealthy)
+}
+
+/// A job container may take as long as it likes to exit.
+fn no_timeout(_: &ContainerConfig) -> Option<Duration> {
+    None
 }
 
 /// Poll the container until `evaluate` reports its condition satisfied, then
-/// `confirm` the condition on the container state.
+/// `confirm` the condition on the container state. `timeout` bounds the wait.
 fn await_condition(
     container: View<Container>,
     docker: Res<Docker>,
-    evaluate: fn(&Container) -> DependsOnConditionOutcome,
-    confirm: fn(&mut Container),
+    evaluate: ConditionEvaluator,
+    timeout: PendingTimeout,
+    mark_met: fn(&mut Container),
 ) -> IO<Container, OciError> {
     with_io(container, async move |container| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        poll_until_condition_met(docker, &container.name, evaluate).await?;
+        poll_until_condition_met(docker, &container.name, evaluate, timeout).await?;
         Ok(container)
     })
     .map(move |mut container| {
-        confirm(&mut container);
+        mark_met(&mut container);
         container
     })
 }
@@ -1199,21 +1230,38 @@ async fn container_state(docker: &Docker, container_id: &str) -> Result<Containe
     Ok(Container::from((container_id, state)))
 }
 
-/// Poll a container until `evaluate` reports its condition satisfied, erroring as
-/// soon as the condition has terminally failed rather than polling forever.
+/// Poll a container until `evaluate` reports its condition satisfied, erroring
+/// as soon as the condition has terminally failed rather than polling forever.
+///
+/// `timeout` bounds the wait, measured from here rather than from container
+/// start, and is taken from the config as first observed.
 async fn poll_until_condition_met(
     docker: &Docker,
     container_id: &str,
-    evaluate: fn(&Container) -> DependsOnConditionOutcome,
+    evaluate: ConditionEvaluator,
+    timeout: PendingTimeout,
 ) -> Result<(), OciError> {
-    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+    let mut inspected = docker.container().inspect(container_id).await?;
+    let limit = timeout(&inspected.config);
+    let waiting_since = Instant::now();
+
     loop {
-        match evaluate(&container_state(docker, container_id).await?) {
+        match evaluate(&Container::from((container_id, inspected.state))) {
             DependsOnConditionOutcome::Satisfied => return Ok(()),
             DependsOnConditionOutcome::Failed(reason) => return Err(reason.into()),
             DependsOnConditionOutcome::Pending => {}
         }
+
+        if let Some(limit) = limit
+            && waiting_since.elapsed() >= limit
+        {
+            return Err(format!("gave up after {}s", limit.as_secs()).into());
+        }
+
         tokio::time::sleep(POLL_INTERVAL).await;
+        inspected = docker.container().inspect(container_id).await?;
     }
 }
 
@@ -1680,4 +1728,28 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 },
             ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn healthcheck_timeout_is_bounded_only_with_a_healthcheck() {
+        assert_eq!(healthcheck_timeout(&ContainerConfig::default()), None);
+
+        let config = ContainerConfig {
+            healthcheck: Some(Healthcheck {
+                interval: Some(5_000_000_000),
+                timeout: Some(1_000_000_000),
+                retries: Some(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            healthcheck_timeout(&config),
+            Some(Duration::from_secs(2 * 6))
+        );
+    }
 }
