@@ -15,7 +15,9 @@ use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::oci::{
+    Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
+};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -23,10 +25,10 @@ use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
     DependsOnConditionOutcome, any_dependency_failed, any_images_are_pending_download,
-    dependencies_satisfied, depends_on_condition_pending, evaluate_completion, evaluate_health,
-    find_future_network, find_future_service, find_future_volume, find_installed_network,
-    find_installed_service, find_installed_volume, release_services, service_matches_target,
-    services_need_stopping, target_release_services,
+    container_evaluator, dependencies_satisfied, depends_on_condition_pending, evaluate_completion,
+    evaluate_health, find_future_network, find_future_service, find_future_volume,
+    find_installed_network, find_installed_service, find_installed_volume, release_services,
+    service_matches_target, services_need_stopping, target_release_services,
 };
 use super::image::create_image;
 
@@ -1011,6 +1013,7 @@ fn start_is_blocked_by_a_failed_dependency(
 fn start_service(
     mut svc: View<Service>,
     Target(tgt_svc): Target<Service>,
+    Args((_, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Service, OciError> {
     enforce!(
@@ -1033,6 +1036,8 @@ fn start_service(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
+
+        report_unmet_optional_dependencies(docker, &rel_uuid, &svc_name, &tgt_svc.depends_on).await;
 
         // this is guaranteed by the enforce above
         let container_id = svc
@@ -1062,11 +1067,14 @@ fn start_service(
     })
 }
 
-/// Await tasks for the unmet required `service_healthy` /
-/// `service_completed_successfully` dependencies in `depends_on`.
+/// Await tasks for the unmet `service_healthy` / `service_completed_successfully`
+/// dependencies in `depends_on`, optional ones included.
 ///
 /// Only started dependencies are awaited, so the `oci` subfield an await scopes
-/// to resolves. `service_started` and optional dependencies are never awaited.
+/// to resolves. `service_started` is driven by its own start instead.
+///
+/// An optional dependency that fails mid-await errors the run; the retried plan
+/// then starts the dependent with a warning.
 fn await_runtime_dependencies(
     device: &Device,
     app_uuid: &Uuid,
@@ -1081,8 +1089,6 @@ fn await_runtime_dependencies(
     deps.sort_by(|a, b| a.0.cmp(b.0).then(a.1.condition.cmp(&b.1.condition)));
 
     deps.into_iter()
-        // started deps are driven by their own start; optional deps never block
-        .filter(|(_, spec)| spec.required && spec.condition != DependsOnCondition::ServiceStarted)
         // await only a started dependency that may still reach its condition.
         .filter(|(dep_name, spec)| {
             services
@@ -1096,6 +1102,7 @@ fn await_runtime_dependencies(
             DependsOnCondition::ServiceCompletedSuccessfully => {
                 Some(await_completed.with_arg("service_name", dep_name))
             }
+            // started deps are driven by their own start
             DependsOnCondition::ServiceStarted => None,
         })
         .collect()
@@ -1108,16 +1115,8 @@ fn await_healthy(container: View<Container>, docker: Res<Docker>) -> IO<Containe
         container.health != Health::Healthy,
         "container already healthy"
     );
-    with_io(container, async move |container| {
-        let docker = docker
-            .as_ref()
-            .expect("docker resource should be available");
-        poll_until_condition_met(docker, &container.name, evaluate_health).await?;
-        Ok(container)
-    })
-    .map(|mut container| {
-        container.health = Health::Healthy;
-        container
+    await_condition(container, docker, evaluate_health, |container| {
+        container.health = Health::Healthy
     })
 }
 
@@ -1128,21 +1127,76 @@ fn await_completed(container: View<Container>, docker: Res<Docker>) -> IO<Contai
         container.status != ContainerStatus::Stopped(0),
         "container already completed"
     );
+    // satisfied and failed are both `Stopped`, so folding this into the check
+    // above would lose the reason
     enforce!(
         !matches!(container.status, ContainerStatus::Stopped(_)),
         "container exited with non-zero code"
     );
+    await_condition(container, docker, evaluate_completion, |container| {
+        container.status = ContainerStatus::Stopped(0)
+    })
+}
+
+/// Poll the container until `evaluate` reports its condition satisfied, then
+/// `confirm` the condition on the container state.
+fn await_condition(
+    container: View<Container>,
+    docker: Res<Docker>,
+    evaluate: fn(&Container) -> DependsOnConditionOutcome,
+    confirm: fn(&mut Container),
+) -> IO<Container, OciError> {
     with_io(container, async move |container| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        poll_until_condition_met(docker, &container.name, evaluate_completion).await?;
+        poll_until_condition_met(docker, &container.name, evaluate).await?;
         Ok(container)
     })
-    .map(|mut container| {
-        container.status = ContainerStatus::Stopped(0);
+    .map(move |mut container| {
+        confirm(&mut container);
         container
     })
+}
+
+/// Warn about the optional dependencies that can no longer meet their
+/// condition, as compose does when it starts their dependent anyway.
+///
+/// The state comes from docker rather than the system state: reading a sibling
+/// service needs the unscoped `System` extractor, which would stop starts from
+/// running concurrently. Container ids are namespaced by release, as in
+/// `install_service`.
+async fn report_unmet_optional_dependencies(
+    docker: &Docker,
+    rel_uuid: &Uuid,
+    svc_name: &str,
+    depends_on: &DependsOn,
+) {
+    let namespace = LocalNamespace::from(rel_uuid.as_str());
+    for (dep_name, spec) in depends_on.iter().filter(|(_, spec)| !spec.required) {
+        // `service_started` has no terminal failure to report
+        let Some(evaluate) = container_evaluator(spec.condition) else {
+            continue;
+        };
+
+        // reporting is best effort: skip a dependency that cannot be inspected
+        let container_id = namespace.to_identifier(dep_name);
+        let Ok(container) = container_state(docker, &container_id).await else {
+            continue;
+        };
+
+        if let DependsOnConditionOutcome::Failed(reason) = evaluate(&container) {
+            warn!(
+                "starting service '{svc_name}' with an unmet optional dependency: service '{dep_name}' {reason}"
+            );
+        }
+    }
+}
+
+/// The observed state of a container, by id.
+async fn container_state(docker: &Docker, container_id: &str) -> Result<Container, OciError> {
+    let state = docker.container().inspect(container_id).await?.state;
+    Ok(Container::from((container_id, state)))
 }
 
 /// Poll a container until `evaluate` reports its condition satisfied, erroring as
@@ -1154,8 +1208,7 @@ async fn poll_until_condition_met(
 ) -> Result<(), OciError> {
     const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
     loop {
-        let state = docker.container().inspect(container_id).await?.state;
-        match evaluate(&Container::from((container_id, state))) {
+        match evaluate(&container_state(docker, container_id).await?) {
             DependsOnConditionOutcome::Satisfied => return Ok(()),
             DependsOnConditionOutcome::Failed(reason) => return Err(reason.into()),
             DependsOnConditionOutcome::Pending => {}
