@@ -33,24 +33,28 @@ pub enum DependsOnConditionOutcome {
     Pending,
 }
 
+/// Judges a `depends_on` condition from an observed container.
+pub type ConditionEvaluator = fn(&Container) -> DependsOnConditionOutcome;
+
+/// The evaluator for a condition observed on the container, or `None` for
+/// `service_started`, which is observed on the service.
+pub fn container_evaluator(condition: DependsOnCondition) -> Option<ConditionEvaluator> {
+    match condition {
+        DependsOnCondition::ServiceStarted => None,
+        DependsOnCondition::ServiceHealthy => Some(evaluate_health),
+        DependsOnCondition::ServiceCompletedSuccessfully => Some(evaluate_completion),
+    }
+}
+
 /// Evaluate a dependency against a `depends_on` condition from its observed state.
 fn evaluate_condition(dep: &Service, condition: DependsOnCondition) -> DependsOnConditionOutcome {
     use DependsOnConditionOutcome::*;
-    match condition {
-        // once the container leaves `created`, `started` stays true
-        DependsOnCondition::ServiceStarted => {
-            if dep.started {
-                Satisfied
-            } else {
-                Pending
-            }
-        }
-        // the container conditions cannot have been reached while there is no
-        // container observed yet
-        DependsOnCondition::ServiceHealthy => dep.oci.as_ref().map_or(Pending, evaluate_health),
-        DependsOnCondition::ServiceCompletedSuccessfully => {
-            dep.oci.as_ref().map_or(Pending, evaluate_completion)
-        }
+    match container_evaluator(condition) {
+        // a container condition cannot be met before the container exists
+        Some(evaluate) => dep.oci.as_ref().map_or(Pending, evaluate),
+        // `service_started`: once the container leaves `created`, it stays true
+        None if dep.started => Satisfied,
+        None => Pending,
     }
 }
 
@@ -118,45 +122,50 @@ pub fn target_release_services<'a>(
         .map(|release| &release.services)
 }
 
-/// Evaluate every required `depends_on` entry of a service against its
-/// dependencies in the same release. Optional dependencies never block, so they
-/// are not evaluated.
+/// Evaluate every `depends_on` entry of a service against its dependencies in
+/// the same release. The set is satisfied once all of them have resolved.
 ///
-/// A single terminally failed dependency fails the whole set, otherwise the set
-/// is only satisfied once every dependency has reached its condition.
-///
-/// TODO: full Compose parity for optional dependencies, waiting for resolution
-/// and warning on failure.
+/// As in compose, required and optional entries are both waited on while
+/// pending. They only differ on a terminal failure: a required one fails the
+/// set, an optional one is merely warned about at start.
 fn dependencies_outcome(
     device: &Device,
     app_uuid: &Uuid,
     commit: &Uuid,
     depends_on: &DependsOn,
 ) -> DependsOnConditionOutcome {
+    use DependsOnConditionOutcome::*;
+
     let services = release_services(device, app_uuid, commit);
 
-    let mut outcome = DependsOnConditionOutcome::Satisfied;
-    for (dep_name, spec) in depends_on.iter().filter(|(_, spec)| spec.required) {
-        match services
+    let mut outcome = Satisfied;
+    for (dep_name, spec) in depends_on.iter() {
+        let dep_outcome = services
             .and_then(|services| services.get(dep_name))
-            .map(|dep| evaluate_condition(dep, spec.condition))
-        {
-            Some(DependsOnConditionOutcome::Satisfied) => {}
+            .map_or_else(
+                // a dependency not in the release cannot be observed. Treating
+                // an optional one as resolved keeps an entry naming a service
+                // that never appears from wedging the release
+                || if spec.required { Pending } else { Satisfied },
+                |dep| evaluate_condition(dep, spec.condition),
+            );
+
+        match dep_outcome {
+            Satisfied => {}
             // a terminal failure cannot be recovered from, so no need to look
             // at the remaining dependencies
-            Some(DependsOnConditionOutcome::Failed(reason)) => {
-                return DependsOnConditionOutcome::Failed(reason);
-            }
-            // still pending, or a dependency missing from the release
-            _ => outcome = DependsOnConditionOutcome::Pending,
+            Failed(reason) if spec.required => return Failed(reason),
+            // an optional failure never blocks, it is warned about at start
+            Failed(_) => {}
+            Pending => outcome = Pending,
         }
     }
 
     outcome
 }
 
-/// Whether every required `depends_on` entry of a service has been satisfied by
-/// its dependencies in the same release.
+/// Whether every `depends_on` entry of a service has been satisfied by its
+/// dependencies in the same release.
 pub fn dependencies_satisfied(
     device: &Device,
     app_uuid: &Uuid,
@@ -503,8 +512,12 @@ mod tests {
         deps(DependsOnCondition::ServiceStarted, entries)
     }
 
-    fn assert_dependencies_satisfied(device: &Device, deps: &DependsOn) -> bool {
+    fn dependencies_satisfied_for(device: &Device, deps: &DependsOn) -> bool {
         dependencies_satisfied(device, &"app-uuid".into(), &"rel-uuid".into(), deps)
+    }
+
+    fn any_dependency_failed_for(device: &Device, deps: &DependsOn) -> bool {
+        any_dependency_failed(device, &"app-uuid".into(), &"rel-uuid".into(), deps)
     }
 
     #[test]
@@ -602,10 +615,7 @@ mod tests {
     #[test]
     fn empty_depends_on_is_satisfied() {
         let device = device_with(json!({}));
-        assert!(assert_dependencies_satisfied(
-            &device,
-            &DependsOn::default()
-        ));
+        assert!(dependencies_satisfied_for(&device, &DependsOn::default()));
     }
 
     #[test]
@@ -613,7 +623,7 @@ mod tests {
         let device = device_with(json!({
             "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
         }));
-        assert!(assert_dependencies_satisfied(
+        assert!(dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", true)])
         ));
@@ -624,21 +634,44 @@ mod tests {
         let device = device_with(json!({
             "db": {"id": 1, "image": "alpine:latest", "started": false, "config": {}},
         }));
-        assert!(!assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", true)])
         ));
     }
 
     #[test]
-    fn proceeds_on_unmet_optional_dependency() {
+    fn blocks_on_pending_optional_dependency() {
         let device = device_with(json!({
             "db": {"id": 1, "image": "alpine:latest", "started": false, "config": {}},
         }));
-        assert!(assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", false)])
         ));
+    }
+
+    #[test]
+    fn proceeds_on_failed_optional_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
+                   "oci": {"name": "db", "created": "2026-02-11T15:03:43Z", "status": "running", "health": "unhealthy"}},
+        }));
+        let deps = deps(DependsOnCondition::ServiceHealthy, &[("db", false)]);
+        assert!(dependencies_satisfied_for(&device, &deps));
+        // the failure is reported by `start_service`, it never blocks planning
+        assert!(!any_dependency_failed_for(&device, &deps));
+    }
+
+    #[test]
+    fn blocks_on_failed_required_dependency() {
+        let device = device_with(json!({
+            "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
+                   "oci": {"name": "db", "created": "2026-02-11T15:03:43Z", "status": "running", "health": "unhealthy"}},
+        }));
+        let deps = deps(DependsOnCondition::ServiceHealthy, &[("db", true)]);
+        assert!(!dependencies_satisfied_for(&device, &deps));
+        assert!(any_dependency_failed_for(&device, &deps));
     }
 
     #[test]
@@ -647,7 +680,7 @@ mod tests {
             "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
             "cache": {"id": 2, "image": "alpine:latest", "started": false, "config": {}},
         }));
-        assert!(!assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", false), ("cache", true)])
         ));
@@ -656,7 +689,7 @@ mod tests {
     #[test]
     fn missing_required_dependency_blocks() {
         let device = device_with(json!({}));
-        assert!(!assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", true)])
         ));
@@ -665,7 +698,7 @@ mod tests {
     #[test]
     fn missing_optional_dependency_proceeds() {
         let device = device_with(json!({}));
-        assert!(assert_dependencies_satisfied(
+        assert!(dependencies_satisfied_for(
             &device,
             &add_started_deps(&[("db", false)])
         ));
@@ -677,7 +710,7 @@ mod tests {
             "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
                    "oci": {"name": "db", "created": "2026-02-11T15:03:43Z", "status": "running", "health": "healthy"}},
         }));
-        assert!(assert_dependencies_satisfied(
+        assert!(dependencies_satisfied_for(
             &device,
             &deps(DependsOnCondition::ServiceHealthy, &[("db", true)])
         ));
@@ -688,18 +721,18 @@ mod tests {
         let device = device_with(json!({
             "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
         }));
-        assert!(!assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &deps(DependsOnCondition::ServiceHealthy, &[("db", true)])
         ));
     }
 
     #[test]
-    fn proceeds_on_unconfirmed_optional_healthy_dependency() {
+    fn blocks_on_unconfirmed_optional_healthy_dependency() {
         let device = device_with(json!({
             "db": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
         }));
-        assert!(assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &deps(DependsOnCondition::ServiceHealthy, &[("db", false)])
         ));
@@ -711,7 +744,7 @@ mod tests {
             "migrate": {"id": 1, "image": "alpine:latest", "started": true, "config": {},
                         "oci": {"name": "migrate", "created": "2026-02-11T15:03:43Z", "status": "stopped", "exit_code": 0}},
         }));
-        assert!(assert_dependencies_satisfied(
+        assert!(dependencies_satisfied_for(
             &device,
             &deps(
                 DependsOnCondition::ServiceCompletedSuccessfully,
@@ -725,7 +758,7 @@ mod tests {
         let device = device_with(json!({
             "migrate": {"id": 1, "image": "alpine:latest", "started": true, "config": {}},
         }));
-        assert!(!assert_dependencies_satisfied(
+        assert!(!dependencies_satisfied_for(
             &device,
             &deps(
                 DependsOnCondition::ServiceCompletedSuccessfully,

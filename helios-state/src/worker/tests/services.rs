@@ -977,7 +977,7 @@ fn it_emits_separate_awaits_for_a_shared_dependency_under_two_conditions() {
 }
 
 #[test]
-fn it_does_not_await_an_optional_healthy_dependency() {
+fn it_awaits_an_optional_healthy_dependency() {
     init_tracing();
     assert_workflow(
         json!({
@@ -1025,11 +1025,11 @@ fn it_does_not_await_an_optional_healthy_dependency() {
                 "install service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // optional dependency: no await is emitted and 'web' is not gated
-            + par!(
-                "start service 'db' for release 'my-release-uuid'",
-                "start service 'web' for release 'my-release-uuid'",
-            )
+            // an optional dependency is waited on like a required one, it only
+            // differs once the condition has terminally failed
+            + seq!("start service 'db' for release 'my-release-uuid'")
+            + seq!("wait until service 'db' for release 'my-release-uuid' is healthy")
+            + seq!("start service 'web' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
@@ -1114,10 +1114,14 @@ fn it_orders_a_realistic_dependency_graph() {
     );
 }
 
-/// Assert the planner skips the start of `web`, which is installed but not started
-/// and depends on `dep` under `condition`, because `dep` is observed in a container
-/// state that can never meet that condition.
-fn assert_start_skipped(condition: &str, dep_container: Value) {
+/// Current and target state for `web`, installed but not started, depending on
+/// `dep` under `condition` with the given `required` flag. `dep` is started and
+/// observed in `dep_container`.
+fn start_gated_on_dependency(
+    condition: &str,
+    required: bool,
+    dep_container: Value,
+) -> (Value, Value) {
     let current = json!({
         "uuid": "my-device-uuid",
         "apps": {
@@ -1140,7 +1144,7 @@ fn assert_start_skipped(condition: &str, dep_container: Value) {
                                 "image": "alpine:latest",
                                 "started": false,
                                 "depends_on": {
-                                    "dep": {"condition": condition, "restart": false, "required": true}
+                                    "dep": {"condition": condition, "restart": false, "required": required}
                                 },
                                 "oci": created_container("web_my-release-uuid"),
                                 "config": {},
@@ -1173,7 +1177,7 @@ fn assert_start_skipped(condition: &str, dep_container: Value) {
                                 "image": "alpine:latest",
                                 "started": true,
                                 "depends_on": {
-                                    "dep": {"condition": condition, "restart": false, "required": true}
+                                    "dep": {"condition": condition, "restart": false, "required": required}
                                 },
                                 "config": {},
                             },
@@ -1184,6 +1188,13 @@ fn assert_start_skipped(condition: &str, dep_container: Value) {
         },
     });
 
+    (current, target)
+}
+
+/// Assert the planner skips the start of `web` because its required dependency
+/// is observed in a state that can never meet the condition.
+fn assert_start_skipped(condition: &str, dep_container: Value) {
+    let (current, target) = start_gated_on_dependency(condition, true, dep_container);
     assert_exception(
         current,
         target,
@@ -1207,6 +1218,22 @@ fn it_skips_a_start_gated_on_an_unhealthy_dependency() {
     dep["health"] = json!("unhealthy");
 
     assert_start_skipped("service_healthy", dep);
+}
+
+#[test]
+fn it_starts_a_service_whose_optional_dependency_failed_its_condition() {
+    init_tracing();
+    let mut dep = running_container("dep_my-release-uuid");
+    dep["health"] = json!("unhealthy");
+
+    // the dependency can no longer become healthy, so there is nothing left to
+    // await: 'web' starts anyway, with a warning
+    let (current, target) = start_gated_on_dependency("service_healthy", false, dep);
+    assert_workflow(
+        current,
+        target,
+        seq!("start service 'web' for release 'my-release-uuid'"),
+    );
 }
 
 #[test]
