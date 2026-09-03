@@ -89,8 +89,13 @@ services:
       context: .
       dockerfile: Dockerfile.dind
     privileged: true
+    # Containment.
+    pids_limit: 2048
     volumes:
       - dind:/var/run
+      # The image declares /var/lib/docker as a volume
+      # Naming it keeps the inner engine's image cache between runs.
+      - dind-data:/var/lib/docker
     depends_on:
       registry:
         condition: service_started
@@ -142,4 +147,5 @@ volumes:
       o: ''
       device: tmpfs
   dind:
+  dind-data:
   registry:
