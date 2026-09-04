@@ -1,3 +1,4 @@
+pub mod breadcrumb;
 pub mod config;
 pub mod crypto;
 pub mod dirs;
@@ -7,6 +8,7 @@ pub mod interrupt;
 pub mod json;
 pub mod locking;
 pub mod logs;
+pub mod proc;
 pub mod rand;
 pub mod request;
 pub mod systemd;

@@ -149,6 +149,28 @@ impl<N: Namespace> Container<'_, N> {
         }
     }
 
+    /// Block until the container exits and return its exit code.
+    ///
+    /// bollard reports a non-zero exit as `DockerContainerWaitError` rather than
+    /// a normal stream item, so both encodings are normalized back to the exit
+    /// code here and the caller decides what a non-zero code means.
+    pub async fn wait(&self, id: &str) -> Result<i64> {
+        let mut stream = self
+            .client
+            .inner()
+            .wait_container(id, None::<bollard::query_parameters::WaitContainerOptions>);
+        match stream.next().await {
+            Some(Ok(resp)) => Ok(resp.status_code),
+            Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => Ok(code),
+            Some(Err(e)) => {
+                Err(Error::from(e).context(format!("failed to wait for container '{id}'")))
+            }
+            None => Err(Error::from(format!(
+                "container '{id}' exited without a wait status"
+            ))),
+        }
+    }
+
     /// Stop the container with the given name
     pub async fn stop(&self, name: &str) -> Result<()> {
         match self.client.inner().stop_container(name, None).await {
@@ -659,11 +681,12 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|health| health.status)
             .map(Health::from)
             .unwrap_or_default();
+        let exit_code = state.exit_code;
         // the engine reports exit code 0 for a container that has not exited, so it is only
         // read into `Stopped`
         let status = (
             state.status.ok_or("container status should not be nil")?,
-            state.exit_code.unwrap_or_default(),
+            exit_code.unwrap_or_default(),
         )
             .into();
 
@@ -672,6 +695,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             error: state.error,
             health,
             status,
+            exit_code,
         };
 
         Ok(Self {
@@ -748,6 +772,14 @@ pub struct ContainerState {
     pub created: DateTime,
     /// Last error message from the container
     pub error: Option<String>,
+    /// Raw exit code of the container's main process, as reported by the engine.
+    ///
+    /// Redundant with `status`'s `Stopped(i64)` for a normally exited container,
+    /// but kept separately because a runtime that cannot exec the command leaves
+    /// the engine reporting `status: Created` while still recording the exit
+    /// code (126 for found-but-not-executable, 127 for not-found), and that
+    /// signal would otherwise be lost.
+    pub exit_code: Option<i64>,
 }
 
 /// Cgroup namespace mode for a container.

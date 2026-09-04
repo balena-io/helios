@@ -85,11 +85,17 @@ services:
       timeout: 3s
 
   docker:
-    image: docker:28-dind
+    build:
+      context: .
+      dockerfile: Dockerfile.dind
     privileged: true
-    command: ['--insecure-registry', 'registry:5000']
+    # Containment.
+    pids_limit: 2048
     volumes:
       - dind:/var/run
+      # The image declares /var/lib/docker as a volume
+      # Naming it keeps the inner engine's image cache between runs.
+      - dind-data:/var/lib/docker
     depends_on:
       registry:
         condition: service_started
@@ -111,7 +117,7 @@ services:
       DBUS_SYSTEM_BUS_ADDRESS: 'unix:path=/shared/dbus/system_bus_socket'
       # A real (non-transient) unit used by the stop/start/restart tests to model
       # a normal service unit that is not garbage-collected when it goes inactive.
-      MOCK_SYSTEMD_UNITS: 'helios-test-dummy.service'
+      MOCK_SYSTEMD_UNITS: 'helios-test-dummy.service rollback-health.service'
     volumes:
       - dbus:/shared/dbus
       - runtime:/tmp/run
@@ -141,4 +147,5 @@ volumes:
       o: ''
       device: tmpfs
   dind:
+  dind-data:
   registry:
