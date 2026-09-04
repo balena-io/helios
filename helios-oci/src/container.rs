@@ -12,13 +12,13 @@ use bollard::{
         MountType, MountVolumeOptions,
     },
     query_parameters::{
-        CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
+        CreateContainerOptions, DownloadFromContainerOptions, EventsOptions, ListContainersOptions,
         RemoveContainerOptions, RenameContainerOptions,
     },
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 use super::datetime::DateTime;
 use super::ports::{PortMapping, from_oci_port_map, to_oci_port_maps};
@@ -39,6 +39,25 @@ impl<'a, N> Container<'a, N> {
         }
     }
 }
+
+/// Engine actions that may change the observable state of a container.
+///
+/// Exec actions are deliberately left out: healthcheck probes run as execs, so
+/// including them would report a change on every probe.
+///
+/// See: https://docs.docker.com/reference/cli/docker/system/events/#object-types
+const STATE_ACTIONS: [&str; 10] = [
+    "create",
+    "start",
+    "restart",
+    "die",
+    "kill",
+    "stop",
+    "destroy",
+    "pause",
+    "unpause",
+    "health_status",
+];
 
 impl Container<'_, NoNamespace> {
     /// Create a temporary container from the given image
@@ -103,6 +122,36 @@ impl<N: Namespace> Container<'_, N> {
             .with_context(|| format!("failed to inspect container '{id}'"))?;
 
         Ok(container)
+    }
+
+    /// Stream the state changes the engine reports for the given container.
+    ///
+    /// Only the action name is yielded: the engine reports the resulting state
+    /// on inspect, so the stream serves as a signal to re-read it. The stream
+    /// ends when the connection to the engine closes.
+    pub fn watch(&self, id: &str) -> impl Stream<Item = Result<String>> + use<N> {
+        let filters = HashMap::from([
+            ("type".to_owned(), vec!["container".to_owned()]),
+            ("container".to_owned(), vec![id.to_owned()]),
+            (
+                "event".to_owned(),
+                STATE_ACTIONS.map(str::to_owned).to_vec(),
+            ),
+        ]);
+
+        let id = id.to_owned();
+        self.client
+            .inner()
+            .events(Some(EventsOptions {
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .map(move |res| {
+                res.map(|event| event.action.unwrap_or_default())
+                    .map_err(|e| {
+                        Error::from(e).context(format!("failed to watch container '{id}'"))
+                    })
+            })
     }
 
     /// Create the container with the passed options
