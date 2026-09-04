@@ -1,8 +1,8 @@
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS extension-runtime
 RUN apk add --no-cache git
 WORKDIR /src
-# Pin to a branch/tag/commit via build arg; defaults to the repo's main branch.
-ARG EXTENSION_RUNTIME_VERSION=master
+# Pin to a branch/tag/commit via build arg.
+ARG EXTENSION_RUNTIME_VERSION=alexgg/manager-deactivate
 RUN git clone --depth 1 --branch ${EXTENSION_RUNTIME_VERSION} \
     https://github.com/balena-os/balena-extension-runtime.git .
 RUN go mod download
