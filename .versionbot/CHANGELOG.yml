@@ -1,4 +1,30 @@
 - commits:
+    - subject: Wait on engine events instead of polling the container
+      hash: 58edca783e2e45ee08733b7d6e2b930af7008076
+      body: >
+        The `service_healthy` and `service_completed_successfully` awaits used
+        to
+
+        inspect the container once a second. Now they wait on the engine's event
+        stream
+
+        for that container, so a wait ends as soon as the engine reports the
+        change.
+
+
+        Exec events are filtered out, as healthcheck probes run as execs and
+        would
+
+        report a change on every probe.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.26.7
+  title: ""
+  date: 2026-09-10T18:50:52.532Z
+- commits:
     - subject: Do not fail planning if a condition is not met
       hash: e8703e37bb6f4f8f05a4d7e618dd4d6cd8ded8ad
       body: |
