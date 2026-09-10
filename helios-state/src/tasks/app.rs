@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use mahler::exception;
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
@@ -1127,7 +1128,8 @@ fn await_healthy(mut container: View<Container>, docker: Res<Docker>) -> IO<Cont
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        match await_condition(docker, &container.name, evaluate_health).await? {
+        let timeout = container.health_timeout;
+        match await_condition(docker, &container.name, evaluate_health, timeout).await? {
             WaitOutcome::Met(observed) => *container = observed,
             WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
         }
@@ -1154,7 +1156,8 @@ fn await_optional_healthy(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let outcome = await_condition(docker, &container.name, evaluate_health).await?;
+        let timeout = container.health_timeout;
+        let outcome = await_condition(docker, &container.name, evaluate_health, timeout).await?;
         warn_if_unmet(&outcome);
         *container = outcome.into();
         Ok(container)
@@ -1182,7 +1185,7 @@ fn await_completed(mut container: View<Container>, docker: Res<Docker>) -> IO<Co
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        match await_condition(docker, &container.name, evaluate_completion).await? {
+        match await_condition(docker, &container.name, evaluate_completion, None).await? {
             WaitOutcome::Met(observed) => *container = observed,
             WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
         }
@@ -1209,7 +1212,7 @@ fn await_optional_completed(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let outcome = await_condition(docker, &container.name, evaluate_completion).await?;
+        let outcome = await_condition(docker, &container.name, evaluate_completion, None).await?;
         warn_if_unmet(&outcome);
         *container = outcome.into();
         Ok(container)
@@ -1247,31 +1250,56 @@ impl From<WaitOutcome> for Container {
 /// The container state is read up front and re-read on every state change the
 /// engine reports for it, as an event names the change but not the state it
 /// leaves the container in.
+///
+/// `timeout` caps the wait, measured from here rather than from container start,
+/// or `None` to wait as long as it takes. Running out counts as unmet, so an
+/// optional dependency warns where a required one fails.
 async fn await_condition(
     docker: &Docker,
     container_id: &str,
     evaluate: ConditionEvaluator,
+    timeout: Option<Duration>,
 ) -> Result<WaitOutcome, OciError> {
     let containers = docker.container();
 
     // watch before the first read, so a change in between is not missed
     let mut events = std::pin::pin!(containers.watch(container_id));
 
-    loop {
-        let state = containers.inspect(container_id).await?.state;
-        let observed = Container::from((container_id, state));
-        match evaluate(&observed) {
-            DependsOnConditionOutcome::Satisfied => return Ok(WaitOutcome::Met(observed)),
-            DependsOnConditionOutcome::Failed(reason) => {
-                return Ok(WaitOutcome::Unmet(reason, observed));
-            }
-            DependsOnConditionOutcome::Pending => {}
-        }
+    let mut inspected = containers.inspect(container_id).await?;
 
-        let Some(action) = events.next().await else {
-            return Err("engine closed the event stream".into());
-        };
-        trace!(container_id, "container reported '{}'", action?);
+    let wait = async {
+        loop {
+            let observed = Container::from(&inspected);
+            match evaluate(&observed) {
+                DependsOnConditionOutcome::Satisfied => return Ok(WaitOutcome::Met(observed)),
+                DependsOnConditionOutcome::Failed(reason) => {
+                    return Ok(WaitOutcome::Unmet(reason, observed));
+                }
+                DependsOnConditionOutcome::Pending => {}
+            }
+
+            let Some(action) = events.next().await else {
+                return Err("engine closed the event stream".into());
+            };
+            trace!(container_id, "container reported '{}'", action?);
+
+            inspected = containers.inspect(container_id).await?;
+        }
+    };
+
+    let Some(limit) = timeout else {
+        return wait.await;
+    };
+
+    match tokio::time::timeout(limit, wait).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            let observed = Container::from(&containers.inspect(container_id).await?);
+            Ok(WaitOutcome::Unmet(
+                format!("gave up after {}s", limit.as_secs()),
+                observed,
+            ))
+        }
     }
 }
 
@@ -1359,10 +1387,7 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .await
             .context("failed to inspect container for service")?;
 
-        svc.oci.replace(Container::from((
-            local_container.name.as_ref(),
-            local_container.state,
-        )));
+        svc.oci.replace(Container::from(&local_container));
 
         Ok(svc)
     })
