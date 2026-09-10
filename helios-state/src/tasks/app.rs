@@ -8,7 +8,8 @@ use mahler::job;
 use mahler::state::Map;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
-use tracing::warn;
+use tokio_stream::StreamExt;
+use tracing::{trace, warn};
 
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
@@ -1112,7 +1113,7 @@ fn await_healthy(container: View<Container>, docker: Res<Docker>) -> IO<Containe
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        poll_until_condition_met(docker, &container.name, evaluate_health).await?;
+        await_condition_met(docker, &container.name, evaluate_health).await?;
         Ok(container)
     })
     .map(|mut container| {
@@ -1136,7 +1137,7 @@ fn await_completed(container: View<Container>, docker: Res<Docker>) -> IO<Contai
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        poll_until_condition_met(docker, &container.name, evaluate_completion).await?;
+        await_condition_met(docker, &container.name, evaluate_completion).await?;
         Ok(container)
     })
     .map(|mut container| {
@@ -1145,22 +1146,34 @@ fn await_completed(container: View<Container>, docker: Res<Docker>) -> IO<Contai
     })
 }
 
-/// Poll a container until `evaluate` reports its condition satisfied, erroring as
-/// soon as the condition has terminally failed rather than polling forever.
-async fn poll_until_condition_met(
+/// Wait until `evaluate` reports the container condition satisfied, erroring as
+/// soon as the condition has terminally failed rather than waiting forever.
+///
+/// The container state is read up front and re-read on every state change the
+/// engine reports for it, as an event names the change but not the state it
+/// leaves the container in.
+async fn await_condition_met(
     docker: &Docker,
     container_id: &str,
     evaluate: fn(&Container) -> DependsOnConditionOutcome,
 ) -> Result<(), OciError> {
-    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+    let containers = docker.container();
+
+    // watch before the first read, so a change in between is not missed
+    let mut events = std::pin::pin!(containers.watch(container_id));
+
     loop {
-        let state = docker.container().inspect(container_id).await?.state;
+        let state = containers.inspect(container_id).await?.state;
         match evaluate(&Container::from((container_id, state))) {
             DependsOnConditionOutcome::Satisfied => return Ok(()),
             DependsOnConditionOutcome::Failed(reason) => return Err(reason.into()),
             DependsOnConditionOutcome::Pending => {}
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+
+        let Some(action) = events.next().await else {
+            return Err("engine closed the event stream".into());
+        };
+        trace!(container_id, "container reported '{}'", action?);
     }
 }
 
