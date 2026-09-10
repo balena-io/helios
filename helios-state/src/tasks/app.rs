@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use mahler::exception;
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
@@ -16,7 +17,9 @@ use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::oci::{
+    Client as Docker, ContainerConfig, Error as OciError, Healthcheck, Mount, WithContext,
+};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -1127,7 +1130,7 @@ fn await_healthy(mut container: View<Container>, docker: Res<Docker>) -> IO<Cont
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        match await_condition(docker, &container.name, evaluate_health).await? {
+        match await_condition(docker, &container.name, evaluate_health, healthcheck_bound).await? {
             WaitOutcome::Met(observed) => *container = observed,
             WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
         }
@@ -1154,8 +1157,9 @@ fn await_optional_healthy(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        *container =
-            warn_if_unmet(await_condition(docker, &container.name, evaluate_health).await?);
+        *container = warn_if_unmet(
+            await_condition(docker, &container.name, evaluate_health, healthcheck_bound).await?,
+        );
         Ok(container)
     })
 }
@@ -1181,7 +1185,7 @@ fn await_completed(mut container: View<Container>, docker: Res<Docker>) -> IO<Co
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        match await_condition(docker, &container.name, evaluate_completion).await? {
+        match await_condition(docker, &container.name, evaluate_completion, no_bound).await? {
             WaitOutcome::Met(observed) => *container = observed,
             WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
         }
@@ -1208,8 +1212,9 @@ fn await_optional_completed(
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        *container =
-            warn_if_unmet(await_condition(docker, &container.name, evaluate_completion).await?);
+        *container = warn_if_unmet(
+            await_condition(docker, &container.name, evaluate_completion, no_bound).await?,
+        );
         Ok(container)
     })
 }
@@ -1227,6 +1232,25 @@ fn warn_if_unmet(outcome: WaitOutcome) -> Container {
     }
 }
 
+/// The longest a condition may stay pending, read from the container config, or
+/// `None` to wait as long as it takes.
+type PendingBound = fn(&ContainerConfig) -> Option<Duration>;
+
+/// Past the point the engine itself would declare the container unhealthy, the
+/// healthcheck is not going to resolve. A container with no healthcheck fails
+/// the condition rather than waiting on it, so it needs no bound.
+fn healthcheck_bound(config: &ContainerConfig) -> Option<Duration> {
+    config
+        .healthcheck
+        .as_ref()
+        .map(Healthcheck::time_to_unhealthy)
+}
+
+/// A job container may take as long as it likes to exit.
+fn no_bound(_: &ContainerConfig) -> Option<Duration> {
+    None
+}
+
 /// How a wait on a container condition ended.
 enum WaitOutcome {
     /// the condition was met, with the container as observed
@@ -1242,31 +1266,58 @@ enum WaitOutcome {
 /// The container state is read up front and re-read on every state change the
 /// engine reports for it, as an event names the change but not the state it
 /// leaves the container in.
+///
+/// `bound` caps the wait, measured from here rather than from container start,
+/// and is read from the config as first observed. Running out counts as unmet,
+/// so an optional dependency warns where a required one fails.
 async fn await_condition(
     docker: &Docker,
     container_id: &str,
     evaluate: ConditionEvaluator,
+    bound: PendingBound,
 ) -> Result<WaitOutcome, OciError> {
     let containers = docker.container();
 
     // watch before the first read, so a change in between is not missed
     let mut events = std::pin::pin!(containers.watch(container_id));
 
-    loop {
-        let state = containers.inspect(container_id).await?.state;
-        let observed = Container::from((container_id, state));
-        match evaluate(&observed) {
-            DependsOnConditionOutcome::Satisfied => return Ok(WaitOutcome::Met(observed)),
-            DependsOnConditionOutcome::Failed(reason) => {
-                return Ok(WaitOutcome::Unmet(reason, observed));
-            }
-            DependsOnConditionOutcome::Pending => {}
-        }
+    let mut inspected = containers.inspect(container_id).await?;
+    let limit = bound(&inspected.config);
 
-        let Some(action) = events.next().await else {
-            return Err("engine closed the event stream".into());
-        };
-        trace!(container_id, "container reported '{}'", action?);
+    let wait = async {
+        loop {
+            let observed = Container::from((container_id, inspected.state));
+            match evaluate(&observed) {
+                DependsOnConditionOutcome::Satisfied => return Ok(WaitOutcome::Met(observed)),
+                DependsOnConditionOutcome::Failed(reason) => {
+                    return Ok(WaitOutcome::Unmet(reason, observed));
+                }
+                DependsOnConditionOutcome::Pending => {}
+            }
+
+            let Some(action) = events.next().await else {
+                return Err("engine closed the event stream".into());
+            };
+            trace!(container_id, "container reported '{}'", action?);
+
+            inspected = containers.inspect(container_id).await?;
+        }
+    };
+
+    let Some(limit) = limit else {
+        return wait.await;
+    };
+
+    match tokio::time::timeout(limit, wait).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            let state = containers.inspect(container_id).await?.state;
+            let observed = Container::from((container_id, state));
+            Ok(WaitOutcome::Unmet(
+                format!("gave up after {}s", limit.as_secs()),
+                observed,
+            ))
+        }
     }
 }
 
@@ -1747,4 +1798,25 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 },
             ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn healthcheck_bound_applies_only_with_a_healthcheck() {
+        assert_eq!(healthcheck_bound(&ContainerConfig::default()), None);
+
+        let config = ContainerConfig {
+            healthcheck: Some(Healthcheck {
+                interval: Some(5_000_000_000),
+                timeout: Some(1_000_000_000),
+                retries: Some(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(healthcheck_bound(&config), Some(Duration::from_secs(2 * 6)));
+    }
 }
