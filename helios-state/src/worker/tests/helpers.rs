@@ -52,6 +52,52 @@ pub(super) fn assert_exception(current: Value, target: Value, path: &str, reason
     assert_eq!(exceptions[0].reason.as_deref(), Some(reason));
 }
 
+/// Assert that the planner finds a workflow with no tasks in it. Unlike
+/// [`assert_no_workflow`], the target is reachable: the planner simply has
+/// nothing left to do, or has deferred every divergence it found.
+pub(super) fn assert_empty_workflow(current: Value, target: Value) {
+    let current = serde_json::from_value::<Device>(current).unwrap();
+    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
+    let (_, workflow) = super::super::worker()
+        .initial_state(current)
+        .find_plan(target)
+        .unwrap();
+    let workflow = workflow.expect("workflow should be found");
+    assert_eq!(
+        workflow.to_string(),
+        Dag::<&str>::default().to_string(),
+        "expected an empty plan, got:\n{workflow}"
+    );
+}
+
+/// Assert that the planner rules out every pending change for the given
+/// current/target pair because an exception matched, and that the skip is
+/// reported with `reason`.
+pub(super) fn assert_aborted(current: Value, target: Value, reason: &str) {
+    let current = serde_json::from_value::<Device>(current).unwrap();
+    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
+    let (_, workflow) = super::super::worker()
+        .initial_state(current)
+        .find_plan(target)
+        .unwrap();
+    let workflow = workflow.expect("workflow should be found");
+    assert_eq!(
+        workflow.to_string(),
+        Dag::<&str>::default().to_string(),
+        "expected no tasks to be planned, got:\n{workflow}"
+    );
+
+    let reasons: Vec<&str> = workflow
+        .exceptions()
+        .iter()
+        .filter_map(|ignored| ignored.reason.as_deref())
+        .collect();
+    assert!(
+        reasons.contains(&reason),
+        "expected a skipped operation with reason '{reason}', got: {reasons:?}"
+    );
+}
+
 /// Wraps a DAG with `prepare release` and `finish release` steps,
 /// matching the pattern for updates to an existing release.
 pub(super) fn release_update(
