@@ -48,6 +48,9 @@ impl From<oci::ContainerStatus> for ContainerStatus {
             Created => Self::Created,
             Running => Self::Running,
             Stopped(exit_code) => Self::Stopped(exit_code),
+            // A user service that could not exec still reports as created;
+            // only the overlay path reads the distinction so far.
+            Failed(_) => Self::Created,
             Dead => Self::Dead,
         }
     }

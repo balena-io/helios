@@ -737,12 +737,16 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
 ///
 /// `Stopped` carries the exit code of the main process, which the engine only reports
 /// meaningfully once the container has exited.
+///
+/// `Failed` is a container the engine left `Created` while recording an exit
+/// code, which is how a runtime that cannot exec the command reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ContainerStatus {
     #[default]
     Created,
     Running,
     Stopped(i64),
+    Failed(i64),
     Dead,
 }
 
@@ -750,6 +754,7 @@ impl From<(ContainerStateStatusEnum, i64)> for ContainerStatus {
     fn from((value, exit_code): (ContainerStateStatusEnum, i64)) -> Self {
         use ContainerStateStatusEnum::*;
         match value {
+            EMPTY | CREATED if exit_code != 0 => ContainerStatus::Failed(exit_code),
             EMPTY => ContainerStatus::Created,
             CREATED => ContainerStatus::Created,
             RUNNING => ContainerStatus::Running,
@@ -1997,6 +2002,33 @@ mod tests {
     fn inspect_reports_no_exit_code_for_a_running_container() {
         let c: LocalContainer = inspect_with_mounts(vec![]).try_into().unwrap();
         assert_eq!(c.state.status, ContainerStatus::Running);
+    }
+
+    fn inspect_created_with(exit_code: Option<i64>) -> ContainerInspectResponse {
+        ContainerInspectResponse {
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::CREATED),
+                exit_code,
+                ..Default::default()
+            }),
+            ..inspect_exited_with(exit_code)
+        }
+    }
+
+    #[test]
+    fn inspect_reads_a_created_container_with_an_exit_code_as_failed() {
+        // The runtime could not exec the command, so the engine never ran it.
+        let c: LocalContainer = inspect_created_with(Some(127)).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Failed(127));
+    }
+
+    #[test]
+    fn inspect_reads_a_created_container_without_an_exit_code_as_created() {
+        let c: LocalContainer = inspect_created_with(None).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Created);
+
+        let c: LocalContainer = inspect_created_with(Some(0)).try_into().unwrap();
+        assert_eq!(c.state.status, ContainerStatus::Created);
     }
 
     #[test]
