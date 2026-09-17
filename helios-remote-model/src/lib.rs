@@ -345,6 +345,50 @@ pub struct Release {
     pub networks: HashMap<String, Network>,
 }
 
+/// Turn every `network_mode: service:{name}` into an implicit `depends_on` entry
+/// on that service, as the engine refuses to start a container whose network
+/// namespace target is not running.
+fn inject_network_mode_depends_on(services: &mut HashMap<String, Service>) -> Result<(), String> {
+    let referenced: Vec<(String, String)> = services
+        .iter()
+        .filter_map(|(svc_name, svc)| match &svc.composition.network_mode {
+            Some(NetworkMode::Service(dep_name)) => Some((svc_name.clone(), dep_name.clone())),
+            _ => None,
+        })
+        .collect();
+
+    for (svc_name, dep_name) in referenced {
+        if dep_name == svc_name {
+            return Err(format!(
+                "service '{svc_name}' cannot join its own network namespace"
+            ));
+        }
+        // a cycle through `depends_on` is reported by the check that follows,
+        // but a service that is not in the release has no container to join
+        if !services.contains_key(&dep_name) {
+            return Err(format!(
+                "service '{svc_name}' joins the network namespace of undefined service '{dep_name}'"
+            ));
+        }
+        if let Some(svc) = services.get_mut(&svc_name) {
+            // an explicit entry wins, even a weaker one, as compose does
+            svc.composition
+                .depends_on
+                .0
+                .entry(dep_name)
+                .or_insert(LongFormDependsOn {
+                    condition: DependsOnCondition::ServiceStarted,
+                    // restarting the dependency rebuilds its network sandbox and
+                    // leaves the dependent on a namespace that is gone
+                    restart: true,
+                    required: true,
+                });
+        }
+    }
+
+    Ok(())
+}
+
 /// Validate the cross-service `depends_on` graph of a release.
 /// Every referenced service must exist and the graph must be acyclic.
 fn validate_depends_on(services: &HashMap<String, Service>) -> Result<(), String> {
@@ -450,6 +494,11 @@ impl<'de> Deserialize<'de> for Release {
             }
         }
 
+        // A service joining another service's network namespace depends on it
+        // being started, exactly as compose does at parse time. Injected before
+        // the checks below so the implicit entries are validated too.
+        inject_network_mode_depends_on(&mut raw.services).map_err(serde::de::Error::custom)?;
+
         // Verify service dependencies are valid at the release level.
         validate_depends_on(&raw.services).map_err(serde::de::Error::custom)?;
 
@@ -482,6 +531,87 @@ mod tests {
         assert!(
             err.to_string().contains("undefined service"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn network_mode_service_implies_a_started_dependency() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"network_mode": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        let dep = release.services["web"]
+            .composition
+            .depends_on
+            .get("db")
+            .expect("an implicit dependency on 'db'");
+        assert_eq!(dep.condition, DependsOnCondition::ServiceStarted);
+        assert!(dep.required);
+    }
+
+    #[test]
+    fn network_mode_service_keeps_an_explicit_dependency() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {
+                            "network_mode": "service:db",
+                            "depends_on": {"db": {"condition": "service_healthy"}}
+                        }},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            release.services["web"].composition.depends_on["db"].condition,
+            DependsOnCondition::ServiceHealthy
+        );
+    }
+
+    #[test]
+    fn rejects_network_mode_of_undefined_service() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"network_mode": "service:ghost"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("undefined service 'ghost'"));
+    }
+
+    #[test]
+    fn rejects_network_mode_of_itself() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"network_mode": "service:web"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("its own network namespace"));
+    }
+
+    #[test]
+    fn rejects_cycle_through_network_mode() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest",
+                      "composition": {"network_mode": "service:b"}},
+                "b": {"id": 2, "image": "alpine:latest",
+                      "composition": {"depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular dependency"),
+            "got: {err}"
         );
     }
 

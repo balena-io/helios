@@ -3,15 +3,16 @@ use serde::{Deserialize, Deserializer};
 /// Service `network_mode` as defined by the Compose spec.
 ///
 /// `none` and `host` are recognized explicitly. While not part of the spec, `bridge` is also
-/// supported. Other platform specific modes are not supported as they might break.
-/// The `service:{name}` mode will be supported once `depends_on` is implemented, and
-/// `container:{name}` is not supported — both are rejected on deserialization.
+/// supported. `service:{name}` joins the network namespace of another service in the
+/// release, which the release validation checks and turns into an implicit
+/// `depends_on` entry. Other platform specific modes are not supported as they might
+/// break, and `container:{name}` is rejected, as helios names the containers it manages.
 #[derive(Debug, PartialEq)]
 pub enum NetworkMode {
     None,
     Host,
     Bridge,
-    // Service(String), // TODO: requires depends_on support
+    Service(String),
 }
 
 impl<'de> Deserialize<'de> for NetworkMode {
@@ -24,12 +25,17 @@ impl<'de> Deserialize<'de> for NetworkMode {
             "none" => Ok(NetworkMode::None),
             "host" => Ok(NetworkMode::Host),
             "bridge" => Ok(NetworkMode::Bridge),
-            s if s.starts_with("service:") => Err(serde::de::Error::custom(
-                "network_mode `service:{name}` is not yet supported",
-            )),
-            other => Err(serde::de::Error::custom(format!(
-                "network_mode `{other}` is not supported"
-            ))),
+            s => match s.split_once(':') {
+                Some(("service", name)) if !name.is_empty() => {
+                    Ok(NetworkMode::Service(name.to_owned()))
+                }
+                Some(("service", _)) => Err(serde::de::Error::custom(
+                    "network_mode `service:` is missing a service name",
+                )),
+                _ => Err(serde::de::Error::custom(format!(
+                    "network_mode `{s}` is not supported"
+                ))),
+            },
         }
     }
 }
@@ -58,9 +64,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_service_prefix() {
-        let err = serde_json::from_value::<NetworkMode>(json!("service:db")).unwrap_err();
-        assert!(err.to_string().contains("service:"));
+    fn parses_service() {
+        let m: NetworkMode = serde_json::from_value(json!("service:db")).unwrap();
+        assert_eq!(m, NetworkMode::Service("db".to_string()));
+    }
+
+    #[test]
+    fn rejects_service_without_a_name() {
+        let err = serde_json::from_value::<NetworkMode>(json!("service:")).unwrap_err();
+        assert!(err.to_string().contains("missing a service name"));
     }
 
     #[test]

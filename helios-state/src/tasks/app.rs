@@ -27,7 +27,7 @@ use super::helpers::{
     dependencies_satisfied, depends_on_condition_pending, evaluate_completion, evaluate_health,
     find_future_network, find_future_service, find_future_volume, find_installed_network,
     find_installed_service, find_installed_volume, release_services, service_matches_target,
-    services_need_stopping, target_release_services,
+    services_joining_namespace, services_need_stopping, target_release_services,
 };
 use super::image::create_image;
 
@@ -903,6 +903,7 @@ fn install_service(
             svc.id,
             &svc_name,
             &app_uuid,
+            &rel_uuid,
             &svc.depends_on,
         );
 
@@ -1182,7 +1183,8 @@ fn reconfigure_service(
     svc: View<Service>,
     Target(tgt): Target<Service>,
     System(device): System<Device>,
-    Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
+    SystemTarget(t_device): SystemTarget<Device>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc.config != tgt.config {
@@ -1198,6 +1200,35 @@ fn reconfigure_service(
         }
         tasks.push(remove_service_container.into_task());
         tasks.push(install_service_when_requirements_are_met.with_target(&tgt));
+
+        // a service that joined this one's namespace holds a reference to the
+        // container being replaced, so it is recreated too
+        let services = release_services(&device, &app_uuid, &rel_uuid);
+        let t_services = target_release_services(&t_device, &app_uuid, &rel_uuid);
+        for dep_name in services_joining_namespace(&device, &app_uuid, &rel_uuid, &svc_name) {
+            let Some(t_dep) = t_services.and_then(|services| services.get(dep_name)) else {
+                continue;
+            };
+            // the same guards the service above gets, so the plan carries no
+            // task that cannot run
+            let Some(container) = services
+                .and_then(|services| services.get(dep_name))
+                .and_then(|dep| dep.oci.as_ref())
+            else {
+                continue;
+            };
+            if container.status == ContainerStatus::Running {
+                tasks.push(
+                    stop_service_when_requirements_are_met.with_arg("service_name", dep_name),
+                );
+            }
+            tasks.push(remove_service_container.with_arg("service_name", dep_name));
+            tasks.push(
+                install_service_when_requirements_are_met
+                    .with_arg("service_name", dep_name)
+                    .with_target(t_dep),
+            );
+        }
     }
 
     tasks

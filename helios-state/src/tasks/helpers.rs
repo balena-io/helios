@@ -5,7 +5,7 @@ use crate::models::{
     Container, ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health,
     ImageRef, Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
 };
-use crate::oci::Mount;
+use crate::oci::{Mount, NetworkMode};
 
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
@@ -182,6 +182,36 @@ pub fn any_dependency_failed(
         dependencies_outcome(device, app_uuid, commit, depends_on),
         DependsOnConditionOutcome::Failed(_)
     )
+}
+
+/// The services of the release that reach the given service's container through
+/// their network namespace, directly or through another service.
+pub fn services_joining_namespace<'a>(
+    device: &'a Device,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+    svc_name: &'a str,
+) -> Vec<&'a String> {
+    let Some(services) = release_services(device, app_uuid, rel_uuid) else {
+        return Vec::new();
+    };
+
+    // a service joining a dependent joins the same namespace, and the release is
+    // validated as acyclic so the walk terminates
+    let mut found: Vec<&'a String> = Vec::new();
+    let mut targets = vec![svc_name];
+    while let Some(target) = targets.pop() {
+        for (name, svc) in services.iter() {
+            if matches!(&svc.config.network_mode, Some(NetworkMode::Service(joined)) if joined == target)
+                && !found.contains(&name)
+            {
+                found.push(name);
+                targets.push(name.as_str());
+            }
+        }
+    }
+
+    found
 }
 
 /// Find a new network for a different commit
@@ -478,6 +508,48 @@ mod tests {
         fields.insert("name".into(), json!("c"));
         fields.insert("created".into(), json!("2026-02-11T15:03:43Z"));
         svc(json!({"id": 1, "image": "alpine:latest", "config": {}, "oci": oci}))
+    }
+
+    /// A service joining `dep`'s network namespace, or none.
+    fn joining(dep: Option<&str>) -> serde_json::Value {
+        let network_mode = dep.map(|name| json!(format!("service:{name}")));
+        json!({"id": 1, "image": "alpine:latest", "config": {"network_mode": network_mode}})
+    }
+
+    fn joining_namespace_of(device: &Device, svc_name: &str) -> Vec<String> {
+        services_joining_namespace(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn finds_the_services_joining_a_namespace() {
+        let device = device_with(json!({
+            "db": joining(None),
+            "web": joining(Some("db")),
+            "other": joining(None),
+        }));
+        assert_eq!(joining_namespace_of(&device, "db"), vec!["web".to_string()]);
+    }
+
+    #[test]
+    fn follows_a_chain_of_joined_namespaces() {
+        // 'log' reaches 'db' through 'web', so it loses its namespace too
+        let device = device_with(json!({
+            "db": joining(None),
+            "web": joining(Some("db")),
+            "log": joining(Some("web")),
+        }));
+        let mut found = joining_namespace_of(&device, "db");
+        found.sort();
+        assert_eq!(found, vec!["log".to_string(), "web".to_string()]);
+    }
+
+    #[test]
+    fn finds_nothing_for_a_namespace_no_one_joined() {
+        let device = device_with(json!({"db": joining(None), "web": joining(None)}));
+        assert!(joining_namespace_of(&device, "db").is_empty());
     }
 
     /// Build a `depends_on` of `condition` entries with the given

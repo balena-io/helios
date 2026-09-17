@@ -46,7 +46,7 @@ impl Default for LongFormDependsOn {
 /// - long form: `{ "svc1": { "condition": "service_healthy", ... } }`, where every
 ///   field is optional and falls back to the short-form defaults.
 #[derive(Debug, Default)]
-pub struct DependsOn(HashMap<String, LongFormDependsOn>);
+pub struct DependsOn(pub(crate) HashMap<String, LongFormDependsOn>);
 
 impl Deref for DependsOn {
     type Target = HashMap<String, LongFormDependsOn>;

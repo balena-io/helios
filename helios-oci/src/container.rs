@@ -466,16 +466,17 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.sysctls.take())
             .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
-        // Only recognize `none`/`host` from host_config: for user networks Docker also
-        // populates `network_mode` with the first network name, which would otherwise
-        // be misread as a NetworkMode::Other passthrough. `Other(..)` target-state modes
-        // won't round-trip through inspect — the container will be recreated on mismatch.
+        // Only the modes that displace user networks are recognized. For a user
+        // network the engine puts the first network name here, which would
+        // otherwise read as an `Other` passthrough, and a network name cannot
+        // carry a colon so the `container:` form is unambiguous.
         let network_mode = host_config
             .as_mut()
             .and_then(|hc| hc.network_mode.take())
-            .and_then(|m| match m.as_str() {
-                "none" => Some(NetworkMode::None),
-                "host" => Some(NetworkMode::Host),
+            .and_then(|m| match NetworkMode::from(m) {
+                mode @ (NetworkMode::None | NetworkMode::Host | NetworkMode::Container(_)) => {
+                    Some(mode)
+                }
                 _ => None,
             });
         let privileged = host_config
@@ -1010,25 +1011,61 @@ impl From<NetworkSettings> for EndpointSettings {
 
 /// Container-level network mode. Mirrors the compose `network_mode` setting.
 ///
-/// `None` and `Host` are recognized explicitly; `Other(..)` passes platform-specific
-/// modes through to the engine.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+/// `None` and `Host` are recognized explicitly and `Container` joins the network
+/// namespace of another container by name or id. `Service` names a service
+/// instead, so it is resolved to a `Container` before the config reaches the
+/// engine, which has no notion of services. `Other` passes platform specific
+/// modes through untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkMode {
     None,
     Host,
-    #[serde(untagged)]
+    Container(String),
+    Service(String),
     Other(String),
 }
 
 impl std::fmt::Display for NetworkMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NetworkMode::None => "none",
-            NetworkMode::Host => "host",
-            NetworkMode::Other(s) => s,
+            NetworkMode::None => f.write_str("none"),
+            NetworkMode::Host => f.write_str("host"),
+            NetworkMode::Container(id) => write!(f, "container:{id}"),
+            NetworkMode::Service(name) => write!(f, "service:{name}"),
+            NetworkMode::Other(s) => f.write_str(s),
         }
-        .fmt(f)
+    }
+}
+
+impl From<String> for NetworkMode {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "none" => NetworkMode::None,
+            "host" => NetworkMode::Host,
+            _ => match value.split_once(':') {
+                Some(("container", id)) => NetworkMode::Container(id.to_owned()),
+                Some(("service", name)) => NetworkMode::Service(name.to_owned()),
+                _ => NetworkMode::Other(value),
+            },
+        }
+    }
+}
+
+// serialized as the compose string form, so a mode reads the same wherever it appears
+impl Serialize for NetworkMode {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkMode {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(NetworkMode::from)
     }
 }
 
