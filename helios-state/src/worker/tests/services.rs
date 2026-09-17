@@ -1245,3 +1245,80 @@ fn it_skips_a_start_gated_on_a_dependency_that_exited_with_an_error() {
 
     assert_start_skipped("service_completed_successfully", dep);
 }
+
+#[test]
+fn it_recreates_a_namespace_joiner_when_its_dependency_is_reconfigured() {
+    init_tracing();
+    // 'web' joins the namespace of 'db', which goes away with its container, so
+    // both are recreated even though only 'db' changed
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "my-release-uuid": {
+                    "installed": true,
+                    "services": {
+                        "db": {
+                            "id": 1,
+                            "image": "alpine:latest",
+                            "started": true,
+                            "config": {"command": ["sh", "-c", "old"]},
+                            "oci": running_container("db_my-release-uuid"),
+                        },
+                        "web": {
+                            "id": 2,
+                            "image": "alpine:latest",
+                            "started": true,
+                            "config": {"network_mode": "service:db"},
+                            "depends_on": {
+                                "db": {"condition": "service_started", "restart": true, "required": true}
+                            },
+                            "oci": running_container("web_my-release-uuid"),
+                        },
+                    }
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "my-release-uuid": {
+                    "installed": true,
+                    "services": {
+                        "db": {
+                            "id": 1,
+                            "image": "alpine:latest",
+                            "started": true,
+                            "config": {"command": ["sh", "-c", "new"]},
+                        },
+                        "web": {
+                            "id": 2,
+                            "image": "alpine:latest",
+                            "started": true,
+                            "config": {"network_mode": "service:db"},
+                            "depends_on": {
+                                "db": {"condition": "service_started", "restart": true, "required": true}
+                            },
+                        },
+                    }
+                }
+            }}},
+        }),
+        seq!(
+            "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "take locks for app with uuid 'my-app-uuid'",
+            // the dependency is replaced first, then the service that joined it
+            "stop service 'db' for release 'my-release-uuid'",
+            "remove container for service 'db' for release 'my-release-uuid'",
+            "install service 'db' for release 'my-release-uuid'",
+            "stop service 'web' for release 'my-release-uuid'",
+            "remove container for service 'web' for release 'my-release-uuid'",
+            "install service 'web' for release 'my-release-uuid'",
+            "start service 'db' for release 'my-release-uuid'",
+            "start service 'web' for release 'my-release-uuid'",
+            "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            "release locks for app with uuid 'my-app-uuid'",
+        ),
+    );
+}
