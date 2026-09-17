@@ -903,6 +903,7 @@ fn install_service(
             svc.id,
             &svc_name,
             &app_uuid,
+            &rel_uuid,
             &svc.depends_on,
         );
 
