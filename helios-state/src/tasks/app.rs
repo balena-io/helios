@@ -17,7 +17,7 @@ use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::oci::{Client as Docker, Error as OciError, Mount, NetworkMode, WithContext};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -802,7 +802,8 @@ fn migrate_service(
 /// - the service is registered in state but has no container yet,
 /// - the image has been pulled,
 /// - every linked network and volume exists in the current release with
-///   config matching the target, and
+///   config matching the target,
+/// - the service whose namespace it joins, if any, already has a container, and
 /// - no identically-named service in another release could be migrated
 ///   here instead (that path is handled by `uninstall_service_when_requirements_are_met`).
 fn install_service_when_requirements_are_met(
@@ -853,6 +854,16 @@ fn install_service_when_requirements_are_met(
         )
     };
 
+    // The engine resolves a service reference to a container id at create, but only
+    // if that container already exists. Wait for it so a later rename of the
+    // dependency leaves the reference intact.
+    let namespace_ready = match &tgt.config.network_mode {
+        Some(NetworkMode::Service(dep_name)) => release
+            .and_then(|r| r.services.get(dep_name))
+            .is_some_and(|dep| dep.oci.is_some()),
+        _ => true,
+    };
+
     let networks_ready = tgt.config.networks.keys().all(network_ready);
     let volumes_ready = tgt.config.volumes.iter().all(|m| match m {
         Mount::Volume { source, .. } => volume_ready(source),
@@ -869,7 +880,12 @@ fn install_service_when_requirements_are_met(
                 || prev.config != tgt.config
         });
 
-    if networks_ready && volumes_ready && image_pulled && no_migratable_predecessor {
+    if networks_ready
+        && volumes_ready
+        && namespace_ready
+        && image_pulled
+        && no_migratable_predecessor
+    {
         // set release.installed to false just in case the service is being recreated
         if let Some(rel) = release
             && rel.installed
