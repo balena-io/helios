@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use mahler::exception;
 use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, Target, View};
@@ -23,11 +24,11 @@ use crate::util::fs::run_async;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
-    DependsOnConditionOutcome, any_dependency_failed, any_images_are_pending_download,
-    dependencies_satisfied, depends_on_condition_pending, evaluate_completion, evaluate_health,
-    find_future_network, find_future_service, find_future_volume, find_installed_network,
-    find_installed_service, find_installed_volume, release_services, service_matches_target,
-    services_need_stopping, target_release_services,
+    ConditionEvaluator, DependsOnConditionOutcome, any_dependency_failed,
+    any_images_are_pending_download, dependencies_satisfied, depends_on_condition_pending,
+    evaluate_completion, evaluate_health, find_future_network, find_future_service,
+    find_future_volume, find_installed_network, find_installed_service, find_installed_volume,
+    release_services, service_matches_target, services_need_stopping, target_release_services,
 };
 use super::image::create_image;
 
@@ -1063,11 +1064,14 @@ fn start_service(
     })
 }
 
-/// Await tasks for the unmet required `service_healthy` /
-/// `service_completed_successfully` dependencies in `depends_on`.
+/// Await tasks for the unmet `service_healthy` / `service_completed_successfully`
+/// dependencies in `depends_on`, optional ones included.
 ///
 /// Only started dependencies are awaited, so the `oci` subfield an await scopes
-/// to resolves. `service_started` and optional dependencies are never awaited.
+/// to resolves. `service_started` is driven by its own start instead.
+///
+/// An optional dependency gets an await of its own, which warns and carries on
+/// where a required one fails the run.
 fn await_runtime_dependencies(
     device: &Device,
     app_uuid: &Uuid,
@@ -1082,98 +1086,220 @@ fn await_runtime_dependencies(
     deps.sort_by(|a, b| a.0.cmp(b.0).then(a.1.condition.cmp(&b.1.condition)));
 
     deps.into_iter()
-        // started deps are driven by their own start; optional deps never block
-        .filter(|(_, spec)| spec.required && spec.condition != DependsOnCondition::ServiceStarted)
         // await only a started dependency that may still reach its condition.
         .filter(|(dep_name, spec)| {
             services
                 .and_then(|s| s.get(*dep_name))
                 .is_some_and(|dep| dep.started && depends_on_condition_pending(dep, spec.condition))
         })
-        .filter_map(|(dep_name, spec)| match spec.condition {
-            DependsOnCondition::ServiceHealthy => {
+        // each arm names its job directly: coercing them to a common fn pointer
+        // would erase the identity the jobs are registered under
+        .filter_map(|(dep_name, spec)| match (spec.condition, spec.required) {
+            (DependsOnCondition::ServiceHealthy, true) => {
                 Some(await_healthy.with_arg("service_name", dep_name))
             }
-            DependsOnCondition::ServiceCompletedSuccessfully => {
+            (DependsOnCondition::ServiceHealthy, false) => {
+                Some(await_optional_healthy.with_arg("service_name", dep_name))
+            }
+            (DependsOnCondition::ServiceCompletedSuccessfully, true) => {
                 Some(await_completed.with_arg("service_name", dep_name))
             }
-            DependsOnCondition::ServiceStarted => None,
+            (DependsOnCondition::ServiceCompletedSuccessfully, false) => {
+                Some(await_optional_completed.with_arg("service_name", dep_name))
+            }
+            // started deps are driven by their own start
+            (DependsOnCondition::ServiceStarted, _) => None,
         })
         .collect()
 }
 
 /// Wait for a started service container to report healthy. Scoped to the
 /// service container (`oci` subfield).
-fn await_healthy(container: View<Container>, docker: Res<Docker>) -> IO<Container, OciError> {
+fn await_healthy(mut container: View<Container>, docker: Res<Docker>) -> IO<Container, OciError> {
     enforce!(
         container.health != Health::Healthy,
         "container already healthy"
     );
-    with_io(container, async move |container| {
+
+    // what the planner takes the wait to achieve
+    container.health = Health::Healthy;
+
+    with_io(container, async move |mut container| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        await_condition_met(docker, &container.name, evaluate_health).await?;
+        let timeout = container.health_timeout;
+        match await_condition(docker, &container.name, evaluate_health, timeout).await? {
+            WaitOutcome::Met(observed) => *container = observed,
+            WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
+        }
         Ok(container)
     })
-    .map(|mut container| {
-        container.health = Health::Healthy;
-        container
+}
+
+/// Wait for a started service container to report healthy, carrying on with a
+/// warning once it no longer can. Scoped to the service container (`oci`
+/// subfield).
+fn await_optional_healthy(
+    mut container: View<Container>,
+    docker: Res<Docker>,
+) -> IO<Container, OciError> {
+    enforce!(
+        container.health != Health::Healthy,
+        "container already healthy"
+    );
+
+    // what the planner takes the wait to achieve
+    container.health = Health::Healthy;
+
+    with_io(container, async move |mut container| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let timeout = container.health_timeout;
+        let outcome = await_condition(docker, &container.name, evaluate_health, timeout).await?;
+        warn_if_unmet(&outcome);
+        *container = outcome.into();
+        Ok(container)
     })
 }
 
 /// Wait for a started service container to exit with status 0. Scoped to the
 /// service container (`oci` subfield).
-fn await_completed(container: View<Container>, docker: Res<Docker>) -> IO<Container, OciError> {
+fn await_completed(mut container: View<Container>, docker: Res<Docker>) -> IO<Container, OciError> {
     enforce!(
         container.status != ContainerStatus::Stopped(0),
         "container already completed"
     );
+    // satisfied and failed are both `Stopped`, so folding this into the check
+    // above would lose the reason
     enforce!(
         !matches!(container.status, ContainerStatus::Stopped(_)),
         "container exited with non-zero code"
     );
-    with_io(container, async move |container| {
+
+    // what the planner takes the wait to achieve
+    container.status = ContainerStatus::Stopped(0);
+
+    with_io(container, async move |mut container| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        await_condition_met(docker, &container.name, evaluate_completion).await?;
+        match await_condition(docker, &container.name, evaluate_completion, None).await? {
+            WaitOutcome::Met(observed) => *container = observed,
+            WaitOutcome::Unmet(reason, _) => return Err(reason.into()),
+        }
         Ok(container)
-    })
-    .map(|mut container| {
-        container.status = ContainerStatus::Stopped(0);
-        container
     })
 }
 
-/// Wait until `evaluate` reports the container condition satisfied, erroring as
-/// soon as the condition has terminally failed rather than waiting forever.
+/// Wait for a started service container to exit with status 0, carrying on with
+/// a warning once it no longer can. Scoped to the service container (`oci`
+/// subfield).
+fn await_optional_completed(
+    mut container: View<Container>,
+    docker: Res<Docker>,
+) -> IO<Container, OciError> {
+    enforce!(
+        !matches!(container.status, ContainerStatus::Stopped(_)),
+        "container already exited"
+    );
+
+    // what the planner takes the wait to achieve
+    container.status = ContainerStatus::Stopped(0);
+
+    with_io(container, async move |mut container| {
+        let docker = docker
+            .as_ref()
+            .expect("docker resource should be available");
+        let outcome = await_condition(docker, &container.name, evaluate_completion, None).await?;
+        warn_if_unmet(&outcome);
+        *container = outcome.into();
+        Ok(container)
+    })
+}
+
+/// Warn if an optional wait ended with its condition unmet. Compose starts a
+/// dependent regardless, so the run carries on either way.
+fn warn_if_unmet(outcome: &WaitOutcome) {
+    if let WaitOutcome::Unmet(reason, _) = outcome {
+        warn!("carrying on without this dependency: {reason}");
+    }
+}
+
+/// How a wait on a container condition ended.
+enum WaitOutcome {
+    /// the condition was met, with the container as observed
+    Met(Container),
+    /// the condition can no longer be met, with the reason and the container as
+    /// last observed
+    Unmet(String, Container),
+}
+
+impl From<WaitOutcome> for Container {
+    fn from(outcome: WaitOutcome) -> Self {
+        match outcome {
+            WaitOutcome::Met(observed) | WaitOutcome::Unmet(_, observed) => observed,
+        }
+    }
+}
+
+/// Wait until `evaluate` reports the container condition resolved, either met
+/// or terminally failed, rather than waiting forever.
 ///
 /// The container state is read up front and re-read on every state change the
 /// engine reports for it, as an event names the change but not the state it
 /// leaves the container in.
-async fn await_condition_met(
+///
+/// `timeout` caps the wait, measured from here rather than from container start,
+/// or `None` to wait as long as it takes. Running out counts as unmet, so an
+/// optional dependency warns where a required one fails.
+async fn await_condition(
     docker: &Docker,
     container_id: &str,
-    evaluate: fn(&Container) -> DependsOnConditionOutcome,
-) -> Result<(), OciError> {
+    evaluate: ConditionEvaluator,
+    timeout: Option<Duration>,
+) -> Result<WaitOutcome, OciError> {
     let containers = docker.container();
 
     // watch before the first read, so a change in between is not missed
     let mut events = std::pin::pin!(containers.watch(container_id));
 
-    loop {
-        let state = containers.inspect(container_id).await?.state;
-        match evaluate(&Container::from((container_id, state))) {
-            DependsOnConditionOutcome::Satisfied => return Ok(()),
-            DependsOnConditionOutcome::Failed(reason) => return Err(reason.into()),
-            DependsOnConditionOutcome::Pending => {}
-        }
+    let mut inspected = containers.inspect(container_id).await?;
 
-        let Some(action) = events.next().await else {
-            return Err("engine closed the event stream".into());
-        };
-        trace!(container_id, "container reported '{}'", action?);
+    let wait = async {
+        loop {
+            let observed = Container::from(&inspected);
+            match evaluate(&observed) {
+                DependsOnConditionOutcome::Satisfied => return Ok(WaitOutcome::Met(observed)),
+                DependsOnConditionOutcome::Failed(reason) => {
+                    return Ok(WaitOutcome::Unmet(reason, observed));
+                }
+                DependsOnConditionOutcome::Pending => {}
+            }
+
+            let Some(action) = events.next().await else {
+                return Err("engine closed the event stream".into());
+            };
+            trace!(container_id, "container reported '{}'", action?);
+
+            inspected = containers.inspect(container_id).await?;
+        }
+    };
+
+    let Some(limit) = timeout else {
+        return wait.await;
+    };
+
+    match tokio::time::timeout(limit, wait).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            let observed = Container::from(&containers.inspect(container_id).await?);
+            Ok(WaitOutcome::Unmet(
+                format!("gave up after {}s", limit.as_secs()),
+                observed,
+            ))
+        }
     }
 }
 
@@ -1261,10 +1387,7 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
             .await
             .context("failed to inspect container for service")?;
 
-        svc.oci.replace(Container::from((
-            local_container.name.as_ref(),
-            local_container.state,
-        )));
+        svc.oci.replace(Container::from(&local_container));
 
         Ok(svc)
     })
@@ -1609,9 +1732,23 @@ pub fn with_userapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("wait until service '{service_name}' for release '{commit}' is healthy")
                     },
                 ),
+                job::none(await_optional_healthy).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!(
+                            "optionally wait until service '{service_name}' for release '{commit}' is healthy"
+                        )
+                    },
+                ),
                 job::none(await_completed).with_description(
                     |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
                         format!("wait until service '{service_name}' for release '{commit}' has completed")
+                    },
+                ),
+                job::none(await_optional_completed).with_description(
+                    |Args((_, commit, service_name)): Args<(Uuid, Uuid, String)>| {
+                        format!(
+                            "optionally wait until service '{service_name}' for release '{commit}' has completed"
+                        )
                     },
                 )
             ]

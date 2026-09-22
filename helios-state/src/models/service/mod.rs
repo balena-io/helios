@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +63,11 @@ pub struct Container {
     pub status: ContainerStatus,
     #[serde(default)]
     pub health: Health,
+    /// How long the healthcheck can take to resolve. Read from the engine, as
+    /// the healthcheck may come from the image. `None` without a healthcheck,
+    /// where a health condition fails rather than waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_timeout: Option<Duration>,
 }
 
 impl Container {
@@ -71,25 +78,32 @@ impl Container {
             created: DateTime::default(),
             status: ContainerStatus::Created,
             health: Health::None,
+            health_timeout: None,
         }
     }
 }
 
-impl From<(&str, oci::ContainerState)> for Container {
-    fn from((container_name, container_state): (&str, oci::ContainerState)) -> Self {
-        let container_id = container_name.to_owned();
+impl<N> From<&LocalContainer<N>> for Container {
+    fn from(container: &LocalContainer<N>) -> Self {
         let oci::ContainerState {
             status,
             created,
             health,
             ..
-        } = container_state;
+        } = container.state.clone();
 
         Container {
-            name: container_id,
+            name: container.name.clone(),
             status: status.into(),
             created,
             health,
+            // past the point the engine would declare the container
+            // unhealthy, the healthcheck is not going to resolve
+            health_timeout: container
+                .config
+                .healthcheck
+                .as_ref()
+                .map(Healthcheck::time_to_unhealthy),
         }
     }
 }
@@ -412,7 +426,7 @@ impl<N> From<LocalContainer<N>> for Service {
             .unwrap_or_default();
 
         let image = ImageRef::Id(container.image.clone());
-        let container_summary = Container::from((container.name.as_str(), container.state.clone()));
+        let container_summary = Container::from(&container);
 
         // the service is considered started after the engine policy takes over
         // for now this just means that the container status is different than `Created`
