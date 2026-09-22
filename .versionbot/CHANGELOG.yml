@@ -1,4 +1,38 @@
 - commits:
+    - subject: Bound the health await by the healthcheck config
+      hash: 98a82f4244d567730d544e7d1359b87ec0c7cf9e
+      body: >
+        - Without it, a healthcheck stuck in `starting` blocks forever
+
+        - `Healthcheck::time_to_unhealthy`: start period + (interval + timeout)
+        * retries, with engine defaults
+
+        - Timeout computed when the container is read and kept on `Container`,
+        as the healthcheck may come from the image
+
+        - Timing out counts as unmet: optional deps warn, required ones fail
+
+        - Completion await stays unbounded
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+    - subject: Wait on optional depends_on entries until they resolve
+      hash: 9c964a868eafe20d80ce012130809db065be92d6
+      body: |
+        - Optional deps block a start while pending, as in compose
+        - Each optional dep gets its own await, which warns instead of failing
+        - A dep not yet installed reads as pending, required or optional
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+  version: 0.26.8
+  title: ""
+  date: 2026-09-22T21:40:21.696Z
+- commits:
     - subject: Wait on engine events instead of polling the container
       hash: 58edca783e2e45ee08733b7d6e2b930af7008076
       body: >
