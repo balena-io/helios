@@ -88,7 +88,7 @@ const BIND_SOURCE_ALLOWLIST: &[&str] = &[
 ];
 
 fn is_allowed_bind_source(source: &str) -> bool {
-    BIND_SOURCE_ALLOWLIST.contains(&source)
+    BIND_SOURCE_ALLOWLIST.contains(&source) || std::path::PathBuf::from(source).starts_with("/tmp")
 }
 
 /// Service mount list.
@@ -228,6 +228,15 @@ fn parse_mount(raw: RawMount) -> Result<Mount, String> {
     }
 }
 
+fn is_canonical_path(s: impl AsRef<std::path::Path>) -> bool {
+    s.as_ref().components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::RootDir
+        )
+    })
+}
+
 fn parse_short(s: &str) -> Result<Mount, String> {
     // `src:dst` or `src:dst:mode`
     let parts: Vec<&str> = s.splitn(3, ':').collect();
@@ -262,6 +271,11 @@ fn parse_short(s: &str) -> Result<Mount, String> {
 
     // Host paths start with `/` or `.`; anything else is a named volume.
     if source.starts_with('/') {
+        if !is_canonical_path(source) {
+            return Err(format!(
+                "bind mount source {source} should be a canonical path"
+            ));
+        }
         if !is_allowed_bind_source(source) {
             return Err(format!(
                 "bind mount source '{source}' is not in the allowed list"
@@ -318,6 +332,16 @@ fn parse_long(m: LongMount) -> Result<Mount, String> {
         }
         "bind" => {
             let source = source.ok_or_else(|| "bind mount requires a `source`".to_string())?;
+            if !source.starts_with("/") {
+                return Err(format!(
+                    "relative bind paths are not supported (got '{source}')"
+                ));
+            }
+            if !is_canonical_path(&source) {
+                return Err(format!(
+                    "bind mount source {source} should be a canonical path"
+                ));
+            }
             if !is_allowed_bind_source(&source) {
                 return Err(format!(
                     "bind mount source '{source}' is not in the allowed list"
@@ -390,6 +414,38 @@ mod tests {
     }
 
     #[test]
+    fn short_form_tmp_bind_allowed() {
+        let v: VolumesConfig =
+            serde_json::from_value(json!(["/tmp/balena-supervisor:/tmp/run"])).unwrap();
+        assert_eq!(
+            v.as_slice(),
+            &[Mount::Bind(BindMount {
+                source: "/tmp/balena-supervisor".to_string(),
+                target: "/tmp/run".to_string(),
+                read_only: false,
+                propagation: None,
+                create_host_path: true,
+            })]
+        );
+    }
+
+    #[test]
+    fn short_form_non_tmp_dir_bind_not_allowed() {
+        let err =
+            serde_json::from_value::<VolumesConfig>(json!(["/tmpfoo/balena-supervisor:/tmp/run"]))
+                .unwrap_err();
+        assert!(err.to_string().contains("not in the allowed list"));
+    }
+
+    #[test]
+    fn short_form_non_canonical_bind_not_allowed() {
+        let err =
+            serde_json::from_value::<VolumesConfig>(json!(["/tmp/../balena-supervisor:/tmp/run"]))
+                .unwrap_err();
+        assert!(err.to_string().contains("should be a canonical path"));
+    }
+
+    #[test]
     fn short_form_bind_not_in_allowlist_rejected() {
         let err = serde_json::from_value::<VolumesConfig>(json!(["/root:/root"])).unwrap_err();
         assert!(err.to_string().contains("not in the allowed list"));
@@ -452,6 +508,17 @@ mod tests {
     }
 
     #[test]
+    fn long_form_tmp_bind() {
+        let v: VolumesConfig = serde_json::from_value(json!([{
+            "type": "bind",
+            "source": "/tmp/balena-supervisor",
+            "target": "/tmp/run"
+        }]))
+        .unwrap();
+        assert!(matches!(v.as_slice()[0], Mount::Bind(_)));
+    }
+
+    #[test]
     fn long_form_bind_rejected_when_not_allowlisted() {
         let err = serde_json::from_value::<VolumesConfig>(json!([{
             "type": "bind",
@@ -460,6 +527,31 @@ mod tests {
         }]))
         .unwrap_err();
         assert!(err.to_string().contains("not in the allowed list"));
+    }
+
+    #[test]
+    fn long_form_non_canonical_bind_rejected() {
+        let err = serde_json::from_value::<VolumesConfig>(json!([{
+            "type": "bind",
+            "source": "/tmp/../balena-supervisor",
+            "target": "/tmp/run"
+        }]))
+        .unwrap_err();
+        assert!(err.to_string().contains("should be a canonical path"));
+    }
+
+    #[test]
+    fn long_form_non_absolute_bind_rejected() {
+        let err = serde_json::from_value::<VolumesConfig>(json!([{
+            "type": "bind",
+            "source": "./balena-supervisor",
+            "target": "/tmp/run"
+        }]))
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("relative bind paths are not supported")
+        );
     }
 
     #[test]
