@@ -1,4 +1,31 @@
 - commits:
+    - subject: Allow bind mounts on `/tmp`
+      hash: 0322c27e832c40c9269fa5839f7e3b686c85c1d6
+      body: >
+        Bind mounts starting with `/tmp` are no longer disallowed. This enables
+        apps
+
+        to read and write files that live until the next boot.
+
+
+        This commit makes sure that the paths passed for the bind mounts are
+
+        canonical paths, i.e. do not contain `..` or `.`, to avoid a service
+
+        trying to mount a path outside `/tmp` through using `..` in a path.
+      footer:
+        See: https://balena.fibery.io/Work/Project/2885
+        see: https://balena.fibery.io/Work/Project/2885
+        Change-type: patch
+        change-type: patch
+        Relates-to: balena-os/balena-supervisor#2562
+        relates-to: balena-os/balena-supervisor#2562
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.9
+  title: ""
+  date: 2026-09-24T09:44:24.341Z
+- commits:
     - subject: Bound the health await by the healthcheck config
       hash: 98a82f4244d567730d544e7d1359b87ec0c7cf9e
       body: >
