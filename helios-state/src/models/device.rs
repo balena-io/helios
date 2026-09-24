@@ -1,4 +1,4 @@
-use mahler::state::{Map, State};
+use mahler::state::{List, Map, State};
 
 use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid};
 use crate::oci::{BindPropagation, Mount};
@@ -6,6 +6,7 @@ use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::image::Image;
+use super::volume::Volume;
 
 #[cfg(feature = "balenahup")]
 use crate::balenahup::Host;
@@ -32,6 +33,10 @@ pub struct Device {
     /// The "hostapp" configuration
     #[cfg(feature = "balenahup")]
     pub host: Option<Host>,
+
+    /// List of unsupervised volumes on the device
+    #[mahler(internal, default)]
+    pub volumes: List<Volume>,
 }
 
 impl Default for DeviceTarget {
@@ -56,6 +61,7 @@ impl Device {
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
             host: os.map(Host::new),
+            volumes: List::new(),
         }
     }
 }

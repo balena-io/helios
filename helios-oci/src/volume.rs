@@ -86,23 +86,12 @@ impl<N: Namespace> Volume<'_, N> {
         Ok(volume_info.into())
     }
 
-    /// Returns the list of volume names on the server
-    /// matching the given labels
-    pub async fn list_with_labels(&self, labels: Vec<&str>) -> Result<Vec<String>> {
-        let mut filters = HashMap::new();
-        filters.insert(
-            "label".to_string(),
-            labels.into_iter().map(|s| s.to_owned()).collect(),
-        );
-
-        let opts = ListVolumesOptions {
-            filters: Some(filters),
-        };
-
+    /// Returns the list of all volumes on the server
+    pub async fn list_all(&self) -> Result<Vec<String>> {
         let response = self
             .client
             .inner()
-            .list_volumes(Some(opts))
+            .list_volumes(Option::<ListVolumesOptions>::None)
             .await
             .map_err(|e| Error::from(e).context("failed to list volumes".to_string()))?;
 

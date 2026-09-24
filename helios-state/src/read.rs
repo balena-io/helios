@@ -249,21 +249,18 @@ pub async fn read(
         }
 
         // read the state of volumes
-        let volumes = docker
-            .volume()
-            .list_with_labels(vec![LABEL_SUPERVISED])
-            .await?;
+        let volumes = docker.volume().list_all().await?;
+        let mut unsupervised = Vec::new();
 
         for volume_name in volumes {
-            let local_volume = docker.volume().inspect(&volume_name).await?;
+            let mut local_volume = docker.volume().inspect(&volume_name).await?;
 
             // get the volume name from the label
-            let vol_name: String = local_volume
-                .labels
-                .get(LABEL_VOLUME_NAME)
-                .map(|name| name.as_str())
-                .unwrap_or(&volume_name)
-                .into();
+            // if the label is not present, then the volume is not supervised by helios
+            let Some(vol_name) = local_volume.labels.remove(LABEL_VOLUME_NAME) else {
+                unsupervised.push(local_volume);
+                continue;
+            };
 
             let app_uuid: Uuid = local_volume
                 .namespace(&vol_name)
@@ -290,6 +287,11 @@ pub async fn read(
             for release in app.releases.values_mut() {
                 release.volumes.insert(vol_name.clone(), volume.clone());
             }
+        }
+
+        // Add unsupervised volumes to the device state
+        for local_volume in unsupervised {
+            device.volumes.push(local_volume.into());
         }
     }
 

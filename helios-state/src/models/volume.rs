@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
-use crate::labels::{LABEL_SUPERVISED, LABEL_VOLUME_NAME};
+use crate::labels::{LABEL_APP_UUID, LABEL_SUPERVISED, LABEL_SUPERVISED_LEGACY, LABEL_VOLUME_NAME};
 use crate::oci::{self, LocalVolume, VolumeDriver};
 use crate::remote_model::Volume as RemoteVolume;
 
@@ -70,10 +70,17 @@ impl<N> From<LocalVolume<N>> for Volume {
         let volume_name = vol.name;
         let mut labels = vol.labels;
 
-        // Remove labels injected during create that are not part of the
-        // compose definition
-        labels.remove(LABEL_SUPERVISED);
-        labels.remove(LABEL_VOLUME_NAME);
+        // Remove supervisor metadata including legacy labels
+        labels.retain(|label, _| {
+            [
+                LABEL_SUPERVISED,
+                LABEL_VOLUME_NAME,
+                LABEL_APP_UUID,
+                LABEL_SUPERVISED_LEGACY,
+            ]
+            .iter()
+            .all(|l| l != label)
+        });
 
         Volume {
             oci_name: volume_name,
