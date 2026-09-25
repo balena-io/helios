@@ -178,11 +178,15 @@ impl From<oci::ContainerConfig> for ServiceConfig {
                 .collect();
 
             // De-namespace volume mount sources by stripping the app_uuid suffix
-            for mount in config.volumes.iter_mut() {
-                if let Mount::Volume { source, .. } = mount {
-                    *source = namespace.to_entity(source);
-                }
-            }
+            config.volumes = std::mem::take(&mut config.volumes)
+                .into_iter()
+                .map(|mut mount| {
+                    if let Mount::Volume { source, .. } = &mut mount {
+                        *source = namespace.to_entity(source);
+                    }
+                    mount
+                })
+                .collect();
         }
 
         // Remove labels from the container that were not defined in
@@ -319,11 +323,15 @@ impl ServiceConfig {
         let namespace = LocalNamespace::from(app_uuid.as_str());
 
         // Namespace volume mount sources so they match the volumes created under the app
-        for mount in config.volumes.iter_mut() {
-            if let Mount::Volume { source, .. } = mount {
-                *source = namespace.to_identifier(source);
-            }
-        }
+        config.volumes = std::mem::take(&mut config.volumes)
+            .into_iter()
+            .map(|mut mount| {
+                if let Mount::Volume { source, .. } = &mut mount {
+                    *source = namespace.to_identifier(source);
+                }
+                mount
+            })
+            .collect();
 
         let networks = std::mem::take(&mut config.networks);
         for (net_name, mut net_config) in networks {
