@@ -14,6 +14,7 @@ const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
 const LABEL_CONFIG_ANNOTATIONS: &str = "io.balena.private.config.annotations";
 const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
+const LABEL_CONFIG_ULIMITS: &str = "io.balena.private.config.ulimits";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
@@ -141,6 +142,16 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         config
             .annotations
             .retain(|k, _| label_config_annotations.contains(k));
+
+        // Retain only ulimits that were defined in the composition. The engine
+        // adds its own defaults which should not be read into the service config.
+        let label_config_ulimits: Vec<String> = labels
+            .remove(LABEL_CONFIG_ULIMITS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+        config
+            .ulimits
+            .retain(|k, _| label_config_ulimits.contains(k));
 
         // De-namespace network names by stripping the app_uuid suffix
         if let Some(app_uuid) = maybe_app_uuid {
@@ -288,6 +299,18 @@ impl ServiceConfig {
         labels.insert(
             LABEL_CONFIG_ANNOTATIONS.to_string(),
             label_config_annotations_value.to_string(),
+        );
+
+        // Store composition-defined ulimit names so engine defaults can be
+        // dropped when reading the container state
+        let label_config_ulimits_value = config
+            .ulimits
+            .keys()
+            .map(|s| json::Value::String(s.to_owned()))
+            .collect::<json::Value>();
+        labels.insert(
+            LABEL_CONFIG_ULIMITS.to_string(),
+            label_config_ulimits_value.to_string(),
         );
 
         // add BALENA_ env vars that are tied to the container lifetime
@@ -516,6 +539,50 @@ mod tests {
 
         let back = ServiceConfig::from(with_labels);
         assert!(back.annotations.is_empty());
+    }
+
+    #[test]
+    fn preserves_ulimits_across_round_trip() {
+        let original = oci::ContainerConfig {
+            ulimits: HashMap::from([(
+                "nofile".to_string(),
+                oci::Ulimit {
+                    soft: 1024,
+                    hard: 2048,
+                },
+            )]),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+
+        // Simulate the engine adding its own default ulimits
+        with_labels.ulimits.insert(
+            "nproc".to_string(),
+            oci::Ulimit {
+                soft: 4194304,
+                hard: 4194304,
+            },
+        );
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.ulimits, original.ulimits);
+    }
+
+    #[test]
+    fn drops_engine_added_ulimits_when_none_defined() {
+        let svc = ServiceConfig(oci::ContainerConfig::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        with_labels.ulimits.insert(
+            "nofile".to_string(),
+            oci::Ulimit {
+                soft: 1048576,
+                hard: 1048576,
+            },
+        );
+
+        let back = ServiceConfig::from(with_labels);
+        assert!(back.ulimits.is_empty());
     }
 
     #[test]
