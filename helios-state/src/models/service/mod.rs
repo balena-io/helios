@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use mahler::state::State;
@@ -228,10 +229,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteNetworkMode::Bridge => NetworkMode::Other("bridge".to_string()),
         });
 
-        // Convert the service mounts. The composition `volumes` arrive already
-        // canonicalized (sorted by target) from the remote-model deserializer,
-        // so no further sorting is required here.
-        let volumes: Vec<Mount> = composition
+        // Convert the service mounts. Collecting into a `BTreeSet` canonicalizes
+        // the order, so reorderings in the remote composition don't propagate.
+        let volumes: BTreeSet<Mount> = composition
             .volumes
             .into_iter()
             .map(|m| match m {

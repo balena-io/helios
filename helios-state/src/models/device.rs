@@ -93,7 +93,7 @@ impl DeviceTarget {
                     // helios reads from the host side. Overrides any
                     // user-declared mount at the same target.
                     svc.config.volumes.retain(|m| m.target() != "/tmp/balena");
-                    svc.config.volumes.push(Mount::Bind {
+                    svc.config.volumes.insert(Mount::Bind {
                         target: "/tmp/balena".to_string(),
                         source: bind_source.clone(),
                         read_only: false,

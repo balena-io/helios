@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use bollard::{
@@ -435,7 +435,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .map(DeviceMapping::from)
             .collect();
         // Sort by target so the serialized form is stable regardless of the
-        // order the engine reports the devices in (see the volumes sort below).
+        // order of the devices reported by the engine
         devices.sort_by(|a, b| a.target.cmp(&b.target));
         let dns = host_config
             .as_mut()
@@ -508,7 +508,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .unwrap_or_default()
             .into_iter()
             .map(Mount::try_from)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<BTreeSet<_>>>()?;
         let mem_limit = host_config
             .as_mut()
             .and_then(|hc| hc.memory.take())
@@ -569,13 +569,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.binds.take())
             .unwrap_or_default();
         for spec in binds {
-            volumes.push(Mount::try_from_bind_spec(&spec)?);
+            volumes.insert(Mount::try_from_bind_spec(&spec)?);
         }
-
-        // Sort by target so the serialized form is stable regardless of the
-        // order the engine reports the mounts in — Mahler compares state via
-        // serialized JSON, so reordering must not trigger reconfiguration.
-        volumes.sort_by(|a, b| a.target().cmp(b.target()));
 
         // Published ports round-trip through `HostConfig.PortBindings`, which
         // holds exactly what the create request asked for. `Config.ExposedPorts`
@@ -1062,7 +1057,7 @@ impl std::fmt::Display for NetworkMode {
 }
 
 /// Bind mount propagation mode. Mirrors the compose `bind.propagation` setting.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
     #[default]
@@ -1114,7 +1109,7 @@ impl TryFrom<MountBindOptionsPropagationEnum> for BindPropagation {
 /// The `target` path inside the container is the unique identity of each
 /// mount within a `ContainerConfig`.
 #[serde_with::skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Mount {
     Volume {
@@ -1650,9 +1645,10 @@ pub struct ContainerConfig {
     /// Container network mode. When set, `networks` must be empty.
     pub network_mode: Option<NetworkMode>,
 
-    /// Filesystem mounts (volume, bind, tmpfs) indexed by target path.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub volumes: Vec<Mount>,
+    /// Filesystem mounts (volume, bind, tmpfs), sorted so the
+    /// serizalied form is stable.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub volumes: BTreeSet<Mount>,
 
     /// Published container ports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1982,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_sorts_volumes_by_target() {
+    fn inspect_canonicalizes_mount_order() {
         let c: LocalContainer = inspect_with_mounts(vec![
             vol_mount("/c", "vol-c"),
             vol_mount("/a", "vol-a"),
@@ -2006,7 +2002,7 @@ mod tests {
         };
         let c: LocalContainer = inspect_with_mounts(vec![image_mount]).try_into().unwrap();
         assert_eq!(c.config.volumes.len(), 1);
-        match &c.config.volumes[0] {
+        match c.config.volumes.first().unwrap() {
             Mount::Other { target, kind } => {
                 assert_eq!(target, "/data");
                 assert_eq!(kind, "image");
@@ -3104,48 +3100,44 @@ mod tests {
         ])
         .try_into()
         .unwrap();
-        assert_eq!(c.config.volumes.len(), 3);
         assert_eq!(
-            c.config.volumes[0],
-            Mount::Bind {
-                target: "/container/a".to_string(),
-                source: "/host/a".to_string(),
-                read_only: false,
-                propagation: BindPropagation::Private,
-                create_host_path: true,
-            }
-        );
-        assert_eq!(
-            c.config.volumes[1],
-            Mount::Bind {
-                target: "/container/b".to_string(),
-                source: "/host/b".to_string(),
-                read_only: true,
-                propagation: BindPropagation::Private,
-                create_host_path: true,
-            }
-        );
-        assert_eq!(
-            c.config.volumes[2],
-            Mount::Bind {
-                target: "/container/c".to_string(),
-                source: "/host/c".to_string(),
-                read_only: true,
-                propagation: BindPropagation::Rshared,
-                create_host_path: true,
-            }
+            c.config.volumes.into_iter().collect::<Vec<_>>(),
+            vec![
+                Mount::Bind {
+                    target: "/container/a".to_string(),
+                    source: "/host/a".to_string(),
+                    read_only: false,
+                    propagation: BindPropagation::Private,
+                    create_host_path: true,
+                },
+                Mount::Bind {
+                    target: "/container/b".to_string(),
+                    source: "/host/b".to_string(),
+                    read_only: true,
+                    propagation: BindPropagation::Private,
+                    create_host_path: true,
+                },
+                Mount::Bind {
+                    target: "/container/c".to_string(),
+                    source: "/host/c".to_string(),
+                    read_only: true,
+                    propagation: BindPropagation::Rshared,
+                    create_host_path: true,
+                },
+            ]
         );
     }
 
     #[test]
-    fn inspect_merges_mounts_and_binds_sorted_by_target() {
+    fn inspect_merges_mounts_and_binds() {
         let response = inspect_with(
             Some(vec![vol_mount("/c", "vol-c")]),
             Some(vec!["/host/a:/a".to_string(), "/host/b:/b:ro".to_string()]),
         );
         let c: LocalContainer = response.try_into().unwrap();
+        // Volume mounts order before bind mounts, each group by target.
         let targets: Vec<&str> = c.config.volumes.iter().map(|m| m.target()).collect();
-        assert_eq!(targets, vec!["/a", "/b", "/c"]);
+        assert_eq!(targets, vec!["/c", "/a", "/b"]);
     }
 
     #[test]
@@ -3156,8 +3148,8 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            c.config.volumes[0],
-            Mount::Bind {
+            c.config.volumes.first().unwrap(),
+            &Mount::Bind {
                 target: "/t".to_string(),
                 source: "/h".to_string(),
                 read_only: false,
@@ -3191,8 +3183,8 @@ mod tests {
                 .try_into()
                 .unwrap();
         assert_eq!(
-            c.config.volumes[0],
-            Mount::Volume {
+            c.config.volumes.first().unwrap(),
+            &Mount::Volume {
                 target: "/one".to_string(),
                 source: "vol-one".to_string(),
                 read_only: false,
@@ -3212,7 +3204,7 @@ mod tests {
             ("/etc:/data:shared,bind", BindPropagation::Shared),
         ] {
             let c: LocalContainer = inspect_with_binds(vec![spec]).try_into().unwrap();
-            match &c.config.volumes[0] {
+            match c.config.volumes.first().unwrap() {
                 Mount::Bind { propagation, .. } => assert_eq!(*propagation, expected, "{spec}"),
                 other => panic!("{spec} parsed as {other:?}"),
             }
@@ -3225,8 +3217,8 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            c.config.volumes[0],
-            Mount::Volume {
+            c.config.volumes.first().unwrap(),
+            &Mount::Volume {
                 target: "/one".to_string(),
                 source: "vol-one".to_string(),
                 read_only: true,

@@ -62,17 +62,6 @@ pub enum Mount {
     Tmpfs(TmpfsMount),
 }
 
-impl Mount {
-    /// Container path this mount binds to.
-    pub fn target(&self) -> &str {
-        match self {
-            Mount::Volume(m) => &m.target,
-            Mount::Bind(m) => &m.target,
-            Mount::Tmpfs(m) => &m.target,
-        }
-    }
-}
-
 /// Host paths that are permitted as bind-mount sources, these are the
 /// same bind mounts allowed from labels
 const BIND_SOURCE_ALLOWLIST: &[&str] = &[
@@ -214,9 +203,6 @@ impl<'de> Deserialize<'de> for VolumesConfig {
         for entry in raw {
             mounts.push(parse_mount(entry).map_err(serde::de::Error::custom)?);
         }
-        // Canonicalize by container-side target so the downstream serialized form
-        // is stable against reorderings in the remote composition.
-        mounts.sort_by(|a, b| a.target().cmp(b.target()));
         Ok(VolumesConfig(mounts))
     }
 }
@@ -626,19 +612,5 @@ mod tests {
     fn empty_default() {
         let v: VolumesConfig = serde_json::from_value(json!([])).unwrap();
         assert!(v.is_empty());
-    }
-
-    #[test]
-    fn deserialize_sorts_by_target() {
-        // Deserialization canonicalizes by target so reordering in the remote
-        // composition does not propagate downstream.
-        let v: VolumesConfig = serde_json::from_value(json!([
-            "vol-c:/c",
-            {"type": "tmpfs", "target": "/a"},
-            "vol-b:/b",
-        ]))
-        .unwrap();
-        let targets: Vec<&str> = v.iter().map(|m| m.target()).collect();
-        assert_eq!(targets, vec!["/a", "/b", "/c"]);
     }
 }
