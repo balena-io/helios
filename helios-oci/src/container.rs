@@ -560,10 +560,10 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .map(|(path, raw_options)| (path, TmpfsOptions::from_engine(&raw_options)))
             .collect();
 
-        // Legacy supervisor bind mounts are reported via `HostConfig.Binds` as
-        // `source:target[:options]` strings, not in `HostConfig.Mounts`. Parse
-        // those into `Mount::Bind` so the same container config covers both
-        // creation paths.
+        // The legacy supervisor uses `HostConfig.Binds` for bind mounts, and Podman uses the field
+        // to report both binds and volume mounts.
+        // We parse them to make sure the container config covers different creation paths
+        // and engines.
         let binds = host_config
             .as_mut()
             .and_then(|hc| hc.binds.take())
@@ -1170,7 +1170,7 @@ impl Mount {
         }
     }
 
-    /// Parse a Docker bind spec (`source:target[:options]`) into a `Mount::Bind`.
+    /// Parse a volume bind spec (`source:target[:options]`) into a `Mount::Bind`.
     ///
     /// Used to read the legacy `HostConfig.Binds` list back from the engine.
     /// Unknown options (SELinux labels, `nocopy`, …) are ignored: the engine
@@ -1187,11 +1187,13 @@ impl Mount {
 
         let mut read_only = false;
         let mut propagation = None;
+        let mut nocopy = false;
         if let Some(opts) = parts.next() {
             for opt in opts.split(',').filter(|o| !o.is_empty()) {
                 match opt {
                     "ro" => read_only = true,
                     "rw" => read_only = false,
+                    "nocopy" => nocopy = true,
                     "private" => propagation = Some(BindPropagation::Private),
                     "rprivate" => propagation = Some(BindPropagation::Rprivate),
                     "shared" => propagation = Some(BindPropagation::Shared),
@@ -1203,12 +1205,27 @@ impl Mount {
             }
         }
 
+        // Bind source cannot be a relative path so a missing `/`
+        // means the bind is treated as a volume
+        if !source.starts_with('/') {
+            return Ok(Mount::Volume {
+                target: target.to_owned(),
+                source: source.to_owned(),
+                read_only,
+                nocopy,
+                // Not expressible in a volume spec.
+                subpath: None,
+            });
+        }
+
         Ok(Mount::Bind {
             target: target.to_owned(),
             source: source.to_owned(),
             read_only,
             propagation: propagation.unwrap_or_default(),
-            // bind mounts will create the host path by default
+            // A bind mount creates the host path by default, however this is a problem
+            // in podman. Since all mounts are encoded in HostConfig.Binds, there is no way
+            // to tell if the user set `create_host_path: false` when creating  the container
             create_host_path: true,
         })
     }
@@ -3160,5 +3177,107 @@ mod tests {
 
         let result: Result<LocalContainer> = inspect_with_binds(vec!["/source:"]).try_into();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn inspect_reads_named_volume_binds_as_volume_mounts() {
+        // Podman reports every mount through `HostConfig.Binds`, including
+        // named volumes. A source that isn't an absolute path names a volume,
+        // so it must not be read back as a bind mount.
+        // Spec string as reported by podman 6.1.2 for a named volume created
+        // through `HostConfig.Mounts`.
+        let c: LocalContainer =
+            inspect_with_binds(vec!["vol-one:/one:rprivate,nosuid,nodev,rbind"])
+                .try_into()
+                .unwrap();
+        assert_eq!(
+            c.config.volumes[0],
+            Mount::Volume {
+                target: "/one".to_string(),
+                source: "vol-one".to_string(),
+                read_only: false,
+                nocopy: false,
+                subpath: None,
+            }
+        );
+    }
+
+    #[test]
+    fn inspect_reads_podman_bind_propagation() {
+        // podman encodes propagation into the bind spec, with the option order
+        // varying by whether BindOptions was set at create time.
+        for (spec, expected) in [
+            ("/etc:/data:bind,private", BindPropagation::Private),
+            ("/etc:/data:rprivate,rbind", BindPropagation::Rprivate),
+            ("/etc:/data:shared,bind", BindPropagation::Shared),
+        ] {
+            let c: LocalContainer = inspect_with_binds(vec![spec]).try_into().unwrap();
+            match &c.config.volumes[0] {
+                Mount::Bind { propagation, .. } => assert_eq!(*propagation, expected, "{spec}"),
+                other => panic!("{spec} parsed as {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn inspect_reads_volume_spec_options() {
+        let c: LocalContainer = inspect_with_binds(vec!["vol-one:/one:ro,nocopy"])
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            c.config.volumes[0],
+            Mount::Volume {
+                target: "/one".to_string(),
+                source: "vol-one".to_string(),
+                read_only: true,
+                nocopy: true,
+                subpath: None,
+            }
+        );
+    }
+
+    #[test]
+    fn named_volume_reads_identically_from_binds_and_mounts() {
+        // The same volume must produce the same config whether the engine
+        // reports it under `HostConfig.Mounts` (docker) or `HostConfig.Binds`
+        // (podman), or `start` sees a spurious config mismatch and loops
+        // recreating the container.
+        let from_mounts: LocalContainer = inspect_with_mounts(vec![vol_mount("/one", "vol-one")])
+            .try_into()
+            .unwrap();
+        let from_binds: LocalContainer =
+            inspect_with_binds(vec!["vol-one:/one:rprivate,nosuid,nodev,rbind"])
+                .try_into()
+                .unwrap();
+        assert_eq!(from_mounts.config.volumes, from_binds.config.volumes);
+        assert_eq!(
+            serde_json::to_value(&from_binds.config.volumes).unwrap(),
+            serde_json::json!([{"type": "volume", "source": "vol-one", "target": "/one"}]),
+        );
+    }
+
+    #[test]
+    fn inspect_reads_mixed_volume_and_bind_specs() {
+        let c: LocalContainer = inspect_with_binds(vec![
+            "vol-one:/one:rw,rprivate",
+            "/host/path:/two:ro",
+            "./relative:/three",
+        ])
+        .try_into()
+        .unwrap();
+        let kinds: Vec<&str> = c
+            .config
+            .volumes
+            .iter()
+            .map(|m| match m {
+                Mount::Volume { .. } => "volume",
+                Mount::Bind { .. } => "bind",
+                _ => "other",
+            })
+            .collect();
+        // Sorted by target: /one, /three, /two. A relative source is not a host
+        // path, so it is treated as a volume name like any other non-absolute
+        // source.
+        assert_eq!(kinds, vec!["volume", "volume", "bind"]);
     }
 }
