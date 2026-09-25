@@ -1,4 +1,35 @@
 - commits:
+    - subject: Store container volumes in a BTreeSet to ensure stable order
+      hash: 9c63e32251f0f2fdac2ce535ea81eb9a5f4001b7
+      body: |
+        This removes the need for sorting on insert.
+
+        This fixes a bug for a container with volumes, because of the additon of
+        the lock directory bind mount on `Device::add_runtime_context`, the sort
+        order is no longer preserved which would lead to a apply loop.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Parse Volumes from HostConfig.Binds
+      hash: 269a9016d909a4d20a25e8ace6750769f61273f1
+      body: >
+        Podman reports both bind mounts and volumes as part of
+        `HostConfig.Binds` on its
+
+        docker compat API. This updates container processing to manage that
+
+        scenario.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.10
+  title: ""
+  date: 2026-09-25T23:22:26.866Z
+- commits:
     - subject: Allow bind mounts on `/tmp`
       hash: 0322c27e832c40c9269fa5839f7e3b686c85c1d6
       body: >
