@@ -136,16 +136,18 @@ pub struct RejectedApp {
     pub reason: String,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum App {
     User(UserApp),
-    Host(HostApp),
+    Host(HostRelease),
     Rejected(RejectedApp),
 }
 
 /// Outcome of `parse_app` — either an accepted `App`, a per-app rejection
 /// keyed by a specific release uuid, or a fatal device-level error that
 /// should abort the whole `AppMap` deserialization.
+#[derive(Debug)]
 enum ParseAppError {
     Reject(RejectedApp),
     Fatal(String),
@@ -213,13 +215,47 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         ));
     };
 
-    let Some(svc) = release.services.into_values().find(|svc| {
-        svc.composition
+    let mut hostapp_svc: Option<(String, Service)> = None;
+    let mut overlays: Vec<HostAppOverlay> = Vec::new();
+    for (svc_name, svc) in release.services.into_iter() {
+        match svc
+            .composition
             .labels
             .get("io.balena.image.class")
-            .filter(|value| *value == "hostapp")
-            .is_some()
-    }) else {
+            .map(String::as_str)
+        {
+            Some("hostapp") => hostapp_svc = Some((svc_name, svc)),
+            // The `io.balena.update.requires-reboot` label is reserved in the
+            // extension contract for future runtime-activated extensions. No
+            // such mechanism exists (mobynit applies overlays at boot only),
+            // so every overlay is treated as reboot-activated and the label
+            // is not read.
+            Some("overlay") => {
+                // The activation image's command is inert only under the
+                // extension runtime, so a composition naming none would fail
+                // at every deploy. Refuse it here, where the reason is legible.
+                let Some(runtime) = svc.composition.runtime else {
+                    return Err(ParseAppError::Reject(RejectedApp {
+                        id: app.id,
+                        name: app.name,
+                        is_host: app.is_host,
+                        release: release_uuid,
+                        reason: format!(
+                            "overlay service '{svc_name}' should name the runtime it runs under"
+                        ),
+                    }));
+                };
+                overlays.push(HostAppOverlay {
+                    name: svc_name,
+                    image: svc.image,
+                    runtime,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let Some((_, svc)) = hostapp_svc else {
         return Err(ParseAppError::Reject(RejectedApp {
             id: app.id,
             name: app.name,
@@ -271,20 +307,38 @@ fn parse_app(value: Value) -> Result<App, ParseAppError> {
         }));
     };
 
-    Ok(App::Host(HostApp {
+    Ok(App::Host(HostRelease {
         release_uuid,
-        image: svc.image,
-        board_rev,
-        updater,
+        hostapp: HostApp {
+            image: svc.image,
+            board_rev,
+            updater,
+        },
+        overlays,
     }))
 }
 
+/// Target host OS release as defined by the remote backend
+#[derive(Debug)]
+pub struct HostRelease {
+    pub release_uuid: Uuid,
+    pub hostapp: HostApp,
+    pub overlays: Vec<HostAppOverlay>,
+}
+
+/// The rootfs component of a host OS release
 #[derive(Debug)]
 pub struct HostApp {
-    pub release_uuid: Uuid,
     pub image: ImageUri,
     pub board_rev: String,
     pub updater: ImageUri,
+}
+
+#[derive(Debug)]
+pub struct HostAppOverlay {
+    pub name: String,
+    pub image: ImageUri,
+    pub runtime: String,
 }
 
 /// Target app as defined by the remote backend
@@ -1228,6 +1282,7 @@ mod tests {
                                     "io.balena.private.updater": "registry2.balena-staging.com/v2/68ff092bda139454aabb0ee7a35b5b77@sha256:bf179e26ac91ed7b6723473a1bf239726225def236e9bdbac20350a3e8fe4778"
                                 },
                                 "composition": {
+                                    "runtime": "extension",
                                     "image": "registry2.balena-staging.com/v2/4e43af0b349df81da7fd9bbd0a44b4b7@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
                                     "labels": {
                                         "io.balena.image.class": "overlay",
@@ -1289,6 +1344,7 @@ mod tests {
                                     "io.balena.private.updater": "registry2.balena-staging.com/v2/68ff092bda139454aabb0ee7a35b5b77@sha256:bf179e26ac91ed7b6723473a1bf239726225def236e9bdbac20350a3e8fe4778"
                                 },
                                 "composition": {
+                                    "runtime": "extension",
                                     "image": "registry2.balena-staging.com/v2/4e43af0b349df81da7fd9bbd0a44b4b7@sha256:15ba8034fbffcd3fcbc1e1122a4c5d7cd28e4b99d72cfe5a1a44b0f9d9e2ff90",
                                     "labels": {
                                         "io.balena.image.class": "overlay",
@@ -1332,9 +1388,9 @@ mod tests {
             .get(&"ea8013b1a82540b59bc8b109b45739ab".into())
             .unwrap();
 
-        if let App::Host(hostapp) = app {
+        if let App::Host(release) = app {
             assert_eq!(
-                hostapp.release_uuid,
+                release.release_uuid,
                 "c8b48659434e80a8b3adc0c5ad1e347a".into()
             );
         } else if let App::Rejected(rejected_app) = app {
@@ -1494,6 +1550,145 @@ mod tests {
             err.to_string(),
             "service 'my-service' refers to undefined volume missing"
         );
+    }
+
+    #[test]
+    fn parses_and_sorts_hostapp_overlay_services() {
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": "registry2.balena-cloud.com/v2/aabbccddeeff00112233445566778899@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "labels": {},
+                    "composition": { "runtime": "extension", "labels": {
+                        "io.balena.image.class": "overlay",
+                        "io.balena.update.requires-reboot": "1"
+                    }}
+                },
+                "a-modules": {
+                    "id": 203,
+                    "image": "registry2.balena-cloud.com/v2/00112233445566778899aabbccddeeff@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "labels": {},
+                    "composition": { "runtime": "extension", "labels": {
+                        "io.balena.image.class": "overlay"
+                    }}
+                }
+            }}}
+        });
+        let app = parse_app(value).unwrap();
+        let App::Host(release) = app else {
+            panic!("expected hostapp")
+        };
+        // Order is not part of the contract: the state model keys overlays by
+        // name, so only the set matters.
+        let mut names: Vec<&str> = release.overlays.iter().map(|o| o.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["a-modules", "kernel-modules"]);
+    }
+
+    #[test]
+    fn parses_the_runtime_an_overlay_service_asks_for() {
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                },
+                "kernel-modules": {
+                    "id": 202,
+                    "image": "registry2.balena-cloud.com/v2/aabbccddeeff00112233445566778899@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "labels": {},
+                    "composition": {
+                        "runtime": "foo",
+                        "labels": { "io.balena.image.class": "overlay" }
+                    }
+                }
+            }}}
+        });
+        let App::Host(release) = parse_app(value).unwrap() else {
+            panic!("expected hostapp")
+        };
+        assert_eq!(release.overlays[0].runtime, "foo");
+    }
+
+    #[test]
+    fn rejects_an_overlay_service_that_names_no_runtime() {
+        // The activation container only runs under the extension runtime, so
+        // a release that leaves it out can never deploy. Rejecting it here
+        // reports the omission instead of an activation failure on the device.
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                },
+                "a-modules": {
+                    "id": 203,
+                    "image": "registry2.balena-cloud.com/v2/00112233445566778899aabbccddeeff@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "labels": {},
+                    "composition": { "labels": {
+                        "io.balena.image.class": "overlay"
+                    }}
+                }
+            }}}
+        });
+        let Err(ParseAppError::Reject(rejected)) = parse_app(value) else {
+            panic!("expected a rejection")
+        };
+        assert_eq!(rejected.release, Uuid::from("rel-1"));
+        assert_eq!(
+            rejected.reason,
+            "overlay service 'a-modules' should name the runtime it runs under"
+        );
+    }
+
+    #[test]
+    fn parses_a_hostapp_release_without_overlays() {
+        // Every hostapp release built before overlays existed carries the
+        // hostapp service alone. That payload stays valid: it parses to a
+        // release with no overlays, never a rejection.
+        let value = json!({
+            "id": 200, "name": "generic-aarch64", "is_host": true,
+            "releases": { "rel-1": { "services": {
+                "hostapp": {
+                    "id": 201,
+                    "image": "registry2.balena-cloud.com/v2/8a961e0325a37441f33091743fa40a4c@sha256:0f3169ee8672222eb775b032cb3b2d06ef8eafa23a970643052bb67ac1fc5cd9",
+                    "labels": { "io.balena.private.updater": "registry2.balena-cloud.com/v2/1ccec8773ae44f99ffd90e037820cb3f@sha256:18ed4befff5fe0267bfa7cce5823b80fb00f6ab6a1f476c899ed32b1ac40f110" },
+                    "composition": { "labels": {
+                        "io.balena.image.class": "hostapp",
+                        "io.balena.private.hostapp.board-rev": "rev-1"
+                    }}
+                }
+            }}}
+        });
+        let app = parse_app(value).unwrap();
+        let App::Host(release) = app else {
+            panic!("expected hostapp")
+        };
+        assert_eq!(release.hostapp.board_rev, "rev-1");
+        assert!(release.overlays.is_empty());
     }
 
     #[test]

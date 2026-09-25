@@ -257,3 +257,16 @@ async fn test_systemd_stop_running_unit() {
     // The original run should complete (possibly with an error since it was stopped)
     handle.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn test_systemd_unit_status_reads_a_registered_unit() {
+    before();
+    let status = systemd::unit_status("rollback-health")
+        .await
+        .expect("querying a registered unit should succeed");
+    assert_ne!(
+        status,
+        systemd::UnitStatus::Absent,
+        "a unit registered with the mock must not report as absent"
+    );
+}

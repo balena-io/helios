@@ -234,7 +234,9 @@ fn take_locks(
                     .strip_prefix(host_runtime_dir.as_path())
                     .ok()?;
                 Some((
-                    runtime_dir().join(suffix).join("updates.lock"),
+                    runtime_dir()
+                        .join(suffix)
+                        .join(helios_util::locking::UPDATE_LOCK_FILENAME),
                     svc_name.clone(),
                 ))
             })

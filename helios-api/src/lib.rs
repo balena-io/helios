@@ -20,7 +20,7 @@ use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::{
     Level, Span,
     field::{Empty, display},
-    info, info_span, instrument,
+    info, info_span, instrument, warn,
 };
 
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
@@ -173,16 +173,23 @@ pub async fn start(
 ///
 /// This will trigger a fetch and an update to the API
 async fn trigger_poll(poll_request_tx: Sender<PollRequest>, body: Bytes) -> StatusCode {
-    let request = if body.is_empty() {
-        // Empty payload, use defaults
-        PollRequest::default()
+    // An empty payload means an empty object
+    let body = if body.is_empty() {
+        Bytes::from_static(b"{}")
     } else {
-        let opts = serde_json::from_slice::<UpdateOpts>(&body).unwrap_or_default();
-
-        // Create a poll request with reemit: true to tell the main loop
-        // to re-apply the target even if it was modified
-        PollRequest { opts, reemit: true }
+        body
     };
+
+    let opts = match serde_json::from_slice::<UpdateOpts>(&body) {
+        Ok(opts) => opts,
+        Err(e) => {
+            warn!("rejecting malformed update request: {e}");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    // Re-apply even if the target did not change
+    let request = PollRequest { opts, reemit: true };
 
     if poll_request_tx.send(request).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE;
@@ -343,7 +350,7 @@ mod tests {
         assert!(poll_rx.changed().await.is_ok());
         let poll_request = poll_rx.borrow().clone();
         assert!(!poll_request.opts.force);
-        assert!(poll_request.opts.cancel); // Default is true
+        assert!(!poll_request.opts.cancel); // An empty body means no options
         assert!(poll_request.reemit); // The state should be reemited by default
     }
 
@@ -365,8 +372,47 @@ mod tests {
         assert!(poll_rx.changed().await.is_ok());
         let poll_request = poll_rx.borrow().clone();
         assert!(poll_request.opts.force);
-        assert!(!poll_request.opts.cancel); // API default via serde is false
+        // A forced request also cancels, so it reaches a running apply
+        assert!(poll_request.opts.cancel);
         assert!(poll_request.reemit);
+    }
+
+    #[tokio::test]
+    async fn test_v1_update_forced_without_cancel() {
+        let (port, mut poll_rx, _) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let body = json!({"force": true, "cancel": false});
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v1/update"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(poll_rx.changed().await.is_ok());
+        let poll_request = poll_rx.borrow().clone();
+        assert!(poll_request.opts.force);
+        // An explicit cancel wins over force
+        assert!(!poll_request.opts.cancel);
+    }
+
+    #[tokio::test]
+    async fn test_v1_update_malformed_body() {
+        let (port, _, _) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v1/update"))
+            .header("content-type", "application/json")
+            .body("{\"force\":")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 400);
     }
 
     #[tokio::test]
@@ -420,6 +466,8 @@ mod tests {
         assert!(seek_rx.changed().await.is_ok());
         let seek_request = seek_rx.borrow().clone();
         assert!(seek_request.opts.force);
+        // Force implies cancel, same as in a body
+        assert!(seek_request.opts.cancel);
         if let TargetState::Local {
             target: local_target,
         } = seek_request.target
@@ -428,5 +476,29 @@ mod tests {
         } else {
             panic!("expected local target");
         }
+    }
+
+    #[tokio::test]
+    async fn test_set_app_forced_without_cancel() {
+        let (port, _, mut seek_rx) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let app_uuid = Uuid::default();
+        let target_app = json!({"id": 0, "name": "my-app"});
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{port}/v3/device/apps/{app_uuid}?force=true&cancel=false",
+            ))
+            .json(&target_app)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 202);
+
+        assert!(seek_rx.changed().await.is_ok());
+        let seek_request = seek_rx.borrow().clone();
+        assert!(seek_request.opts.force);
+        assert!(!seek_request.opts.cancel);
     }
 }

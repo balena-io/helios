@@ -65,6 +65,29 @@ async fn get_or_create_app<'a>(
     Ok(apps.get_mut(app_uuid).expect("app was just inserted"))
 }
 
+/// What [`read`] needs to rebuild the device state from the engine and the
+/// store, bundled so callers can re-read without threading the arguments
+/// through.
+#[derive(Clone)]
+pub(crate) struct StateReader {
+    pub docker: Docker,
+    pub local_store: DocumentStore,
+    pub uuid: Uuid,
+    pub os: Option<OperatingSystem>,
+}
+
+impl StateReader {
+    pub(crate) async fn read(&self) -> Result<Device, Error> {
+        read(
+            &self.docker,
+            &self.local_store,
+            self.uuid.clone(),
+            self.os.clone(),
+        )
+        .await
+    }
+}
+
 /// Read the state of system
 #[instrument(name = "read_state", level = "trace", skip_all, err)]
 pub async fn read(
@@ -81,7 +104,7 @@ pub async fn read(
     // Read the hostapp information from the local store
     #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
-        crate::balenahup::read::from_store(host, local_store).await?;
+        crate::balenahup::read::from_store(host, docker, local_store).await?;
     }
 
     // Read the state of images

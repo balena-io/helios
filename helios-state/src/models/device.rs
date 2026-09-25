@@ -61,6 +61,20 @@ impl Device {
 }
 
 impl DeviceTarget {
+    /// Refuse the parts of the target this device cannot run, and say why.
+    ///
+    /// Runs before planning: a target with no runtime for it is bad input.
+    /// Contract checks belong here once service targets carry a runtime.
+    pub fn test_runtime_support(&mut self, device: &Device) -> Vec<String> {
+        #[cfg(feature = "balenahup")]
+        if let (Some(host_tgt), Some(host)) = (self.host.as_mut(), device.host.as_ref()) {
+            return crate::balenahup::reject_unsupported_releases(host_tgt, host);
+        }
+        #[cfg(not(feature = "balenahup"))]
+        let _ = device;
+        Vec::new()
+    }
+
     /// Adds system runtime related context  to the target state
     ///
     /// Because this context is added in in the target state, if modified externally (e.g through a
