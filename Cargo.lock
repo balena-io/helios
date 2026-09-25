@@ -1027,6 +1027,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "getrandom 0.4.3",
+ "json-patch",
  "libc",
  "mahler",
  "mockito",

@@ -18,6 +18,7 @@ axum.workspace = true
 dirs.workspace = true
 fastrand.workspace = true
 getrandom.workspace = true
+json-patch.workspace = true
 mahler.workspace = true
 regex.workspace = true
 reqwest.workspace = true
