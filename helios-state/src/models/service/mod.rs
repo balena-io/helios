@@ -227,6 +227,9 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteNetworkMode::None => NetworkMode::None,
             RemoteNetworkMode::Host => NetworkMode::Host,
             RemoteNetworkMode::Bridge => NetworkMode::Other("bridge".to_string()),
+            // kept as the service name here, `into_oci_config` resolves it to the
+            // container the release gave that service
+            RemoteNetworkMode::Service(name) => NetworkMode::Service(name),
         });
 
         // Convert the service mounts. Collecting into a `BTreeSet` canonicalizes

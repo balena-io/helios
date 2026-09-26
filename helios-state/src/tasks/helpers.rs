@@ -5,7 +5,7 @@ use crate::models::{
     Container, ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health,
     ImageRef, Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
 };
-use crate::oci::Mount;
+use crate::oci::{Mount, NetworkMode};
 
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
@@ -182,6 +182,36 @@ pub fn any_dependency_failed(
     )
 }
 
+/// The services of the release that reach the given service's container through
+/// their network namespace, directly or through another service.
+pub fn services_joining_namespace<'a>(
+    device: &'a Device,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+    svc_name: &'a str,
+) -> Vec<&'a String> {
+    let Some(services) = release_services(device, app_uuid, rel_uuid) else {
+        return Vec::new();
+    };
+
+    // a service joining a dependent joins the same namespace, and the release is
+    // validated as acyclic so the walk terminates
+    let mut found: Vec<&'a String> = Vec::new();
+    let mut targets = vec![svc_name];
+    while let Some(target) = targets.pop() {
+        for (name, svc) in services.iter() {
+            if matches!(&svc.config.network_mode, Some(NetworkMode::Service(joined)) if joined == target)
+                && !found.contains(&name)
+            {
+                found.push(name);
+                targets.push(name.as_str());
+            }
+        }
+    }
+
+    found
+}
+
 /// Find a new network for a different commit
 pub fn find_future_network<'a>(
     t_device: &'a DeviceTarget,
@@ -287,10 +317,10 @@ pub fn find_future_service<'a>(
     })
 }
 
-/// Check that every volume and network referenced by the service has matching
-/// configuration in the target release. If a linked resource changes config
-/// across releases the service cannot be migrated state-only — its container
-/// must be recreated against the new resource.
+/// Check that the resources the service is linked to allow it to move to the
+/// target release with its container intact. A volume or network whose config
+/// changes across releases, or a namespace joined from another service, means
+/// the container has to be recreated against the new resource instead.
 fn linked_resources_can_migrate(
     device: &Device,
     t_device: &DeviceTarget,
@@ -329,7 +359,13 @@ fn linked_resources_can_migrate(
         }
     });
 
-    volumes_ok && networks_ok
+    // Migrating renames the container. A joiner may hold that name rather than an
+    // id, as the engine only resolves the reference when the target exists at
+    // create, so the rename leaves it pointing at nothing.
+    let namespace_ok =
+        rel_uuid == t_rel_uuid || !matches!(cfg.network_mode, Some(NetworkMode::Service(_)));
+
+    volumes_ok && networks_ok && namespace_ok
 }
 
 /// Check whether the current service can be migrated to the given target
@@ -476,6 +512,124 @@ mod tests {
         fields.insert("name".into(), json!("c"));
         fields.insert("created".into(), json!("2026-02-11T15:03:43Z"));
         svc(json!({"id": 1, "image": "alpine:latest", "config": {}, "oci": oci}))
+    }
+
+    /// A device with one release holding the given services.
+    fn device_with_release(rel: &str, services: serde_json::Value) -> Device {
+        serde_json::from_value(json!({
+            "uuid": "device-uuid",
+            "apps": {"app-uuid": {"id": 1, "name": "app", "releases": {
+                rel: {"installed": true, "services": services}
+            }}}
+        }))
+        .unwrap()
+    }
+
+    fn target_with_release(rel: &str, services: serde_json::Value) -> DeviceTarget {
+        serde_json::from_value(json!({
+            "uuid": "device-uuid",
+            "apps": {"app-uuid": {"id": 1, "name": "app", "releases": {
+                rel: {"installed": true, "services": services}
+            }}}
+        }))
+        .unwrap()
+    }
+
+    /// Whether `web` can move to the target release with its container intact.
+    fn web_matches_across(from: &str, to: &str, network_mode: Option<&str>) -> bool {
+        let config = json!({"network_mode": network_mode});
+        let services = json!({
+            "db": {"id": 2, "image": "alpine:latest", "started": true, "config": {}},
+            "web": {"id": 1, "image": "alpine:latest", "started": true, "config": config},
+        });
+        let device = device_with_release(from, services.clone());
+        let t_device = target_with_release(to, services);
+
+        let svc = device
+            .apps
+            .get(&Uuid::from("app-uuid"))
+            .and_then(|app| app.releases.get(&Uuid::from(from)))
+            .and_then(|rel| rel.services.get("web"))
+            .unwrap();
+        let t_svc = target_release_services(&t_device, &"app-uuid".into(), &to.into())
+            .and_then(|svcs| svcs.get("web"))
+            .unwrap();
+
+        service_matches_target(
+            &device,
+            &t_device,
+            &"app-uuid".into(),
+            &from.into(),
+            svc,
+            &to.into(),
+            t_svc,
+        )
+    }
+
+    #[test]
+    fn a_namespace_joiner_cannot_migrate_to_another_release() {
+        // migrating renames the container, leaving the reference dangling
+        assert!(!web_matches_across(
+            "old-rel",
+            "new-rel",
+            Some("service:db")
+        ));
+    }
+
+    #[test]
+    fn a_namespace_joiner_still_matches_within_its_release() {
+        assert!(web_matches_across(
+            "rel-uuid",
+            "rel-uuid",
+            Some("service:db")
+        ));
+    }
+
+    #[test]
+    fn a_service_joining_no_namespace_migrates_across_releases() {
+        assert!(web_matches_across("old-rel", "new-rel", None));
+    }
+
+    /// A service joining `dep`'s network namespace, or none.
+    fn joining(dep: Option<&str>) -> serde_json::Value {
+        let network_mode = dep.map(|name| json!(format!("service:{name}")));
+        json!({"id": 1, "image": "alpine:latest", "config": {"network_mode": network_mode}})
+    }
+
+    fn joining_namespace_of(device: &Device, svc_name: &str) -> Vec<String> {
+        services_joining_namespace(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn finds_the_services_joining_a_namespace() {
+        let device = device_with(json!({
+            "db": joining(None),
+            "web": joining(Some("db")),
+            "other": joining(None),
+        }));
+        assert_eq!(joining_namespace_of(&device, "db"), vec!["web".to_string()]);
+    }
+
+    #[test]
+    fn follows_a_chain_of_joined_namespaces() {
+        // 'log' reaches 'db' through 'web', so it loses its namespace too
+        let device = device_with(json!({
+            "db": joining(None),
+            "web": joining(Some("db")),
+            "log": joining(Some("web")),
+        }));
+        let mut found = joining_namespace_of(&device, "db");
+        found.sort();
+        assert_eq!(found, vec!["log".to_string(), "web".to_string()]);
+    }
+
+    #[test]
+    fn finds_nothing_for_a_namespace_no_one_joined() {
+        let device = device_with(json!({"db": joining(None), "web": joining(None)}));
+        assert!(joining_namespace_of(&device, "db").is_empty());
     }
 
     /// Build a `depends_on` of `condition` entries with the given

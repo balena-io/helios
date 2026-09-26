@@ -467,16 +467,15 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.sysctls.take())
             .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
-        // Only recognize `none`/`host` from host_config: for user networks Docker also
-        // populates `network_mode` with the first network name, which would otherwise
-        // be misread as a NetworkMode::Other passthrough. `Other(..)` target-state modes
-        // won't round-trip through inspect — the container will be recreated on mismatch.
+        // Only the modes that displace user networks. For a user network the
+        // engine puts the network name here instead, and a name cannot hold a colon.
         let network_mode = host_config
             .as_mut()
             .and_then(|hc| hc.network_mode.take())
-            .and_then(|m| match m.as_str() {
-                "none" => Some(NetworkMode::None),
-                "host" => Some(NetworkMode::Host),
+            .and_then(|m| match NetworkMode::from(m) {
+                mode @ (NetworkMode::None | NetworkMode::Host | NetworkMode::Container(_)) => {
+                    Some(mode)
+                }
                 _ => None,
             });
         let privileged = host_config
@@ -1034,25 +1033,62 @@ impl From<NetworkSettings> for EndpointSettings {
 
 /// Container-level network mode. Mirrors the compose `network_mode` setting.
 ///
-/// `None` and `Host` are recognized explicitly; `Other(..)` passes platform-specific
-/// modes through to the engine.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+/// `None` and `Host` are recognized explicitly and `Container` joins another
+/// container's network namespace by name or id. `Service` names a service, which
+/// is resolved to a `Container` before the config reaches the engine. `Other`
+/// passes platform specific modes through untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkMode {
     None,
     Host,
-    #[serde(untagged)]
+    Container(String),
+    Service(String),
     Other(String),
 }
 
 impl std::fmt::Display for NetworkMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NetworkMode::None => "none",
-            NetworkMode::Host => "host",
-            NetworkMode::Other(s) => s,
+            NetworkMode::None => f.write_str("none"),
+            NetworkMode::Host => f.write_str("host"),
+            NetworkMode::Container(id) => write!(f, "container:{id}"),
+            NetworkMode::Service(name) => write!(f, "service:{name}"),
+            NetworkMode::Other(s) => f.write_str(s),
         }
-        .fmt(f)
+    }
+}
+
+impl From<String> for NetworkMode {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "none" => NetworkMode::None,
+            "host" => NetworkMode::Host,
+            _ => match value.split_once(':') {
+                Some(("container", id)) if !id.is_empty() => NetworkMode::Container(id.to_owned()),
+                Some(("service", name)) if !name.is_empty() => {
+                    NetworkMode::Service(name.to_owned())
+                }
+                _ => NetworkMode::Other(value),
+            },
+        }
+    }
+}
+
+// serialized as the compose string form, so a mode reads the same wherever it appears
+impl Serialize for NetworkMode {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkMode {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(NetworkMode::from)
     }
 }
 
@@ -1888,6 +1924,35 @@ impl<N: Namespace> LocalContainer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_identifier_is_not_a_namespace_mode() {
+        assert_eq!(
+            NetworkMode::from("container:".to_string()),
+            NetworkMode::Other("container:".to_string())
+        );
+        assert_eq!(
+            NetworkMode::from("service:".to_string()),
+            NetworkMode::Other("service:".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_the_namespace_modes() {
+        assert_eq!(
+            NetworkMode::from("container:abc".to_string()),
+            NetworkMode::Container("abc".to_string())
+        );
+        assert_eq!(
+            NetworkMode::from("service:db".to_string()),
+            NetworkMode::Service("db".to_string())
+        );
+        assert_eq!(NetworkMode::from("host".to_string()), NetworkMode::Host);
+        assert_eq!(
+            NetworkMode::from("bridge".to_string()),
+            NetworkMode::Other("bridge".to_string())
+        );
+    }
     use bollard::models::{HostConfig, Mount as EngineMount};
     use pretty_assertions::assert_eq;
 
