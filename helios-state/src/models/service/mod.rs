@@ -289,13 +289,10 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             depends_on,
             config: ServiceConfig(ContainerConfig {
                 annotations: composition.annotations.into(),
-                cgroup: composition
-                    .cgroup
-                    .map(|c| match c {
-                        RemoteCgroup::Host => Cgroup::Host,
-                        RemoteCgroup::Private => Cgroup::Private,
-                    })
-                    .unwrap_or_default(),
+                cgroup: composition.cgroup.map(|c| match c {
+                    RemoteCgroup::Host => Cgroup::Host,
+                    RemoteCgroup::Private => Cgroup::Private,
+                }),
                 cgroup_parent: composition.cgroup_parent,
                 command,
                 cpuset: composition.cpuset,
