@@ -21,6 +21,7 @@ use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
+use crate::util::json;
 use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 
 use super::helpers::{
@@ -381,15 +382,18 @@ fn finish_release(
 ) -> IO<Release, store::Error> {
     enforce!(
         !any_service_differs(&rel, &t_rel),
-        "all services should have the correct configuration"
+        "all services should have the correct configuration, diff: {}",
+        json::map_diff(&rel.services, &t_rel.services)
     );
     enforce!(
         !any_network_differs(&rel, &t_rel),
-        "all networks should have the correct configuration"
+        "all networks should have the correct configuration, diff: {}",
+        json::map_diff(&rel.networks, &t_rel.networks)
     );
     enforce!(
         !any_volume_differs(&rel, &t_rel),
-        "all volumes should have the correct configuration"
+        "all volumes should have the correct configuration, diff: {}",
+        json::map_diff(&rel.volumes, &t_rel.volumes)
     );
 
     rel.installed = true;
@@ -1027,7 +1031,8 @@ fn start_service(
     // need to loop again to re-create the container
     enforce!(
         svc.config == tgt_svc.config,
-        "service configuration should match the target before start",
+        "service configuration should match the target before start, diff: {}",
+        json::diff(&svc.config, &tgt_svc.config)
     );
 
     svc.started = true;
