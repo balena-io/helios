@@ -1,4 +1,33 @@
 - commits:
+    - subject: Show differences in cur/tgt state in start_service and finish_release
+      hash: 6f218b8a1a27ca25fc1cb8e9d31a9e500f0f0144
+      body: |
+        These tasks do a final comparison between current and target state
+        before completing. If they fail at runtime, it usually means some bug in
+        the state engine, but it is very hard to identify the issue without the
+        inspecting the differences.
+
+        The `error` trace now shows the diff, masking out sensitive information.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add field tracking for ulimits
+      hash: a804ededfa03c018e0118f251e9ea43fe2da2770
+      body: |
+        Podman (and maybe other engines), can add some default ulimits for
+        containers. This checks that the ulimit was created by helios to ensure
+        comparison works
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.26.11
+  title: ""
+  date: 2026-09-28T22:54:52.009Z
+- commits:
     - subject: Store container volumes in a BTreeSet to ensure stable order
       hash: 9c63e32251f0f2fdac2ce535ea81eb9a5f4001b7
       body: |
