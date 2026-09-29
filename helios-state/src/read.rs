@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use mahler::state::Map;
 use thiserror::Error;
 use tracing::instrument;
@@ -10,7 +12,8 @@ use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
 
 use super::models::{
-    App, Device, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID, Volume,
+    App, Device, LocalVolume, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
+    Volume,
 };
 
 #[derive(Debug, Error)]
@@ -293,7 +296,143 @@ pub async fn read(
         for local_volume in unsupervised {
             device.volumes.push(local_volume.into());
         }
+
+        // Look for any references to external volumes and add them to the app
+        link_external_volumes(&mut device.apps, &device.volumes);
     }
 
     Ok(device)
+}
+
+/// Look for unsupervised volume references in app services and record them as an external volume of
+/// the app release.
+///
+/// Volumes the release already knows about are kept.
+fn link_external_volumes(apps: &mut Map<Uuid, App>, device_volumes: &[LocalVolume]) {
+    let unsupervised: HashSet<&str> = device_volumes
+        .iter()
+        .map(|vol| vol.oci_name.as_str())
+        .collect();
+
+    for app in apps.values_mut() {
+        for release in app.releases.values_mut() {
+            let external: Vec<String> = release
+                .services
+                .values()
+                .flat_map(|svc| svc.config.volumes.iter())
+                .filter_map(|mount| match mount {
+                    oci::Mount::Volume { source, .. } => Some(source.as_str()),
+                    _ => None,
+                })
+                .filter(|source| unsupervised.contains(source))
+                .map(String::from)
+                .collect();
+
+            for vol_name in external {
+                release.volumes.entry(vol_name).or_insert(Volume::External);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// Apps of a device with a single release whose service mounts `mount_source`.
+    fn apps_mounting(mount_source: &str) -> Map<Uuid, App> {
+        serde_json::from_value(json!({
+            "my-app-uuid": {
+                "id": 1234,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {
+                            "my-service": {
+                                "id": 1,
+                                "image": "alpine:latest",
+                                "config": {
+                                    "volumes": [
+                                        {
+                                            "type": "volume",
+                                            "source": mount_source,
+                                            "target": "/data"
+                                        },
+                                        {
+                                            "type": "bind",
+                                            "source": "/proc",
+                                            "target": "/host/proc"
+                                        }
+                                    ]
+                                },
+                            },
+                        },
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn release_volumes(apps: &Map<Uuid, App>) -> &Map<String, Volume> {
+        &apps
+            .get(&Uuid::from("my-app-uuid"))
+            .unwrap()
+            .releases
+            .get(&Uuid::from("my-release-uuid"))
+            .unwrap()
+            .volumes
+    }
+
+    fn unsupervised(oci_name: &str) -> Vec<LocalVolume> {
+        serde_json::from_value(json!([{"oci_name": oci_name, "config": {"driver": "local"}}]))
+            .unwrap()
+    }
+
+    #[test]
+    fn links_an_unsupervised_volume_mounted_by_a_service() {
+        let mut apps = apps_mounting("1234_my-vol");
+
+        link_external_volumes(&mut apps, &unsupervised("1234_my-vol"));
+
+        assert_eq!(
+            release_volumes(&apps).get("1234_my-vol"),
+            Some(&Volume::External)
+        );
+    }
+
+    #[test]
+    fn leaves_a_release_without_unsupervised_mounts_alone() {
+        // the mount names a volume helios manages, which the volume read already
+        // recorded on the release
+        let mut apps = apps_mounting("my-vol");
+
+        link_external_volumes(&mut apps, &unsupervised("1234_other-vol"));
+
+        assert!(release_volumes(&apps).is_empty());
+    }
+
+    #[test]
+    fn does_not_replace_a_supervised_volume_of_the_same_name() {
+        // an unsupervised volume happens to be named like the app volume once the
+        // mount source is de-namespaced. The volume helios manages wins
+        let mut apps = apps_mounting("my-vol");
+        let volume: Volume =
+            serde_json::from_value(json!({"oci_name": "my-vol_my-app-uuid", "config": {}}))
+                .unwrap();
+        apps.get_mut(&Uuid::from("my-app-uuid"))
+            .unwrap()
+            .releases
+            .get_mut(&Uuid::from("my-release-uuid"))
+            .unwrap()
+            .volumes
+            .insert("my-vol".to_string(), volume.clone());
+
+        link_external_volumes(&mut apps, &unsupervised("my-vol"));
+
+        assert_eq!(release_volumes(&apps).get("my-vol"), Some(&volume));
+    }
 }
