@@ -296,6 +296,29 @@ pub fn find_installed_volume<'a>(
     })
 }
 
+/// Names of the volumes declared as external by a release in the target state
+///
+/// External volumes are not namespaced under the app, so mount sources pointing at them must be
+/// left untouched when building the container configuration.
+pub fn external_volume_names(
+    t_device: &DeviceTarget,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+) -> Vec<String> {
+    t_device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(commit))
+        .map(|rel| {
+            rel.volumes
+                .iter()
+                .filter(|(_, vol)| matches!(vol, VolumeTarget::External))
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Find an new service for a different commit
 pub fn find_future_service<'a>(
     t_device: &'a DeviceTarget,
@@ -902,5 +925,55 @@ mod tests {
                 &[("migrate", true)]
             )
         ));
+    }
+
+    fn target_with_volumes(volumes: serde_json::Value) -> DeviceTarget {
+        serde_json::from_value(json!({
+            "apps": {
+                "app-uuid": {
+                    "id": 1,
+                    "name": "app",
+                    "releases": {
+                        "rel-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": volumes,
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn external_volumes_lists_only_the_volumes_marked_external() {
+        let t_device = target_with_volumes(json!({
+            "managed": {"config": {"driver": "local"}},
+            "shared": {"external": true},
+            "other-shared": {"external": true},
+        }));
+
+        let mut names =
+            external_volume_names(&t_device, &Uuid::from("app-uuid"), &Uuid::from("rel-uuid"));
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["other-shared".to_string(), "shared".to_string()]
+        );
+    }
+
+    #[test]
+    fn external_volumes_is_empty_for_an_unknown_release() {
+        let t_device = target_with_volumes(json!({"shared": {"external": true}}));
+
+        assert!(
+            external_volume_names(&t_device, &Uuid::from("app-uuid"), &Uuid::from("other-rel"))
+                .is_empty()
+        );
+        assert!(
+            external_volume_names(&t_device, &Uuid::from("other-app"), &Uuid::from("rel-uuid"))
+                .is_empty()
+        );
     }
 }

@@ -27,10 +27,10 @@ use crate::util::locking::{self, ForceAcquireLocks, LockSet};
 use super::helpers::{
     ConditionEvaluator, DependsOnConditionOutcome, any_dependency_failed,
     any_images_are_pending_download, dependencies_satisfied, depends_on_condition_pending,
-    evaluate_completion, evaluate_health, find_future_network, find_future_service,
-    find_future_volume, find_installed_network, find_installed_service, find_installed_volume,
-    release_services, service_matches_target, services_joining_namespace, services_need_stopping,
-    target_release_services,
+    evaluate_completion, evaluate_health, external_volume_names, find_future_network,
+    find_future_service, find_future_volume, find_installed_network, find_installed_service,
+    find_installed_volume, release_services, service_matches_target, services_joining_namespace,
+    services_need_stopping, target_release_services,
 };
 use super::image::create_image;
 
@@ -909,11 +909,16 @@ fn install_service_when_requirements_are_met(
 fn install_service(
     mut svc: View<Service>,
     Target(tgt): Target<Service>,
+    SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
     store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
     enforce!(svc.oci.is_none(), "service container already exists");
+
+    // volumes the release declares as external live outside the app namespace,
+    // so their mount sources are used as-is when creating the container
+    let external_volumes = external_volume_names(&t_device, &app_uuid, &rel_uuid);
 
     // simulate a service install by creating a mock container
     // the mock will never be seen by users
@@ -933,6 +938,7 @@ fn install_service(
             &svc_name,
             &app_uuid,
             &svc.depends_on,
+            &external_volumes,
         );
 
         // Extract networks to connect later
