@@ -6,7 +6,7 @@ use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::image::Image;
-use super::volume::Volume;
+use super::volume::LocalVolume;
 
 #[cfg(feature = "balenahup")]
 use crate::balenahup::Host;
@@ -36,7 +36,7 @@ pub struct Device {
 
     /// List of unsupervised volumes on the device
     #[mahler(internal, default)]
-    pub volumes: List<Volume>,
+    pub volumes: List<LocalVolume>,
 }
 
 impl Default for DeviceTarget {

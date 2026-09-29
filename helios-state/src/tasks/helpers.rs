@@ -343,7 +343,7 @@ fn linked_resources_can_migrate(
             let cur = release.and_then(|r| r.volumes.get(source));
             let tgt = t_release.and_then(|r| r.volumes.get(source));
             match (cur, tgt) {
-                (Some(c), Some(t)) => c.config == t.config,
+                (Some(c), Some(t)) => c.matches(t),
                 _ => true,
             }
         }

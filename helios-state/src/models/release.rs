@@ -71,6 +71,7 @@ impl From<RemoteReleaseTarget> for ReleaseTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::VolumeTarget;
     use crate::remote_model;
 
     #[test]
@@ -93,8 +94,11 @@ mod tests {
         assert!(target.installed);
         assert!(target.volumes.contains_key("my-volume"));
         let vol = target.volumes.get("my-volume").unwrap();
-        assert_eq!(vol.config.driver.to_string(), "local");
-        assert_eq!(vol.config.driver_opts.get("o"), Some(&"bind".to_string()));
+        let VolumeTarget::Internal(config) = vol else {
+            panic!("expected an internal volume, got {vol:?}")
+        };
+        assert_eq!(config.driver.to_string(), "local");
+        assert_eq!(config.driver_opts.get("o"), Some(&"bind".to_string()));
     }
 
     #[test]

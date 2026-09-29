@@ -353,7 +353,7 @@ fn any_volume_differs(rel: &Release, tgt_rel: &ReleaseTarget) -> bool {
     tgt_rel.volumes.iter().any(|(name, tgt_vol)| {
         rel.volumes
             .get(name)
-            .is_none_or(|vol| vol.config != tgt_vol.config)
+            .is_none_or(|vol| !vol.matches(tgt_vol))
     })
 }
 
@@ -528,7 +528,7 @@ fn create_volume_when_requirements_are_met(
     // Do not create a new volume if there is an installed volume from a different release
     // as that volume needs to be removed first
     if let Some(cur_vol) = find_installed_volume(&device, &app_uuid, &rel_uuid, &vol_name)
-        && tgt.config != cur_vol.config
+        && !cur_vol.matches(&tgt)
     {
         return None;
     }
@@ -548,17 +548,19 @@ fn create_volume(
     Args((app_uuid, _, vol_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
 ) -> IO<Volume, Error> {
-    let vol = vol.create(Volume {
-        // use a mock name for planning only
-        oci_name: String::new(),
-        config: tgt.config,
-    });
+    // external volumes are only tracked in the state, they are managed outside of helios
+    let vol = vol.create(Volume::from(tgt));
 
     with_io(vol, async move |mut vol| {
+        // external volumes are not created by helios
+        let Volume::Internal(local) = &mut *vol else {
+            return Ok(vol);
+        };
+
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
-        let volume_config = std::mem::take(&mut vol.config).into_oci_config(&vol_name);
+        let volume_config = std::mem::take(&mut local.config).into_oci_config(&vol_name);
 
         // create the volume namespaced by app_uuid
         let volume_name = docker
@@ -587,7 +589,7 @@ fn reconfigure_volume(
     Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
-    if vol.config != tgt.config {
+    if !vol.matches(&tgt) {
         // set release.installed to false if a reconfiguration is needed
         if release_already_installed(&device, &app_uuid, &rel_uuid) {
             tasks.push(ensure_release_is_finalized.into_task());
@@ -599,14 +601,17 @@ fn reconfigure_volume(
 
 /// Uninstall a volume from Docker and the state tree
 fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>, Error> {
-    let docker_name = vol.oci_name.clone();
+    let oci_name = vol.oci_name().map(str::to_string);
     let vol = vol.delete();
 
     with_io(vol, async move |vol| {
-        let docker = docker
-            .as_ref()
-            .expect("docker resource should be available");
-        docker.volume().remove(&docker_name).await?;
+        // external volumes are not removed by helios
+        if let Some(oci_name) = oci_name {
+            let docker = docker
+                .as_ref()
+                .expect("docker resource should be available");
+            docker.volume().remove(&oci_name).await?;
+        }
         Ok(vol)
     })
 }
@@ -709,7 +714,7 @@ fn remove_volume_when_requirements_are_met(
     // for the new release to adopt.
     if let Some((t_rel_uuid, future_vol)) =
         find_future_volume(&t_device, &app_uuid, &rel_uuid, &vol_name)
-        && vol.config == future_vol.config
+        && vol.matches(future_vol)
     {
         let new_release_has_volume = device
             .apps
@@ -853,7 +858,7 @@ fn install_service_when_requirements_are_met(
                 release.and_then(|r| r.volumes.get(name)),
                 t_release.and_then(|r| r.volumes.get(name)),
             ),
-            (Some(vol), Some(t_vol)) if vol.config == t_vol.config,
+            (Some(vol), Some(t_vol)) if vol.matches(t_vol),
         )
     };
 
