@@ -1,4 +1,48 @@
 - commits:
+    - subject: Recreate the dependents of a replaced namespace target
+      hash: eb033dfabf603b5e77abd6a70f28ceee825cbfad
+      body: >
+        - reconfiguring a service now recreates the services that joined its
+        namespace,
+          directly or through another service
+        - a joiner no longer migrates to a release where the service it joined
+        is
+          replaced, since the container it points at is about to be removed
+        - a replaced container gets a new id, so the reference its dependents
+        hold
+          points at nothing until they are recreated too
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Christina Ying Wang
+      nested: []
+    - subject: Support network_mode service references
+      hash: a6dc443c058c5db78f810183270dd8b470db7abd
+      body: >
+        - a service can join another service's namespace with `network_mode:
+        service:{name}`,
+          resolved at create time to the container that release gave it
+        - it also becomes an implicit `depends_on`, as compose does, since the
+        engine
+          will not start a container whose namespace target is down
+        - install waits for that container to exist so the engine stores its id
+        rather
+          than its name, which keeps the reference good through a rename
+        - the release is rejected if the name is unknown or names the service
+        itself
+
+        - the mode is recorded in a label, without which anything but `none` and
+        `host`
+          recreates the container for ever, as `bridge` already did
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Christina Ying Wang
+      nested: []
+  version: 0.27.0
+  title: ""
+  date: 2026-09-30T03:29:34.073Z
+- commits:
     - subject: Show differences in cur/tgt state in start_service and finish_release
       hash: 6f218b8a1a27ca25fc1cb8e9d31a9e500f0f0144
       body: |
