@@ -17,4 +17,6 @@ pub use service::*;
 pub use volume::*;
 
 #[cfg(feature = "balenahup")]
-pub use crate::balenahup::{Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget};
+pub use crate::balenahup::{
+    Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget, Overlay, OverlayStatus,
+};

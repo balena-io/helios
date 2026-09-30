@@ -132,6 +132,75 @@ flowchart TD
     api <--> services
 ```
 
+## Host OS updates and extensions
+
+Beyond user applications, helios reconciles the host OS itself. A hostapp target
+release carries services distinguished by an `io.balena.image.class` label: the
+one labelled `hostapp` is the root filesystem, and each one labelled `overlay` is
+a hostapp extension, a container image that balenaOS layers into the root
+filesystem at boot. An extension can go as far as shipping the kernel the device
+boots.
+
+An overlay names the OCI runtime its activation container runs under in its
+composition (`runtime: extension`). The runtime is part of the extension
+contract, not a helios default: a release whose overlay omits it is rejected
+when the target is parsed, with the omission as the reason, rather than failing
+at the first deploy.
+
+Overlays are derived from what the engine actually holds, and their status comes from the container plus two facts about the boot:
+
+* the boot id, which the kernel regenerates every boot, stamped on the
+  container when helios deploys it and compared against the running one
+* the kernel identity the boot path published on the command line.
+
+| Status | Meaning |
+|---|---|
+| `Failed` | The activation container did not reach a clean `exited(0)`. The release is held at this image rather than retried. |
+| `Deployed` | Staged cleanly during the running boot, so it is waiting for the reboot that recomposes the root filesystem. |
+| `Stale` | Staged before this boot, but the kernel it claims is not the one running, so its arming never took effect. |
+| `Active` | Carried by the running root filesystem. |
+
+A container sitting in `Created` with no error yields no status at all, so a
+deploy interrupted between the create and start calls is retried instead of
+being read as a failure.
+
+The order within a release is a constraint. Every overlay the target asks for
+must be staged before the hostapp is installed, because the install cannot be
+undone and a release installed alongside a failing overlay would strand the
+device with no way forward.
+
+One reboot then activates the whole release.
+
+```mermaid
+flowchart LR
+    deploy[deploy overlays] --> ready{all staged}
+    ready --> |yes| install[install hostapp]
+    ready --> |no| hold[hold the release]
+    install --> reboot[one guarded reboot]
+    reboot --> validate[OS validates, may roll back]
+```
+
+Five conditions stop host work rather than retrying it:
+
+* a release that has exhausted its install attempts
+* an overlay that failed at the image the target still asks for
+* an overlay asking for a runtime the engine does not register
+* an engine whose runtimes could not be read at all, which is an unknown
+  rather than an absence and so declines with its own reason, and
+* an OS rollback validation in flight.
+
+  While the OS is validating a staged update, a helios-issued reboot is exactly
+  what triggers the rollback, so every host task defers until the window closes.
+
+Removing an overlay is a two-step operation for the same reason: the removal
+drops the container, and a separate reboot recomposes the root filesystem
+without it. The removal is the whole withdrawal, and it needs no cooperation
+from the OS. An extension the running root composes pins its own layer, so the
+engine flags the container `Dead` and reports the removal as failed; that is
+still every removal such a container can get, and the boot that recomposes the
+root is what unpins and collects it. Both reboots honour user update locks, and
+a forced update is what overrides them.
+
 ## Testing on a Balena device
 
 When installed on a balena device, the service will take over the running supervisor and become a proxy for requests between the legacy service and the balena API. For devices already running helios (on Supervisor v19 or above), draft releases can be used to test changes on a balenaOS device.
