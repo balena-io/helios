@@ -399,9 +399,10 @@ pub struct Release {
     pub networks: HashMap<String, Network>,
 }
 
-/// Turn every `network_mode: service:{name}` into an implicit `depends_on` entry
-/// on that service, as the engine refuses to start a container whose network
-/// namespace target is not running.
+/// Turn every `network_mode: service:{name}` into a `depends_on` entry on that
+/// service, as the engine refuses to start a container whose network namespace
+/// target is not running. An explicit entry keeps its condition, but is made
+/// `required` and `restart`.
 fn inject_network_mode_depends_on(services: &mut HashMap<String, Service>) -> Result<(), String> {
     let referenced: Vec<(String, String)> = services
         .iter()
@@ -425,12 +426,17 @@ fn inject_network_mode_depends_on(services: &mut HashMap<String, Service>) -> Re
             ));
         }
         if let Some(svc) = services.get_mut(&svc_name) {
-            // an explicit entry wins, even a weaker one, as compose does
+            // unlike compose, an explicit entry is made `required` and `restart`: the
+            // engine cannot start the service without the container and the service
+            // holds a reference to it, so their lifecycles are tied regardless of what
+            // is declared
             svc.composition
                 .depends_on
                 .entry(dep_name)
-                // the joining service holds a reference to the container, so it
-                // is re-created along with it
+                .and_modify(|dep| {
+                    dep.required = true;
+                    dep.restart = true;
+                })
                 .or_insert(LongFormDependsOn {
                     condition: DependsOnCondition::ServiceStarted,
                     restart: true,
@@ -603,26 +609,32 @@ mod tests {
             .expect("an implicit dependency on 'db'");
         assert_eq!(dep.condition, DependsOnCondition::ServiceStarted);
         assert!(dep.required);
+        assert!(dep.restart);
     }
 
     #[test]
-    fn network_mode_service_keeps_an_explicit_dependency() {
+    fn network_mode_service_makes_an_explicit_dependency_required_and_restart() {
         let release: Release = serde_json::from_value(json!({
             "services": {
                 "web": {"id": 1, "image": "alpine:latest",
                         "composition": {
                             "network_mode": "service:db",
-                            "depends_on": {"db": {"condition": "service_healthy"}}
+                            "depends_on": {"db": {
+                                "condition": "service_healthy",
+                                "required": false,
+                                "restart": false
+                            }}
                         }},
                 "db": {"id": 2, "image": "alpine:latest"}
             }
         }))
         .unwrap();
 
-        assert_eq!(
-            release.services["web"].composition.depends_on["db"].condition,
-            DependsOnCondition::ServiceHealthy
-        );
+        // the explicit condition is kept
+        let dep = &release.services["web"].composition.depends_on["db"];
+        assert_eq!(dep.condition, DependsOnCondition::ServiceHealthy);
+        assert!(dep.required);
+        assert!(dep.restart);
     }
 
     #[test]
