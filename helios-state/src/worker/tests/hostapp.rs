@@ -1772,7 +1772,7 @@ fn it_adopts_a_running_release_with_no_recorded_state() {
 fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
     // A converged release plans nothing, so no reboot is issued.
     init_tracing();
-    assert_empty_workflow(
+    assert_converged(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",

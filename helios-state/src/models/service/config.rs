@@ -252,12 +252,17 @@ impl ServiceConfig {
     /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
     /// list of composition defined keys and labels. When reading the container state, these fields
     /// are used to determine if the specific field/label should be read back into the state.
+    ///
+    /// Volume mount sources are namespaced so they match the volumes created for the app, except
+    /// for the sources listed in `external_volumes`, which refer to volumes that exist outside the
+    /// app namespace and are used as given.
     pub fn into_oci_config(
         self,
         svc_id: u32,
         svc_name: &str,
         app_uuid: &Uuid,
         depends_on: &super::DependsOn,
+        external_volumes: &[String],
     ) -> oci::ContainerConfig {
         let mut config = self.0;
 
@@ -374,7 +379,9 @@ impl ServiceConfig {
         config.volumes = std::mem::take(&mut config.volumes)
             .into_iter()
             .map(|mut mount| {
-                if let Mount::Volume { source, .. } = &mut mount {
+                if let Mount::Volume { source, .. } = &mut mount
+                    && !external_volumes.iter().any(|name| name == source)
+                {
                     *source = namespace.to_identifier(source);
                 }
                 mount
@@ -429,7 +436,7 @@ mod tests {
     /// Render a config for the engine and read it back, as install and inspect do.
     fn round_trip(config: oci::ContainerConfig) -> (oci::ContainerConfig, ServiceConfig) {
         let rendered =
-            ServiceConfig(config).into_oci_config(1, "web", &make_uuid(), &Default::default());
+            ServiceConfig(config).into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
         let back = ServiceConfig::from(rendered.clone());
         (rendered, back)
     }
@@ -459,7 +466,7 @@ mod tests {
             network_mode: Some(NetworkMode::Other("bridge".to_string())),
             ..Default::default()
         })
-        .into_oci_config(1, "web", &make_uuid(), &Default::default());
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
         rendered
             .networks
             .insert("bridge".to_string(), Default::default());
@@ -487,7 +494,7 @@ mod tests {
             network_mode: Some(NetworkMode::Host),
             ..Default::default()
         })
-        .into_oci_config(1, "web", &make_uuid(), &Default::default());
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
         rendered.labels.remove(LABEL_CONFIG_NETWORK_MODE);
 
         let back = ServiceConfig::from(rendered);
@@ -502,6 +509,7 @@ mod tests {
             "web",
             &make_uuid(),
             &Default::default(),
+            &[],
         );
         rendered.network_mode = Some(NetworkMode::Other("default_test-app-uuid".to_string()));
 
@@ -546,7 +554,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         let back = ServiceConfig::from(with_labels);
         assert_eq!(back.command, original.command);
@@ -623,7 +631,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         // Simulate the engine attaching its own annotations to the container
         with_labels.annotations.insert(
@@ -640,7 +648,7 @@ mod tests {
         // Without a composition-defined annotation the tracking label is an
         // empty list, so engine-added annotations are dropped on read
         let svc = ServiceConfig(oci::ContainerConfig::default());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
         with_labels
             .annotations
             .insert("io.container.manager".to_string(), "libpod".to_string());
@@ -662,7 +670,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         // Simulate the engine adding its own default ulimits
         with_labels.ulimits.insert(
@@ -680,7 +688,7 @@ mod tests {
     #[test]
     fn drops_engine_added_ulimits_when_none_defined() {
         let svc = ServiceConfig(oci::ContainerConfig::default());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
         with_labels.ulimits.insert(
             "nofile".to_string(),
             oci::Ulimit {
@@ -703,7 +711,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         let back = ServiceConfig::from(with_labels);
         assert_eq!(back.ports, original.ports);
@@ -734,7 +742,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         // Simulate the engine filling in fields defined in image HEALTHCHECK
         let hc = with_labels.healthcheck.as_mut().unwrap();
@@ -748,6 +756,93 @@ mod tests {
     }
 
     #[test]
+    fn namespaces_volume_mount_sources_except_external_ones() {
+        let original = oci::ContainerConfig {
+            volumes: [
+                Mount::Volume {
+                    target: "/data".to_string(),
+                    source: "app-volume".to_string(),
+                    read_only: false,
+                    nocopy: false,
+                    subpath: None,
+                },
+                Mount::Volume {
+                    target: "/shared".to_string(),
+                    source: "shared-volume".to_string(),
+                    read_only: false,
+                    nocopy: false,
+                    subpath: None,
+                },
+                Mount::Bind {
+                    target: "/etc/machine-id".to_string(),
+                    source: "/etc/machine-id".to_string(),
+                    read_only: true,
+                    propagation: oci::BindPropagation::default(),
+                    create_host_path: false,
+                },
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original);
+        let with_labels = svc.into_oci_config(
+            1,
+            "svc",
+            &make_uuid(),
+            &Default::default(),
+            &["shared-volume".to_string()],
+        );
+
+        let sources: Vec<(&str, &str)> = with_labels
+            .volumes
+            .iter()
+            .map(|m| match m {
+                Mount::Volume { target, source, .. } => (target.as_str(), source.as_str()),
+                Mount::Bind { target, source, .. } => (target.as_str(), source.as_str()),
+                _ => unreachable!("unexpected mount type"),
+            })
+            .collect();
+
+        assert_eq!(
+            sources,
+            vec![
+                ("/data", "app-volume_test-app-uuid"),
+                // external volumes live outside the app namespace
+                ("/shared", "shared-volume"),
+                ("/etc/machine-id", "/etc/machine-id"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_back_external_volume_mount_sources_unchanged() {
+        let original = oci::ContainerConfig {
+            volumes: [Mount::Volume {
+                target: "/shared".to_string(),
+                source: "shared-volume".to_string(),
+                read_only: false,
+                nocopy: false,
+                subpath: None,
+            }]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let svc = ServiceConfig(original.clone());
+        let with_labels = svc.into_oci_config(
+            1,
+            "svc",
+            &make_uuid(),
+            &Default::default(),
+            &["shared-volume".to_string()],
+        );
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.volumes, original.volumes);
+    }
+
+    #[test]
     fn collapses_healthcheck_with_no_tracked_subfields() {
         // Target defines healthcheck: {} (valid yaml)
         let original = oci::ContainerConfig {
@@ -755,7 +850,7 @@ mod tests {
             ..Default::default()
         };
         let svc = ServiceConfig(original);
-        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
 
         // Engine inherits image's full HEALTHCHECK
         let hc = with_labels.healthcheck.as_mut().unwrap();

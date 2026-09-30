@@ -52,24 +52,6 @@ pub(super) fn assert_exception(current: Value, target: Value, path: &str, reason
     assert_eq!(exceptions[0].reason.as_deref(), Some(reason));
 }
 
-/// Assert that the planner finds a workflow with no tasks in it. Unlike
-/// [`assert_no_workflow`], the target is reachable: the planner simply has
-/// nothing left to do, or has deferred every divergence it found.
-pub(super) fn assert_empty_workflow(current: Value, target: Value) {
-    let current = serde_json::from_value::<Device>(current).unwrap();
-    let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
-    let (_, workflow) = super::super::worker()
-        .initial_state(current)
-        .find_plan(target)
-        .unwrap();
-    let workflow = workflow.expect("workflow should be found");
-    assert_eq!(
-        workflow.to_string(),
-        Dag::<&str>::default().to_string(),
-        "expected an empty plan, got:\n{workflow}"
-    );
-}
-
 /// Assert that the planner rules out every pending change for the given
 /// current/target pair because an exception matched, and that the skip is
 /// reported with `reason`.
@@ -95,6 +77,18 @@ pub(super) fn assert_aborted(current: Value, target: Value, reason: &str) {
     assert!(
         reasons.contains(&reason),
         "expected a skipped operation with reason '{reason}', got: {reasons:?}"
+    );
+}
+
+/// Assert the target is already met: the planner finds no work to do and no
+/// operation is skipped. An empty plan on its own is ambiguous, it also results
+/// from a target the planner cannot reach, see [`assert_exception`].
+pub(super) fn assert_converged(current: Value, target: Value) {
+    let workflow = assert_workflow(current, target, Dag::new([]));
+    let exceptions = workflow.exceptions();
+    assert!(
+        exceptions.is_empty(),
+        "expected no exceptions, found {exceptions:?}"
     );
 }
 

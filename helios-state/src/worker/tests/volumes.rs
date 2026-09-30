@@ -481,3 +481,242 @@ fn it_finds_a_workflow_to_create_multiple_volumes_and_finalizes_release_after_vo
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",),
     );
 }
+
+#[test]
+fn it_finds_a_workflow_to_install_a_service_with_an_external_volume_mount() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                }
+            },
+            // the external volume already exists on the device, helios only
+            // tracks it as unsupervised
+            "volumes": [
+                {
+                    "oci_name": "shared-volume",
+                    "config": {"driver": "local"},
+                }
+            ],
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "started": true,
+                                    "image": "ubuntu:latest",
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "shared-volume",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "shared-volume": {"external": true},
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        // the external volume is only recorded in the state, but the service
+        // still waits for it before being installed
+        seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'my-service' for release 'my-release-uuid'",
+                "setup volume 'shared-volume' for app 'my-app-uuid'",
+            )
+            + seq!(
+                "pull image 'ubuntu:latest'",
+                "install service 'my-service' for release 'my-release-uuid'",
+                "start service 'my-service' for release 'my-release-uuid'",
+                "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
+            ),
+    );
+}
+
+#[test]
+fn it_finds_no_work_for_a_release_with_a_converged_external_volume() {
+    init_tracing();
+    let state = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": {},
+                        "volumes": {
+                            "shared-volume": {"external": true},
+                        },
+                    }
+                }
+            }
+        },
+    });
+    assert_converged(state.clone(), state);
+}
+
+#[test]
+fn it_finds_a_workflow_to_drop_an_external_volume_from_the_state() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                            "volumes": {
+                                "shared-volume": {"external": true},
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                        }
+                    }
+                }
+            },
+        }),
+        // the volume itself is left alone on the engine, only the state entry goes
+        seq!("remove volume 'shared-volume' for app 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_finds_a_workflow_when_a_volume_in_use_becomes_external() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "oci": running_container("my-release-uuid_my-service"),
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-volume",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-volume": {
+                                    "oci_name": "my-volume_my-app-uuid",
+                                    "config": {
+                                        "driver": "local",
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-volume",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {
+                                "my-volume": {"external": true},
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        // the mount source changes from the app-namespaced volume to the external
+        // one, so the container has to be recreated
+        release_update(
+            "my-release-uuid",
+            "my-app-uuid",
+            seq!(
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'my-service' for release 'my-release-uuid'",
+                "uninstall service 'my-service' for release 'my-release-uuid'",
+            ) + par!(
+                "initialize service 'my-service' for release 'my-release-uuid'",
+                "remove volume 'my-volume' for app 'my-app-uuid'",
+            ) + seq!(
+                "setup volume 'my-volume' for app 'my-app-uuid'",
+                "install service 'my-service' for release 'my-release-uuid'",
+                "start service 'my-service' for release 'my-release-uuid'",
+            ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}

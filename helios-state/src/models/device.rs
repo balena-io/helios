@@ -1,4 +1,6 @@
-use mahler::state::{Map, State};
+use std::collections::HashMap;
+
+use mahler::state::{List, Map, State};
 
 use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid};
 use crate::oci::{BindPropagation, Mount};
@@ -6,6 +8,8 @@ use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
 use super::image::Image;
+use super::release::ReleaseTarget;
+use super::volume::{LocalVolume, VolumeTarget};
 
 #[cfg(feature = "balenahup")]
 use crate::balenahup::Host;
@@ -32,6 +36,10 @@ pub struct Device {
     /// The "hostapp" configuration
     #[cfg(feature = "balenahup")]
     pub host: Option<Host>,
+
+    /// List of unsupervised volumes on the device
+    #[mahler(internal, default)]
+    pub volumes: List<LocalVolume>,
 }
 
 impl Default for DeviceTarget {
@@ -56,6 +64,7 @@ impl Device {
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
             host: os.map(Host::new),
+            volumes: List::new(),
         }
     }
 }
@@ -90,12 +99,15 @@ impl DeviceTarget {
         };
 
         for (app_uuid, app) in self.apps.iter_mut() {
+            let app_id = app.id;
             let bind_source = host_runtime_dir
                 .join("update-locks")
                 .join(app_uuid.as_str())
                 .to_string_lossy()
                 .into_owned();
             for rel in app.releases.values_mut() {
+                reuse_legacy_volumes(app_id, rel, &device.volumes);
+
                 for svc in rel.services.values_mut() {
                     svc.config.environment.insert(
                         "BALENA_DEVICE_UUID".to_string(),
@@ -136,6 +148,63 @@ impl DeviceTarget {
                 }
             }
         }
+    }
+}
+
+/// Reuse the volumes left behind by the legacy supervisor
+///
+/// Volume metadata and namespacing in helios is different from previous versions of the supervisor,
+/// which means helios by default will ignore legacy volumes and will create containers with fresh state.
+///
+/// Legacy volumes (idenfied by the name `<appId>_<name>`) if their configuration matches the
+/// target, are adopted as external volumes under their engine name, keeping its data in place.
+/// Mounts referencing the legacy volume are also renamed,
+///
+/// A legacy volume with a different configuration is left alone and helios creates its
+/// own volume for the release.
+fn reuse_legacy_volumes(app_id: u32, rel: &mut ReleaseTarget, device_volumes: &[LocalVolume]) {
+    // the common case is a device with nothing left behind by the legacy supervisor
+    if device_volumes.is_empty() {
+        return;
+    }
+
+    let legacy: HashMap<String, String> = rel
+        .volumes
+        .iter()
+        .filter_map(|(vol_name, tgt)| {
+            let VolumeTarget::Internal(config) = tgt else {
+                return None;
+            };
+            let legacy_name = format!("{app_id}_{vol_name}");
+            device_volumes
+                .iter()
+                .any(|vol| vol.oci_name == legacy_name && &vol.config == config)
+                .then(|| (vol_name.clone(), legacy_name))
+        })
+        .collect();
+
+    if legacy.is_empty() {
+        return;
+    }
+
+    for (vol_name, legacy_name) in &legacy {
+        rel.volumes.remove(vol_name);
+        rel.volumes
+            .insert(legacy_name.clone(), VolumeTarget::External);
+    }
+
+    for svc in rel.services.values_mut() {
+        svc.config.volumes = std::mem::take(&mut svc.config.volumes)
+            .into_iter()
+            .map(|mut mount| {
+                if let Mount::Volume { source, .. } = &mut mount
+                    && let Some(legacy_name) = legacy.get(source)
+                {
+                    *source = legacy_name.clone();
+                }
+                mount
+            })
+            .collect();
     }
 }
 
@@ -316,5 +385,122 @@ mod tests {
         let target: DeviceTarget = remote.into();
         assert!(target.apps.is_empty());
         assert!(target.host.is_none());
+    }
+
+    /// Target of a single app with one release, mounting `my-vol` from `my-service`.
+    fn target_with_volume(volume: serde_json::Value) -> DeviceTarget {
+        serde_json::from_value(json!({
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1234,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "config": {
+                                        "volumes": [
+                                            {
+                                                "type": "volume",
+                                                "source": "my-vol",
+                                                "target": "/data"
+                                            }
+                                        ]
+                                    },
+                                },
+                            },
+                            "volumes": {"my-vol": volume},
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    /// Device carrying `volumes` as unsupervised volumes.
+    fn device_with_volumes(volumes: serde_json::Value) -> Device {
+        serde_json::from_value(json!({
+            "uuid": "device-uuid",
+            "volumes": volumes,
+        }))
+        .unwrap()
+    }
+
+    fn release_of(target: &DeviceTarget) -> &ReleaseTarget {
+        target
+            .apps
+            .get(&Uuid::from("my-app-uuid"))
+            .unwrap()
+            .releases
+            .get(&Uuid::from("my-release-uuid"))
+            .unwrap()
+    }
+
+    /// Sources of the volume mounts of `my-service`.
+    fn mount_sources(target: &DeviceTarget) -> Vec<String> {
+        release_of(target)
+            .services
+            .get("my-service")
+            .unwrap()
+            .config
+            .volumes
+            .iter()
+            .filter_map(|mount| match mount {
+                Mount::Volume { source, .. } => Some(source.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn legacy_volume_with_matching_config_is_adopted_as_external() {
+        let mut target = target_with_volume(json!({"config": {"driver": "local"}}));
+        let device = device_with_volumes(json!([
+            {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
+        ]));
+
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+
+        let volumes = &release_of(&target).volumes;
+        assert!(!volumes.contains_key("my-vol"));
+        assert_eq!(volumes.get("1234_my-vol"), Some(&VolumeTarget::External));
+        // the mount has to name the legacy volume, as that is how the engine
+        // identifies an external volume
+        assert_eq!(mount_sources(&target), vec!["1234_my-vol".to_string()]);
+    }
+
+    #[test]
+    fn legacy_volume_with_a_different_config_is_left_alone() {
+        let mut target = target_with_volume(json!({
+            "config": {"driver": "local", "driver_opts": {"type": "tmpfs"}}
+        }));
+        let device = device_with_volumes(json!([
+            {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
+        ]));
+
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+
+        let volumes = &release_of(&target).volumes;
+        assert!(volumes.contains_key("my-vol"));
+        assert!(!volumes.contains_key("1234_my-vol"));
+        assert_eq!(mount_sources(&target), vec!["my-vol".to_string()]);
+    }
+
+    #[test]
+    fn volumes_of_other_apps_are_not_adopted() {
+        let mut target = target_with_volume(json!({"config": {"driver": "local"}}));
+        let device = device_with_volumes(json!([
+            {"oci_name": "4321_my-vol", "config": {"driver": "local"}}
+        ]));
+
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+
+        let volumes = &release_of(&target).volumes;
+        assert!(volumes.contains_key("my-vol"));
+        assert_eq!(mount_sources(&target), vec!["my-vol".to_string()]);
     }
 }

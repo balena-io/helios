@@ -1,8 +1,11 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bollard::Docker;
 use bollard::config::RestartPolicy;
 use bollard::config::RestartPolicyNameEnum;
+use bollard::models::VolumeCreateRequest;
+use bollard::query_parameters::RemoveVolumeOptions;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
@@ -11,6 +14,7 @@ use tokio::net::TcpStream;
 use super::common::{HELIOS_URL, prune_images, wait_for_target_apply};
 
 const TEST_APP_UUID: &str = "test-app";
+const TEST_APP_ID: u32 = 1234;
 
 // --- Target state builders ---
 
@@ -44,7 +48,7 @@ fn release_json(
 
 fn app_target_json(app_name: &str, release_uuid: &str, release: Value) -> Value {
     json!({
-        "id": 0,
+        "id": TEST_APP_ID,
         "name": app_name,
         "releases": {
             release_uuid: release,
@@ -87,6 +91,37 @@ fn get_resource_oci_name<'a>(
     })
     .as_str()
     .unwrap()
+}
+
+/// Create a volume named the way the legacy supervisor names them, `<appId>_<name>`,
+/// carrying only the labels the supervisor sets. Returns the volume name on the engine.
+async fn create_legacy_volume(docker: &Docker, name: &str) -> String {
+    let oci_name = format!("{TEST_APP_ID}_{name}");
+    docker
+        .create_volume(VolumeCreateRequest {
+            name: Some(oci_name.clone()),
+            driver: Some("local".to_string()),
+            labels: Some(HashMap::from([(
+                "io.balena.supervised".to_string(),
+                "true".to_string(),
+            )])),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    oci_name
+}
+
+async fn remove_volume(docker: &Docker, oci_name: &str) {
+    docker
+        .remove_volume(oci_name, None::<RemoveVolumeOptions>)
+        .await
+        .unwrap();
+}
+
+/// The target of a release-level volume, e.g. `{"external": true}` for an adopted one.
+fn get_volume<'a>(app: &'a Value, release_uuid: &str, volume_name: &str) -> Option<&'a Value> {
+    app.pointer(&format!("/releases/{release_uuid}/volumes/{volume_name}"))
 }
 
 // --- Container assertion helpers ---
@@ -182,6 +217,34 @@ fn container_mount<'a>(
         .unwrap_or_else(|| panic!("no mount at target '{target}'"))
 }
 
+// --- Target application ---
+
+/// POST a target for the test app and wait for it to be applied.
+async fn post_app_target(client: &reqwest::Client, target: Value) {
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    let status = wait_for_target_apply().await;
+    assert_eq!(status, json!({"status": "done"}));
+}
+
+/// Apply a target for the test app and return the resulting app state.
+async fn apply_app_target(client: &reqwest::Client, target: Value) -> Value {
+    post_app_target(client, target).await;
+
+    reqwest::get(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
 // --- Teardown ---
 
 async fn delete_app_and_wait(client: &reqwest::Client, app_uuid: &str) {
@@ -266,6 +329,13 @@ async fn test_set_app_target() {
 async fn test_set_app_target_install_images() {
     prune_images().await;
 
+    let docker = Docker::connect_with_defaults().unwrap();
+
+    // A volume left behind by the legacy supervisor for this app. Its configuration
+    // matches the `legacy-vol` target below, so helios adopts it rather than
+    // creating its own.
+    let legacy_vol = create_legacy_volume(&docker, "legacy-vol").await;
+
     let release_uuid = "my-release-uuid";
 
     let release = release_json(
@@ -284,6 +354,7 @@ async fn test_set_app_target_install_images() {
                         },
                         "volumes": [
                             "my-vol:/backup:ro",
+                            "legacy-vol:/legacy",
                         ],
                     }
                 }),
@@ -341,7 +412,7 @@ async fn test_set_app_target_install_images() {
             ),
         ],
         &[("net-a", json!({})), ("net-b", json!({}))],
-        &[("my-vol", json!({}))],
+        &[("my-vol", json!({})), ("legacy-vol", json!({}))],
     );
 
     let target = app_target_json("my-new-app-name", release_uuid, release);
@@ -376,7 +447,6 @@ async fn test_set_app_target_install_images() {
     let ubuntu_img_id = images.get("ubuntu:latest").unwrap().get("oci_id").unwrap();
     let alpine_img_id = images.get("alpine:latest").unwrap().get("oci_id").unwrap();
 
-    let docker = Docker::connect_with_defaults().unwrap();
     assert_eq!(
         docker
             .inspect_image("ubuntu:latest")
@@ -572,6 +642,21 @@ async fn test_set_app_target_install_images() {
         "my-vol"
     );
 
+    // The legacy volume was adopted as an external volume under its engine name,
+    // so helios never created a namespaced volume for it.
+    assert_eq!(
+        get_volume(app, release_uuid, &legacy_vol),
+        Some(&json!({"external": true}))
+    );
+    assert_eq!(get_volume(app, release_uuid, "legacy-vol"), None);
+    assert!(docker.inspect_volume("legacy-vol_test-app").await.is_err());
+
+    // service-one mounts the legacy volume by its engine name, as external
+    // volumes are not namespaced under the app.
+    let svc_one_legacy = container_mount(&svc_one_container, "/legacy");
+    assert_eq!(svc_one_legacy.typ.as_ref().unwrap(), "volume");
+    assert_eq!(svc_one_legacy.name.as_deref(), Some(legacy_vol.as_str()));
+
     // service-one received the short-form volume mount `my-vol:/backup:ro`.
     // Docker reports the mount source as the namespaced volume name.
     let svc_one_backup = container_mount(&svc_one_container, "/backup");
@@ -616,6 +701,112 @@ async fn test_set_app_target_install_images() {
     delete_app_and_wait(&client, TEST_APP_UUID).await;
     assert!(docker.inspect_image("ubuntu:latest").await.is_err());
     assert!(docker.inspect_image("alpine:latest").await.is_err());
+
+    // helios created the namespaced volume, so it removes it, but it leaves the
+    // adopted one alone
+    assert!(docker.inspect_volume(&my_vol_id).await.is_err());
+    assert!(docker.inspect_volume(&legacy_vol).await.is_ok());
+    remove_volume(&docker, &legacy_vol).await;
+}
+
+/// A release with a single service mounting `shared-vol` at `/data`, with the
+/// volume declared using `volume_config`.
+fn shared_vol_release(volume_config: Value) -> Value {
+    release_json(
+        &[(
+            "my-service",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "composition": {
+                    "command": ["sleep", "infinity"],
+                    "volumes": ["shared-vol:/data"],
+                }
+            }),
+        )],
+        &[],
+        &[("shared-vol", volume_config)],
+    )
+}
+
+/// A legacy volume is adopted while its configuration matches the target, and
+/// dropped in favour of a volume helios manages once the configuration changes.
+#[tokio::test]
+async fn test_legacy_volume_migrates_to_a_managed_volume_on_config_change() {
+    let docker = Docker::connect_with_defaults().unwrap();
+    let client = reqwest::Client::new();
+
+    let legacy_vol = create_legacy_volume(&docker, "shared-vol").await;
+
+    // The first release declares `shared-vol` with the same configuration as the
+    // legacy volume, so the target volume is replaced by the existing one.
+    let adopt_release = "adopt-release-uuid";
+    let app = apply_app_target(
+        &client,
+        app_target_json(
+            "legacy-vol-app",
+            adopt_release,
+            shared_vol_release(json!({})),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        get_volume(&app, adopt_release, &legacy_vol),
+        Some(&json!({"external": true}))
+    );
+    assert_eq!(get_volume(&app, adopt_release, "shared-vol"), None);
+    // no namespaced volume was created for the release
+    assert!(docker.inspect_volume("shared-vol_test-app").await.is_err());
+
+    let container_id = get_service_container_id(&app, adopt_release, "my-service");
+    let container = docker.inspect_container(container_id, None).await.unwrap();
+    assert_eq!(
+        container_mount(&container, "/data").name.as_deref(),
+        Some(legacy_vol.as_str())
+    );
+
+    // The next release keeps the volume name but changes its configuration. It no
+    // longer matches the legacy volume, so helios creates its own and recreates the
+    // container against it.
+    let managed_release = "managed-release-uuid";
+    let app = apply_app_target(
+        &client,
+        app_target_json(
+            "legacy-vol-app",
+            managed_release,
+            shared_vol_release(json!({"labels": {"com.example.version": "1"}})),
+        ),
+    )
+    .await;
+
+    assert_eq!(get_volume(&app, managed_release, &legacy_vol), None);
+    let managed_vol =
+        get_resource_oci_name(&app, managed_release, "volumes", "shared-vol").to_string();
+    assert_eq!(managed_vol, "shared-vol_test-app");
+
+    let volume = docker.inspect_volume(&managed_vol).await.unwrap();
+    assert_eq!(
+        volume.labels.get("io.balena.volume-name").unwrap(),
+        "shared-vol"
+    );
+    assert_eq!(volume.labels.get("com.example.version").unwrap(), "1");
+
+    let container_id = get_service_container_id(&app, managed_release, "my-service");
+    let container = docker.inspect_container(container_id, None).await.unwrap();
+    assert_eq!(
+        container_mount(&container, "/data").name.as_deref(),
+        Some(managed_vol.as_str())
+    );
+
+    // the legacy volume is no longer in use, but helios does not own it
+    assert!(docker.inspect_volume(&legacy_vol).await.is_ok());
+
+    delete_app_and_wait(&client, TEST_APP_UUID).await;
+    assert!(docker.inspect_volume(&managed_vol).await.is_err());
+    assert!(docker.inspect_volume(&legacy_vol).await.is_ok());
+
+    remove_volume(&docker, &legacy_vol).await;
 }
 
 #[tokio::test]
