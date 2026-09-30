@@ -17,7 +17,7 @@ use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, NetworkMode, WithContext};
+use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -811,7 +811,8 @@ fn migrate_service(
 /// - the image has been pulled,
 /// - every linked network and volume exists in the current release with
 ///   config matching the target,
-/// - the service whose namespace it joins, if any, already has a container, and
+/// - every service in its `depends_on`, including the one whose namespace it
+///   joins, already has a container, and
 /// - no identically-named service in another release could be migrated
 ///   here instead (that path is handled by `uninstall_service_when_requirements_are_met`).
 fn install_service_when_requirements_are_met(
@@ -862,15 +863,15 @@ fn install_service_when_requirements_are_met(
         )
     };
 
-    // The engine resolves a service reference to a container id at create, but only
-    // if that container already exists. Wait for it so a later rename of the
-    // dependency leaves the reference intact.
-    let namespace_ready = match &tgt.config.network_mode {
-        Some(NetworkMode::Service(dep_name)) => release
+    // Dependencies are created before the service. This also covers implicit dependencies
+    // (network_mode, pid, ipc): the engine resolves a service
+    // reference to a container id at create, but only if that container already
+    // exists, so a later rename of the dependency leaves the reference intact.
+    let dependencies_created = tgt.depends_on.keys().all(|dep_name| {
+        release
             .and_then(|r| r.services.get(dep_name))
-            .is_some_and(|dep| dep.oci.is_some()),
-        _ => true,
-    };
+            .is_some_and(|dep| dep.oci.is_some())
+    });
 
     let networks_ready = tgt.config.networks.keys().all(network_ready);
     let volumes_ready = tgt.config.volumes.iter().all(|m| match m {
@@ -890,7 +891,7 @@ fn install_service_when_requirements_are_met(
 
     if networks_ready
         && volumes_ready
-        && namespace_ready
+        && dependencies_created
         && image_pulled
         && no_migratable_predecessor
     {
