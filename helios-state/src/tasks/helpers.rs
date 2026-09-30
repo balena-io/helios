@@ -182,9 +182,13 @@ pub fn any_dependency_failed(
     )
 }
 
-/// The services of the release that reach the given service's container through
-/// their network namespace, directly or through another service.
-pub fn services_joining_namespace<'a>(
+/// The services of the release that are restarted along with the given
+/// service, i.e. those with a `restart: true` dependency on it, directly or
+/// through another such service.
+///
+/// Dependents come before the services they depend on, so the result is the
+/// order in which they can be stopped.
+pub fn services_restarting_with<'a>(
     device: &'a Device,
     app_uuid: &Uuid,
     rel_uuid: &Uuid,
@@ -194,21 +198,21 @@ pub fn services_joining_namespace<'a>(
         return Vec::new();
     };
 
-    // a service joining a dependent joins the same namespace, and the release is
-    // validated as acyclic so the walk terminates
-    let mut found: Vec<&'a String> = Vec::new();
-    let mut targets = vec![svc_name];
-    while let Some(target) = targets.pop() {
+    // post-order walk over the dependents, so every service is pushed after the
+    // services that depend on it; the release is validated as acyclic so the
+    // walk terminates
+    fn visit<'a>(services: &'a Map<String, Service>, target: &str, found: &mut Vec<&'a String>) {
         for (name, svc) in services.iter() {
-            if matches!(&svc.config.network_mode, Some(NetworkMode::Service(joined)) if joined == target)
-                && !found.contains(&name)
-            {
+            let restarts = svc.depends_on.get(target).is_some_and(|dep| dep.restart);
+            if restarts && !found.contains(&name) {
+                visit(services, name, found);
                 found.push(name);
-                targets.push(name.as_str());
             }
         }
     }
 
+    let mut found = Vec::new();
+    visit(services, svc_name, &mut found);
     found
 }
 
@@ -607,46 +611,80 @@ mod tests {
         assert!(!web_matches_across("old-rel", "new-rel", "two"));
     }
 
-    /// A service joining `dep`'s network namespace, or none.
-    fn joining(dep: Option<&str>) -> serde_json::Value {
-        let network_mode = dep.map(|name| json!(format!("service:{name}")));
-        json!({"id": 1, "image": "alpine:latest", "config": {"network_mode": network_mode}})
+    /// A service with a `depends_on` entry per `(name, restart)` pair.
+    fn depending_on(entries: &[(&str, bool)]) -> serde_json::Value {
+        let depends_on: serde_json::Map<_, _> = entries
+            .iter()
+            .map(|(name, restart)| {
+                (
+                    name.to_string(),
+                    json!({"condition": "service_started", "restart": restart, "required": true}),
+                )
+            })
+            .collect();
+        json!({"id": 1, "image": "alpine:latest", "config": {}, "depends_on": depends_on})
     }
 
-    fn joining_namespace_of(device: &Device, svc_name: &str) -> Vec<String> {
-        services_joining_namespace(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
+    fn restarting_with(device: &Device, svc_name: &str) -> Vec<String> {
+        services_restarting_with(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
             .into_iter()
             .cloned()
             .collect()
     }
 
     #[test]
-    fn finds_the_services_joining_a_namespace() {
+    fn finds_the_services_restarting_with_a_service() {
         let device = device_with(json!({
-            "db": joining(None),
-            "web": joining(Some("db")),
-            "other": joining(None),
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", true)]),
+            "other": depending_on(&[]),
         }));
-        assert_eq!(joining_namespace_of(&device, "db"), vec!["web".to_string()]);
+        assert_eq!(restarting_with(&device, "db"), vec!["web".to_string()]);
     }
 
     #[test]
-    fn follows_a_chain_of_joined_namespaces() {
-        // 'log' reaches 'db' through 'web', so it loses its namespace too
+    fn skips_dependents_that_do_not_restart() {
         let device = device_with(json!({
-            "db": joining(None),
-            "web": joining(Some("db")),
-            "log": joining(Some("web")),
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", false)]),
         }));
-        let mut found = joining_namespace_of(&device, "db");
-        found.sort();
-        assert_eq!(found, vec!["log".to_string(), "web".to_string()]);
+        assert!(restarting_with(&device, "db").is_empty());
     }
 
     #[test]
-    fn finds_nothing_for_a_namespace_no_one_joined() {
-        let device = device_with(json!({"db": joining(None), "web": joining(None)}));
-        assert!(joining_namespace_of(&device, "db").is_empty());
+    fn follows_a_chain_of_restarting_dependents() {
+        // 'log' restarts with 'web', which restarts with 'db'
+        let device = device_with(json!({
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", true)]),
+            "log": depending_on(&[("web", true)]),
+        }));
+        assert_eq!(
+            restarting_with(&device, "db"),
+            vec!["log".to_string(), "web".to_string()]
+        );
+    }
+
+    #[test]
+    fn orders_dependents_before_their_dependencies() {
+        // 'x' depends on 'db' directly, but also on 'y', which only reaches
+        // 'db' through 'z', so 'x' still comes before 'y'
+        let device = device_with(json!({
+            "db": depending_on(&[]),
+            "x": depending_on(&[("db", true), ("y", true)]),
+            "y": depending_on(&[("z", true)]),
+            "z": depending_on(&[("db", true)]),
+        }));
+        assert_eq!(
+            restarting_with(&device, "db"),
+            vec!["x".to_string(), "y".to_string(), "z".to_string()]
+        );
+    }
+
+    #[test]
+    fn finds_nothing_for_a_service_without_dependents() {
+        let device = device_with(json!({"db": depending_on(&[]), "web": depending_on(&[])}));
+        assert!(restarting_with(&device, "db").is_empty());
     }
 
     /// Build a `depends_on` of `condition` entries with the given

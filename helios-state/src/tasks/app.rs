@@ -29,8 +29,8 @@ use super::helpers::{
     any_images_are_pending_download, dependencies_satisfied, depends_on_condition_pending,
     evaluate_completion, evaluate_health, external_volume_names, find_future_network,
     find_future_service, find_future_volume, find_installed_network, find_installed_service,
-    find_installed_volume, release_services, service_matches_target, services_joining_namespace,
-    services_need_stopping, target_release_services,
+    find_installed_volume, release_services, service_matches_target, services_need_stopping,
+    services_restarting_with, target_release_services,
 };
 use super::image::create_image;
 
@@ -616,10 +616,10 @@ fn uninstall_volume(vol: View<Volume>, docker: Res<Docker>) -> IO<Option<Volume>
     })
 }
 
-/// For every running service in `app_uuid` that depends on a resource (per
-/// `depends_on`), emit a stop+uninstall task pair. Returns an empty Vec when
-/// no services depend on the resource — callers use this to know it's safe
-/// to remove the resource itself.
+/// Stop and uninstall every service in `app_uuid` that depends on a resource
+/// (per `depends_on`), along with the services with a `restart: true`
+/// dependency on it. Returns an empty Vec when no services depend on the
+/// resource — callers use this to know it's safe to remove the resource itself.
 fn uninstall_services_depending_on(
     device: &Device,
     app_uuid: &Uuid,
@@ -632,18 +632,28 @@ fn uninstall_services_depending_on(
     app.releases
         .iter()
         .flat_map(|(rel_uuid, rel)| {
-            rel.services
+            let using: Vec<&String> = rel
+                .services
                 .iter()
                 .filter(|(_, svc)| svc.oci.is_some() && depends_on(svc))
-                .flat_map(move |(svc_name, _)| {
-                    [
-                        stop_service_when_requirements_are_met
-                            .with_arg("commit", rel_uuid.as_str())
-                            .with_arg("service_name", svc_name),
-                        uninstall_service
-                            .with_arg("commit", rel_uuid.as_str())
-                            .with_arg("service_name", svc_name),
-                    ]
+                .map(|(svc_name, _)| svc_name)
+                .collect();
+
+            // a service restarting with another one using the resource is
+            // uninstalled along with it
+            let uninstalled_along: Vec<&String> = using
+                .iter()
+                .flat_map(|svc_name| services_restarting_with(device, app_uuid, rel_uuid, svc_name))
+                .collect();
+
+            using
+                .into_iter()
+                .filter(move |svc_name| !uninstalled_along.contains(svc_name))
+                .map(move |svc_name| {
+                    stop_service_when_requirements_are_met
+                        .with_arg("commit", rel_uuid.as_str())
+                        .with_arg("service_name", svc_name)
+                        .with_target(StopTarget::Uninstalled)
                 })
         })
         .collect()
@@ -1344,8 +1354,7 @@ fn reconfigure_service(
     svc: View<Service>,
     Target(tgt): Target<Service>,
     System(device): System<Device>,
-    SystemTarget(t_device): SystemTarget<Device>,
-    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
     if svc.config != tgt.config {
@@ -1354,42 +1363,10 @@ fn reconfigure_service(
             tasks.push(ensure_release_is_finalized.into_task());
         }
 
-        if let Some(container) = svc.oci.as_ref()
-            && container.status == ContainerStatus::Running
-        {
-            tasks.push(stop_service_when_requirements_are_met.with_target(&tgt));
-        }
+        // the service is re-created with the target configuration once removed
         if svc.oci.is_some() {
-            tasks.push(remove_service_container.into_task());
-        }
-        tasks.push(install_service_when_requirements_are_met.with_target(&tgt));
-
-        // a service that joined this one's namespace holds a reference to the
-        // container being replaced, so it is recreated too
-        let services = release_services(&device, &app_uuid, &rel_uuid);
-        let t_services = target_release_services(&t_device, &app_uuid, &rel_uuid);
-        for dep_name in services_joining_namespace(&device, &app_uuid, &rel_uuid, &svc_name) {
-            let Some(t_dep) = t_services.and_then(|services| services.get(dep_name)) else {
-                continue;
-            };
-            // the same guards the service above gets, so the plan carries no
-            // task that cannot run
-            let Some(container) = services
-                .and_then(|services| services.get(dep_name))
-                .and_then(|dep| dep.oci.as_ref())
-            else {
-                continue;
-            };
-            if container.status == ContainerStatus::Running {
-                tasks.push(
-                    stop_service_when_requirements_are_met.with_arg("service_name", dep_name),
-                );
-            }
-            tasks.push(remove_service_container.with_arg("service_name", dep_name));
             tasks.push(
-                install_service_when_requirements_are_met
-                    .with_arg("service_name", dep_name)
-                    .with_target(t_dep),
+                stop_service_when_requirements_are_met.with_target(StopTarget::ContainerRemoved),
             );
         }
     }
@@ -1397,24 +1374,62 @@ fn reconfigure_service(
     tasks
 }
 
-/// Stop a service and its dependents when all the requirements are met
+#[derive(serde::Serialize, serde::Deserialize)]
+/// Where a stopped service and its dependents end up
+enum StopTarget {
+    /// containers are stopped and kept
+    Stopped,
+    /// containers are removed, the services stay in state to be re-installed
+    ContainerRemoved,
+    /// the services are removed from state along with their containers
+    Uninstalled,
+}
+
+/// Stop a service and its dependents when all the requirements are met, then
+/// remove them according to the given target
 ///
 /// A service can be stopped if:
 /// - Locks are taken
-/// - Any services depending on it that have `restart: true` are stopped  (TODO)
+/// - Any services depending on it that have `restart: true` are stopped
+///
+/// Removing the dependents too covers a service joining the network namespace
+/// of the one being removed, as it holds a reference to its container.
 fn stop_service_when_requirements_are_met(
     System(device): System<Device>,
-    Args((app_uuid, _, _)): Args<(Uuid, Uuid, String)>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+    RawTarget(stop_target): RawTarget<StopTarget>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
-    // the service cannot be stopped until the app is locked
-    if let Some(app) = device.apps.get(&app_uuid)
-        && !app.locked
-    {
-        tasks.push(take_locks.into_task());
+    let Some(services) = release_services(&device, &app_uuid, &rel_uuid) else {
+        return tasks;
+    };
+
+    // a service cannot be stopped until the app is locked
+    let mut needs_locks = device.apps.get(&app_uuid).is_some_and(|app| !app.locked);
+
+    // dependents come before the services they depend on, so each is stopped
+    // and removed before anything it depends on
+    let dependents = services_restarting_with(&device, &app_uuid, &rel_uuid, &svc_name);
+    for name in dependents.into_iter().chain([&svc_name]) {
+        let Some(container) = services.get(name).and_then(|svc| svc.oci.as_ref()) else {
+            continue;
+        };
+        if container.status == ContainerStatus::Running {
+            if needs_locks {
+                tasks.push(take_locks.into_task());
+                needs_locks = false;
+            }
+            tasks.push(stop_service.with_arg("service_name", name));
+        }
+        match stop_target {
+            StopTarget::Stopped => {}
+            StopTarget::ContainerRemoved => {
+                tasks.push(remove_service_container.with_arg("service_name", name))
+            }
+            StopTarget::Uninstalled => tasks.push(uninstall_service.with_arg("service_name", name)),
+        }
     }
 
-    tasks.push(stop_service.into_task());
     tasks
 }
 
@@ -1509,17 +1524,9 @@ fn uninstall_service_when_requirements_are_met(
         }
     }
 
-    // Fallback: stop the service if it is still running, then uninstall it.
-    let mut tasks = Vec::new();
-    if svc
-        .oci
-        .as_ref()
-        .is_some_and(|c| c.status == ContainerStatus::Running)
-    {
-        tasks.push(stop_service_when_requirements_are_met.into_task());
-    }
-    tasks.push(uninstall_service.into_task());
-    tasks
+    // Fallback: stop the service if it is still running, then uninstall it
+    // along with its `restart: true` dependents
+    vec![stop_service_when_requirements_are_met.with_target(StopTarget::Uninstalled)]
 }
 
 /// Remove service from the current release state

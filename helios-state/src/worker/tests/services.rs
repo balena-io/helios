@@ -1308,14 +1308,17 @@ fn it_recreates_a_service_that_joined_a_reconfigured_namespace() {
         seq!(
             "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "take locks for app with uuid 'my-app-uuid'",
-            // the dependency is replaced first, then the service that joined it
+            // the service that joined the namespace is removed first, then the
+            // dependency is replaced
+            "stop service 'web' for release 'my-release-uuid'",
+            "remove container for service 'web' for release 'my-release-uuid'",
             "stop service 'db' for release 'my-release-uuid'",
             "remove container for service 'db' for release 'my-release-uuid'",
             "install service 'db' for release 'my-release-uuid'",
-            "stop service 'web' for release 'my-release-uuid'",
-            "remove container for service 'web' for release 'my-release-uuid'",
-            "install service 'web' for release 'my-release-uuid'",
+        ) + par!(
             "start service 'db' for release 'my-release-uuid'",
+            "install service 'web' for release 'my-release-uuid'",
+        ) + seq!(
             "start service 'web' for release 'my-release-uuid'",
             "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "release locks for app with uuid 'my-app-uuid'",
