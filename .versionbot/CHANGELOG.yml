@@ -1,4 +1,491 @@
 - commits:
+    - subject: "docker-compose.test.yml: contain failures and optimize"
+      hash: a8a3b6184440c1c418234edecfb5f86f220408f0
+      body: |
+        Without pid limit a malformed test can bring a system down by spawning
+        processes in a loop.
+
+        Also, naming the test volume prevents assigning a fresh volume per
+        test round that are left behind, and also allows for caching.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: Extend README with hostapp extensions section
+      hash: c7a58b9de0715b0a577258c424458b0ac2fb42ef
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: decline a release with overlays on a pre-extension host"
+      hash: 3ea9d029574eb9eeb3a3115eb0c66a5c549104b3
+      body: >
+        The `extension` runtime comes from the OS, so a host that predates
+        hostapp
+
+        extensions cannot create the activation container at all.
+
+
+        The seek loop now reads the runtimes the engine registers. It drops each
+
+        target release that asks for a runtime the engine does not have, before
+
+        the planner sees the target. The device reports the target as aborted
+        and
+
+        logs the reason for each dropped release.
+
+
+        Refusing inside the planner instead would also hold back the reboot the
+
+        device still owes for an overlay the target dropped.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "seek: let a forced request interrupt a running apply"
+      hash: 454342f3b750f0bf425ec7cb82099dc9fbfca0ff
+      body: >
+        force is a worker resource, bound when the apply future is built, so it
+        can
+
+        only take effect by starting a new apply. But a request arriving
+        mid-apply
+
+        was parked in next_target unless it carried cancel, and next_target is
+        only
+
+        emitted when the apply completes.
+
+
+        An apply blocked by a user update-lock never completes: seek_target
+        retries
+
+        the refused reboot every 30s and the status stays ApplyingChanges. So
+        the
+
+        forced request sat parked, the worker carrying ForceAcquireLocks(true)
+        was
+
+        never built, and the operator's only override was unavailable exactly
+        when a
+
+        device was most stuck.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: remove a release's overlays when the release is forgotten"
+      hash: 6b592d759a0bd8d6669cbe7da8b7dc4b46c0977d
+      body: >
+        Deleting a release takes its subtree with it without ever visiting the
+
+        children, so nothing removed its overlay containers, and read.rs only
+        attaches
+
+        an overlay whose release is in the store. They became invisible and
+        nothing
+
+        could plan against them again.
+
+
+        This adds a second source of overlay removals. Without it the
+
+        reboot interleaves between two removals and the device is left with no
+        plan.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: reboot to apply an overlay removal"
+      hash: be0cdd0cfeaed887aaab91ba61c806badfae89e3
+      body: >
+        Withdrawing an overlay drops its container, but the root overlay
+        composition
+
+        is spliced once, at boot, so the extension stays mounted until the
+        device
+
+        reboots. Nothing in the state recorded that debt, so a device that
+        dropped an
+
+        overlay reported the target reached while still running it.
+
+
+        remove_overlay now leaves a tmpfs breadcrumb, read derives
+
+        Host::pending_reboot from it, and a new reboot_to_apply_overlays task
+
+        reconciles the flag against the target, honoring user update locks and
+
+        deferring while a rollback validation is in flight.
+
+
+        The breadcrumb is written during execution, where the planner cannot see
+        it,
+
+        so the delete job is a method that also raises pending_reboot in the
+        plan.
+
+        Without it the reboot would wait for the next state read.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "remote: report hostapp overlay extensions as services"
+      hash: d4d56c97327336d8c7a59a6b6fcdf3d0afbfe22b
+      body: >
+        Overlays now appear in the state report as services of the host
+
+        release, next to the existing "hostapp" entry.
+
+
+        Active overlays report running, staged ones installed, and
+
+        pending ones installing.
+
+
+        Note that download progress reporting is left out deliberately as
+        extension
+
+        fetch task unification can happen later when the need is clear.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: authenticate the updater image pull"
+      hash: 0c7c9ec7be12664452efbdb7fec5cf41c0cda9fb
+      body: >
+        The updater pull passed no registry credentials, which only works
+
+        against anonymous registries.
+
+
+        This commit resolves credentials from the device registry auth,
+
+        same as the user app image fetch; a registry without matching
+        credentials
+
+        still pulls anonymously.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: deploy multiple overlays through integration test HUP"
+      hash: 94ce8915fd31b12b6b3f0c169ab9d72b1595a347
+      body: >
+        Carry two overlay services in the host-update integration test and
+        assert
+
+        both containers reach exit 0, guarding generic N-overlay support.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: defer host updates while a rollback validation is in
+        progress"
+      hash: 20c1caccf11ea5a8a2f23166769cca90c955c270
+      body: >
+        A helios-issued reboot inside the rollback-health window triggers the
+        very
+
+        rollback the window exists to decide, so no host work may start while
+        the OS is
+
+        still validating a staged update.
+
+
+        `read` derives the condition fresh from the unit on every pass, and a
+        blocking
+
+        `await_host_validation` task models the wait: it fails rather than
+        blocking, and
+
+        the failure lands on the loop's recoverable path, which re-reads the
+        unit and
+
+        re-plans. The device stays in `ApplyingChanges` until the window closes
+        instead
+
+        of reporting the apply aborted and waiting for the next target change.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "util: query systemd unit activation status"
+      hash: 47d9aebb1f33b025b6f34389c191ac02c4e34607
+      body: >
+        Expose enough state from a unit over D-Bus to decide whether a condition
+        gated
+
+        blocking oneshot (like the OS rollback validation) is running, already
+        ran, or
+
+        has not had its condition evaluated yet this boot.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: assert the planner defers host work while a HUP is in progress"
+      hash: 39a7fd1792a92b4f2ef7edb603cb54660a04ed62
+      body: |
+        Add an assert_no_workflow helper and use it to check that, when a host
+        update is already in progress, the planner defers the divergent install
+        and returns an empty plan with nothing left to clean up.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: assert helios stages with --no-reboot and issues the reboot"
+      hash: 3096198dd0f707225a30e93c7ede3556e5fa40ce
+      body: |
+        Cover the coordinated-reboot handoff end to end in the test suite.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: assert the planner deploys overlays before installing the hostapp"
+      hash: 98310a32b537bfa4c6313d891faaa4e9896a3682
+      body: |
+        Cover overlay staging order: a reboot-requiring overlay is deployed
+        before the hostapp install and activated on the same coordinated reboot.
+        Include the case where the rootfs already matches the target (deploy and
+        activate, no install) and the case of several overlays deploying in
+        parallel ahead of a single install and reboot.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: assert the planner reboots to activate a staged host OS release"
+      hash: 791f83d388c335431c813224c1557ae49d70afbf
+      body: |
+        Now that helios issues the coordinated reboot, extend the existing
+        hostapp planner tests to expect a "reboot to activate" step once the
+        release is staged: on a fresh install, on an update to a new release,
+        and on a device that already has the release installed.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: helios issues the coordinated reboot"
+      hash: 57061ccae5d91006d56745858fbcefdc84ea5821
+      body: ""
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "util: add update-lock discovery and ownership queries"
+      hash: 6f1b36d600541ca78b79dc27a7cc3fed57156df6
+      body: >
+        The reboot gate has to answer two questions about update locks: which
+        ones
+
+        exist under the runtime dir, and whether a given one is helios' own.
+        Both
+
+        belong next to the lock writer rather than in the caller, so the
+        filename is
+
+        stated once and `take_locks` writes through the same constant the scan
+        looks
+
+        for.
+
+
+        `find_update_locks` fails closed: a missing directory is an empty `Ok`,
+        but any
+
+        other read error propagates so a caller refuses to proceed on an
+        uncertain
+
+        scan.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "util: add systemd reboot() via logind"
+      hash: 75d5692c73f122aab49c15d3b6140875f9617e2b
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "test: deploy an overlay in the dind HUP integration test"
+      hash: bbefc40dea87c247ca285945405cfd073832beb5
+      body: |
+        Build a dind image bundling balena-extension-runtime registered as the
+        'extension' Docker runtime, add an overlay service to the hostapp update
+        fixture, and assert the overlay container is deployed (exited 0) before
+        the reboot.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: add hostapp overlay extensions"
+      hash: 8eceea4575c592a9d557717adf6832b49d4d682c
+      body: |
+        Model extension overlays under HostRelease.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "oci: read a created container with an exit code as failed"
+      hash: 81659a125487859f5c203e84991e4b1403479c65
+      body: |
+        A runtime that cannot exec the command leaves the container `Created`
+        while the engine records an exit code. That state was indistinguishable
+        from a container that never started, so an overlay with a missing
+        runtime looked pending forever.
+
+        Add `ContainerStatus::Failed` to carry it. User services keep the old
+        reading; only the overlay path acts on the distinction.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "seek: re-read the device state between failed retries"
+      hash: 7c07cd6534f4beb53ddc0cc41ee92a6f7cd66a84
+      body: >
+        A task that fails reports no state back, but it may already have changed
+
+        the engine: a deploy that errors while starting its container leaves
+        that
+
+        container behind.
+
+
+        Re-read the state after the back-off so the next pass plans against what
+
+        is actually on the device.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "remote-model: parse hostapp overlay services into the target"
+      hash: 1cd94531db1b2839a219506b2cff7a04611cfab8
+      body: |
+        Collect services labelled io.balena.image.class=overlay from the hostapp
+        release composition into HostApp.overlays, carrying requires-reboot.
+
+        Also fix the hostapp service selection to match the class value exactly.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "balenahup: nest the hostapp component under HostRelease"
+      hash: bd70ebf6c796c727c66bce43b78873b62af8893c
+      body: >
+        Model  a host OS release at release level plus a hostapp component
+        carrying the
+
+        rootfs metadata
+
+
+        Overlay extensions go alongside the hostapp component, mirroring how
+        user
+
+        app releases contain services.
+      footer:
+        Change-type: minor
+        change-type: minor
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+    - subject: "util: add boot_id() reading from /proc/sys/kernel/random/boot_id"
+      hash: 3e588d1b5455347b4a2c69a0192b78ddc868d805
+      body: >
+        Extensions are activated by reboot, so telling a staged extension from
+        an
+
+        active one comes down to whether it was staged in the running boot.
+
+        The kernel generates a fresh random UUID for every boot and no
+
+        clock feeds it, so it then survives the NTP steps that a boot timestamp
+
+        derived from uptime does not.
+      footer:
+        Change-type: patch
+        change-type: patch
+        Signed-off-by: Alex Gonzalez <alexg@balena.io>
+        signed-off-by: Alex Gonzalez <alexg@balena.io>
+      author: Alex Gonzalez
+      nested: []
+  version: 0.28.0
+  title: ""
+  date: 2026-09-30T13:22:09.324Z
+- commits:
     - subject: Recreate the dependents of a replaced namespace target
       hash: eb033dfabf603b5e77abd6a70f28ceee825cbfad
       body: >
