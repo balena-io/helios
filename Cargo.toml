@@ -139,7 +139,7 @@ version = "1.24"
 features = [ "v4" ]
 
 [workspace.dependencies.mahler]
-version = "0.26"
+version = "0.27"
 
 [workspace.dependencies.sha2]
 version = "0.11"
