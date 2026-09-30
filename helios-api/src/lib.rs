@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::{Request, Response, StatusCode},
     routing::{delete, get, post},
 };
@@ -20,7 +20,7 @@ use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::{
     Level, Span,
     field::{Empty, display},
-    info, info_span, instrument, warn,
+    info, info_span, instrument,
 };
 
 use helios_legacy::{ProxyConfig, ProxyState, proxy};
@@ -172,26 +172,28 @@ pub async fn start(
 /// Handle `/v1/update` requests
 ///
 /// This will trigger a fetch and an update to the API
-async fn trigger_poll(poll_request_tx: Sender<PollRequest>, body: Bytes) -> StatusCode {
+async fn trigger_poll(
+    poll_request_tx: Sender<PollRequest>,
+    body: Bytes,
+) -> Result<StatusCode, JsonRejection> {
     // `PollRequest::default()` already re-applies with default options
     let request = if body.is_empty() {
         PollRequest::default()
     } else {
-        match serde_json::from_slice::<UpdateOpts>(&body) {
-            // Re-apply even if the target did not change
-            Ok(opts) => PollRequest { opts, reemit: true },
-            Err(e) => {
-                warn!("rejecting malformed update request: {e}");
-                return StatusCode::BAD_REQUEST;
-            }
-        }
+        // Deserialize via `Json` rather than `serde_json` directly so the rejection
+        // matches the one returned by the `Json` extractor.
+        let Json(opts) = Json::from_bytes(&body)?;
+
+        // Create a poll request with reemit: true to tell the main loop
+        // to re-apply the target even if it was modified
+        PollRequest { opts, reemit: true }
     };
 
     if poll_request_tx.send(request).is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return Ok(StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    StatusCode::ACCEPTED
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Handle `Get /v3/status` request
@@ -409,6 +411,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_v1_update_unprocessable_entity() {
+        let (port, _, _) = setup_test_server().await;
+        let client = reqwest::Client::new();
+
+        let body = json!({"force": "yes"});
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/v1/update"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 422);
     }
 
     #[tokio::test]
