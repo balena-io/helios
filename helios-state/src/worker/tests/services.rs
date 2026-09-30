@@ -692,16 +692,13 @@ fn it_orders_service_start_by_depends_on() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // The installs parallelize, but the starts are serialized indicating
-            // service_started dependency being enforced.
-            + seq!(
-                "start service 'db' for release 'my-release-uuid'",
-                "start service 'web' for release 'my-release-uuid'",
-            )
+            + seq!("start service 'web' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
@@ -751,13 +748,14 @@ fn it_awaits_health_before_starting_a_dependent() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // db must be started and report healthy before web may start
+            // db must report healthy before web may start
             + seq!(
-                "start service 'db' for release 'my-release-uuid'",
                 "wait until service 'db' for release 'my-release-uuid' is healthy",
                 "start service 'web' for release 'my-release-uuid'",
             )
@@ -810,13 +808,13 @@ fn it_awaits_completion_before_starting_a_dependent() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'migrate' for release 'my-release-uuid'")
             + par!(
-                "install service 'migrate' for release 'my-release-uuid'",
+                "start service 'migrate' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // migrate must be started and exit 0 before web may start
+            // migrate must exit 0 before web may start
             + seq!(
-                "start service 'migrate' for release 'my-release-uuid'",
                 "wait until service 'migrate' for release 'my-release-uuid' has completed",
                 "start service 'web' for release 'my-release-uuid'",
             )
@@ -879,13 +877,13 @@ fn it_emits_a_single_await_for_a_shared_healthy_dependency() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
                 "install service 'api' for release 'my-release-uuid'",
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
             // a single await for the shared 'db' dependency gates both dependents
-            + seq!("start service 'db' for release 'my-release-uuid'")
             + seq!("wait until service 'db' for release 'my-release-uuid' is healthy")
             + par!(
                 "start service 'api' for release 'my-release-uuid'",
@@ -957,12 +955,12 @@ fn it_emits_separate_awaits_for_a_shared_dependency_under_two_conditions() {
                 "initialize service 'shared' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'shared' for release 'my-release-uuid'")
             + par!(
                 "install service 'on-completed' for release 'my-release-uuid'",
                 "install service 'on-healthy' for release 'my-release-uuid'",
-                "install service 'shared' for release 'my-release-uuid'",
+                "start service 'shared' for release 'my-release-uuid'",
             )
-            + seq!("start service 'shared' for release 'my-release-uuid'")
             // the completion await is scoped to the whole oci subfield, since
             // the exit code sits next to the status, so it cannot run
             // concurrently with the health await
@@ -1021,13 +1019,14 @@ fn it_awaits_an_optional_healthy_dependency() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
             // an optional dependency is waited on like a required one, it only
             // differs once the condition has terminally failed
-            + seq!("start service 'db' for release 'my-release-uuid'")
             + seq!("optionally wait until service 'db' for release 'my-release-uuid' is healthy")
             + seq!("start service 'web' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
@@ -1080,10 +1079,11 @@ fn it_orders_a_realistic_dependency_graph() {
                 }
             },
         }),
-        // db and oneshot have no deps and start in parallel, as do their awaits,
-        // with a single `await db healthy` shared by server and client. server
-        // starts after db is healthy; client starts last, gated on db healthy,
-        // server started and oneshot completed.
+        // db and oneshot have no deps and are installed and started in parallel.
+        // Each dependent is installed once its dependencies are. A single
+        // `await db healthy` is shared by server and client. server starts after
+        // db is healthy, concurrently with the oneshot await; client starts last,
+        // gated on db healthy, server started and oneshot completed.
         seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + par!(
                 "initialize service 'client' for release 'my-release-uuid'",
@@ -1093,23 +1093,23 @@ fn it_orders_a_realistic_dependency_graph() {
             )
             + seq!("pull image 'alpine:latest'")
             + par!(
-                "install service 'client' for release 'my-release-uuid'",
                 "install service 'db' for release 'my-release-uuid'",
                 "install service 'oneshot' for release 'my-release-uuid'",
-                "install service 'server' for release 'my-release-uuid'",
             )
             + par!(
                 "start service 'db' for release 'my-release-uuid'",
                 "start service 'oneshot' for release 'my-release-uuid'",
+                "install service 'server' for release 'my-release-uuid'",
             )
             + par!(
+                "install service 'client' for release 'my-release-uuid'",
                 "wait until service 'db' for release 'my-release-uuid' is healthy",
+            )
+            + par!(
                 "wait until service 'oneshot' for release 'my-release-uuid' has completed",
-            )
-            + seq!(
                 "start service 'server' for release 'my-release-uuid'",
-                "start service 'client' for release 'my-release-uuid'",
             )
+            + seq!("start service 'client' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
