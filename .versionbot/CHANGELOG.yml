@@ -1,4 +1,114 @@
 - commits:
+    - subject: Add support for legacy volumes
+      hash: 4485243906ce7873f5aea955c0826e6775853c6a
+      body: |
+        Volumes created by the legacy supervisor are re-used if available with
+        the same configuration to ensure apps migrating to helios managed user
+        apps continue to have access to existing data on device.
+
+        Legacy volumes are treated as external volumes by helios and identified
+        when processing the target state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Record volumes mounted by containers as external on read
+      hash: 3e2457442add31d042053c94064316e2a625dfae
+      body: >
+        An unsupervised volume may or may not carry metadata linking it to an
+
+        app, so it can only be discovered through the containers mounting it.
+
+        After reading the device volumes, link the unsupervised ones referenced
+
+        by a service mount as external volumes of that service's release.
+
+
+        Volumes the release already knows about are kept, as those were read
+        from
+
+        their own metadata and name a volume helios manages.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Keep external volume mount sources out of the app namespace
+      hash: 09f98d7d017b3d0566f4da4cd97aac09a9efe13b
+      body: |
+        Volume mount sources are namespaced under the app so they match the
+        volumes helios creates for it. Volumes a release declares as external
+        live outside that namespace, so `into_oci_config` now takes the names of
+        the external volumes of the release and leaves those mount sources as
+        given.
+
+        `install_service` resolves that list from the target state through the
+        new `external_volume_names` helper.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add an external variant to the volume model
+      hash: 36f85d00a594354752c2b087073c708dc208e7df
+      body: >
+        A release configuration may have volumes marked as `external`. These
+
+        volumes are assumed to exist on the system at the moment the container
+        is
+
+        created, so helios neither creates nor removes them, it only tracks them
+
+        in the state.
+
+
+        `Volume` and `VolumeTarget` become enums over the external/internal
+
+        split, with the engine backed payload moved to a new `LocalVolume` type,
+
+        which is also what the device tracks for unsupervised volumes. Volume
+
+        comparisons go through `Volume::matches`, as an external volume never
+
+        matches an internal one even when the configurations are equal.
+
+
+        Nothing from the remote target state creates external volumes for now,
+
+        but they will be used for legacy volume support.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add unsupervised volumes to Device model
+      hash: 587efcf0fb1e45299fbb4462393f04c326945594
+      body: >
+        Unsupervised volumes are volumes that exist on the device, but are not
+
+        managed by helios. These volumes will be used in a following commit to
+
+        implement `external` volume support.
+
+
+        This commit changes the way that volumes are read from the engine.
+
+        Before, only volumes with specific labels are read. Now all volumes a
+
+        read and supervised volumes are identified by the
+        `io.balena.volume-name`
+
+        label. Every other volume is treated as unsupervised.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.28.1
+  title: ""
+  date: 2026-09-30T18:19:26.199Z
+- commits:
     - subject: "docker-compose.test.yml: contain failures and optimize"
       hash: a8a3b6184440c1c418234edecfb5f86f220408f0
       body: |
