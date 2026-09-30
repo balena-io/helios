@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -52,6 +52,12 @@ impl Deref for DependsOn {
     type Target = HashMap<String, LongFormDependsOn>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl DerefMut for DependsOn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

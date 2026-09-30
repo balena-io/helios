@@ -7,7 +7,7 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::{self, LocalNamespace, Mount, Namespace};
+use crate::oci::{self, LocalNamespace, Mount, Namespace, NetworkMode};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
@@ -16,6 +16,7 @@ const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
 const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const LABEL_CONFIG_ULIMITS: &str = "io.balena.private.config.ulimits";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
+const LABEL_CONFIG_NETWORK_MODE: &str = "io.balena.private.config.network-mode";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
@@ -118,6 +119,23 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             .remove(LABEL_CONFIG_FIELDS)
             .and_then(|s| json::from_str(&s).ok())
             .unwrap_or_default();
+
+        // The engine does not report a mode back the way it was given, so take
+        // it from the label. A container with no label predates it and keeps the
+        // old read of `none` and `host`.
+        config.network_mode = match labels.remove(LABEL_CONFIG_NETWORK_MODE) {
+            Some(mode) => Some(NetworkMode::from(mode)),
+            None => config
+                .network_mode
+                .filter(|m| matches!(m, NetworkMode::None | NetworkMode::Host)),
+        };
+
+        // A composition sets a mode or lists networks, never both, so a mode
+        // means the target has none. The engine still reports one for `bridge`,
+        // which it attaches to the default bridge network.
+        if config.network_mode.is_some() {
+            config.networks.clear();
+        }
 
         // Read the list of healthcheck subfields the composition set
         let label_config_healthcheck: HashSet<String> = labels
@@ -264,6 +282,7 @@ impl ServiceConfig {
             .map(|s| json::Value::String(s.to_owned()))
             .collect::<json::Value>();
 
+        let network_mode = config.network_mode.as_ref().map(NetworkMode::to_string);
         let labels = &mut config.labels;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
@@ -330,6 +349,12 @@ impl ServiceConfig {
             LABEL_CONFIG_HEALTHCHECK.to_string(),
             label_config_healthcheck_value.to_string(),
         );
+
+        // the composition form, the only one that survives a read back. `Container::create`
+        // resolves a service reference before the engine sees it
+        if let Some(mode) = network_mode {
+            labels.insert(LABEL_CONFIG_NETWORK_MODE.to_string(), mode);
+        }
 
         // Set app and service metadata as labels when creating the container
         labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
@@ -399,6 +424,89 @@ mod tests {
 
     fn make_uuid() -> Uuid {
         Uuid::from("test-app-uuid")
+    }
+
+    /// Render a config for the engine and read it back, as install and inspect do.
+    fn round_trip(config: oci::ContainerConfig) -> (oci::ContainerConfig, ServiceConfig) {
+        let rendered =
+            ServiceConfig(config).into_oci_config(1, "web", &make_uuid(), &Default::default());
+        let back = ServiceConfig::from(rendered.clone());
+        (rendered, back)
+    }
+
+    #[test]
+    fn service_network_mode_survives_a_round_trip() {
+        let (rendered, back) = round_trip(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Service("db".to_string())),
+            ..Default::default()
+        });
+
+        // the reference stays in composition form, `Container::create` resolves it
+        assert_eq!(
+            rendered.network_mode,
+            Some(NetworkMode::Service("db".to_string()))
+        );
+        assert_eq!(
+            back.network_mode,
+            Some(NetworkMode::Service("db".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_mode_leaves_no_engine_managed_networks_behind() {
+        // the engine puts a `bridge` container on the default bridge network
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Other("bridge".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default());
+        rendered
+            .networks
+            .insert("bridge".to_string(), Default::default());
+
+        let back = ServiceConfig::from(rendered);
+        assert!(back.networks.is_empty());
+    }
+
+    #[test]
+    fn bridge_network_mode_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Other("bridge".to_string())),
+            ..Default::default()
+        });
+        assert_eq!(
+            back.network_mode,
+            Some(NetworkMode::Other("bridge".to_string()))
+        );
+    }
+
+    #[test]
+    fn host_network_mode_survives_a_round_trip_without_the_label() {
+        // a container created before the label existed still reads back
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Host),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default());
+        rendered.labels.remove(LABEL_CONFIG_NETWORK_MODE);
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, Some(NetworkMode::Host));
+    }
+
+    #[test]
+    fn an_engine_reported_network_name_is_not_read_as_a_mode() {
+        // for a user network the engine puts the network name in network_mode
+        let mut rendered = ServiceConfig(oci::ContainerConfig::default()).into_oci_config(
+            1,
+            "web",
+            &make_uuid(),
+            &Default::default(),
+        );
+        rendered.network_mode = Some(NetworkMode::Other("default_test-app-uuid".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, None);
     }
 
     #[test]
