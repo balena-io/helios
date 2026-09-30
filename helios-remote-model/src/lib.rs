@@ -429,7 +429,8 @@ fn inject_network_mode_depends_on(services: &mut HashMap<String, Service>) -> Re
             svc.composition
                 .depends_on
                 .entry(dep_name)
-                // `restart` has no behaviour yet, it is set to match compose
+                // the joining service holds a reference to the container, so it
+                // is re-created along with it
                 .or_insert(LongFormDependsOn {
                     condition: DependsOnCondition::ServiceStarted,
                     restart: true,
