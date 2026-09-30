@@ -1514,7 +1514,13 @@ fn uninstall_service_when_requirements_are_met(
         let locks_satisfied = !services_need_stopping(&app_uuid, &device, &t_device)
             || device.apps.get(&app_uuid).is_some_and(|app| app.locked);
 
-        if target_release_exists && can_migrate_as_is && locks_satisfied {
+        if target_release_exists && can_migrate_as_is {
+            // the migration waits for the services that need stopping to take the
+            // locks, so failing to take them leaves every service in the current
+            // release, rather than falling back to re-creating this one
+            if !locks_satisfied {
+                return Vec::new();
+            }
             return vec![
                 remove_service.into_task(),
                 migrate_service

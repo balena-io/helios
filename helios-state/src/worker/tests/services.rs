@@ -1325,3 +1325,222 @@ fn it_recreates_a_service_that_joined_a_reconfigured_namespace() {
         ),
     );
 }
+
+#[test]
+fn it_recreates_a_restarting_dependent_when_its_dependency_changes_across_releases() {
+    init_tracing();
+    // only 'db' changes in the new release, but 'web' has a `restart: true`
+    // dependency on it, so it is re-created instead of migrated
+    let db = |cmd: &str| {
+        json!({
+            "id": 1,
+            "image": "alpine:latest",
+            "started": true,
+            "config": {"command": ["sh", "-c", cmd]},
+        })
+    };
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {
+                        "db": with_container(db("old"), "old-release_db"),
+                        "web": with_container(web.clone(), "old-release_web"),
+                    }
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": db("new"), "web": web}
+                }
+            }}},
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'db' for release 'new-release'",
+                "initialize service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "install service 'db' for release 'new-release'",
+                "take locks for app with uuid 'my-app-uuid'",
+                // 'web' is removed before the 'db' it depends on
+                "stop service 'web' for release 'old-release'",
+                "uninstall service 'web' for release 'old-release'",
+                "stop service 'db' for release 'old-release'",
+                "uninstall service 'db' for release 'old-release'",
+            )
+            + par!(
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+                "start service 'db' for release 'new-release'",
+                "install service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "start service 'web' for release 'new-release'",
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "release locks for app with uuid 'my-app-uuid'",
+            ),
+    );
+}
+
+#[test]
+fn it_migrates_a_restarting_dependent_along_with_its_dependency() {
+    init_tracing();
+    // 'web' has a `restart: true` dependency on 'db', neither changes in the new
+    // release, so both are migrated while only 'log' is re-created
+    let svc = |id: u32, cmd: &str| {
+        json!({
+            "id": id,
+            "image": "alpine:latest",
+            "started": true,
+            "config": {"command": ["sh", "-c", cmd]},
+        })
+    };
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {
+                        "db": with_container(svc(1, "db"), "old-release_db"),
+                        "web": with_container(web.clone(), "old-release_web"),
+                        "log": with_container(svc(3, "old"), "old-release_log"),
+                    }
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": svc(1, "db"), "web": web, "log": svc(3, "new")}
+                }
+            }}},
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'db' for release 'new-release'",
+                "initialize service 'log' for release 'new-release'",
+                "initialize service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "install service 'log' for release 'new-release'",
+                // services are only migrated once locks are taken
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'log' for release 'old-release'",
+                "uninstall service 'log' for release 'old-release'",
+            )
+            + dag!(
+                seq!("start service 'log' for release 'new-release'"),
+                par!(
+                    "remove data for 'db' for release 'old-release'",
+                    "migrate service 'db' to release 'new-release'",
+                ),
+                par!(
+                    "remove data for 'web' for release 'old-release'",
+                    "migrate service 'web' to release 'new-release'",
+                ),
+            )
+            + par!(
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            )
+            + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_migrates_a_restarting_dependent_whose_dependency_is_not_in_its_release() {
+    init_tracing();
+    // 'db' is already in the new release but not in the release of 'web'
+    // but we can assume it's part of an interrupted migration otherwise 'web' would already
+    // be gone given the uninstall ordering enforced by the engine.
+    let db = json!({
+        "id": 1,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+    });
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {"network_mode": "service:db"},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {"web": with_container(web.clone(), "old-release_web")}
+                },
+                "new-release": {
+                    "installed": false,
+                    "services": {"db": with_container(db.clone(), "new-release_db")}
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": db, "web": web}
+                }
+            }}},
+        }),
+        seq!("initialize service 'web' for release 'new-release'",)
+            + par!(
+                "remove data for 'web' for release 'old-release'",
+                "migrate service 'web' to release 'new-release'",
+            )
+            + par!(
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            ),
+    );
+}
