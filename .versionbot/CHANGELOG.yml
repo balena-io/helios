@@ -1,4 +1,19 @@
 - commits:
+    - subject: Update flowzone config
+      hash: 1bfe435fbe293ba1c3f2caf4d7ecd2c7a468627d
+      body: |
+        - Remove pull_request_target (see https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target#default-policy-for-pull_request_target)
+        - Remove code for duplicate workflow execution (not needed without `pull_request_target`)
+        - Remove unnecessary permissions
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.28.2
+  title: ""
+  date: 2026-10-01T14:00:07.458Z
+- commits:
     - subject: Add support for legacy volumes
       hash: 4485243906ce7873f5aea955c0826e6775853c6a
       body: |
