@@ -118,7 +118,7 @@ features = [ "env-filter", "fmt", "registry", "ansi" ]
 [workspace.dependencies.reqwest]
 version = "0.13"
 default-features = false
-features = [ "json", "rustls", "brotli", "stream" ]
+features = [ "json", "rustls", "brotli", "stream", "hickory-dns" ]
 
 [workspace.dependencies.serde]
 version = "1.0"
