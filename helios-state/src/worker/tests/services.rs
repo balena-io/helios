@@ -692,16 +692,13 @@ fn it_orders_service_start_by_depends_on() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // The installs parallelize, but the starts are serialized indicating
-            // service_started dependency being enforced.
-            + seq!(
-                "start service 'db' for release 'my-release-uuid'",
-                "start service 'web' for release 'my-release-uuid'",
-            )
+            + seq!("start service 'web' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
@@ -751,13 +748,14 @@ fn it_awaits_health_before_starting_a_dependent() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // db must be started and report healthy before web may start
+            // db must report healthy before web may start
             + seq!(
-                "start service 'db' for release 'my-release-uuid'",
                 "wait until service 'db' for release 'my-release-uuid' is healthy",
                 "start service 'web' for release 'my-release-uuid'",
             )
@@ -810,13 +808,13 @@ fn it_awaits_completion_before_starting_a_dependent() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'migrate' for release 'my-release-uuid'")
             + par!(
-                "install service 'migrate' for release 'my-release-uuid'",
+                "start service 'migrate' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
-            // migrate must be started and exit 0 before web may start
+            // migrate must exit 0 before web may start
             + seq!(
-                "start service 'migrate' for release 'my-release-uuid'",
                 "wait until service 'migrate' for release 'my-release-uuid' has completed",
                 "start service 'web' for release 'my-release-uuid'",
             )
@@ -879,13 +877,13 @@ fn it_emits_a_single_await_for_a_shared_healthy_dependency() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
                 "install service 'api' for release 'my-release-uuid'",
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
             // a single await for the shared 'db' dependency gates both dependents
-            + seq!("start service 'db' for release 'my-release-uuid'")
             + seq!("wait until service 'db' for release 'my-release-uuid' is healthy")
             + par!(
                 "start service 'api' for release 'my-release-uuid'",
@@ -957,12 +955,12 @@ fn it_emits_separate_awaits_for_a_shared_dependency_under_two_conditions() {
                 "initialize service 'shared' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            + seq!("install service 'shared' for release 'my-release-uuid'")
             + par!(
                 "install service 'on-completed' for release 'my-release-uuid'",
                 "install service 'on-healthy' for release 'my-release-uuid'",
-                "install service 'shared' for release 'my-release-uuid'",
+                "start service 'shared' for release 'my-release-uuid'",
             )
-            + seq!("start service 'shared' for release 'my-release-uuid'")
             // the completion await is scoped to the whole oci subfield, since
             // the exit code sits next to the status, so it cannot run
             // concurrently with the health await
@@ -1021,13 +1019,14 @@ fn it_awaits_an_optional_healthy_dependency() {
                 "initialize service 'web' for release 'my-release-uuid'",
             )
             + seq!("pull image 'alpine:latest'")
+            // db is installed before web as a dependency, web installs while db starts
+            + seq!("install service 'db' for release 'my-release-uuid'")
             + par!(
-                "install service 'db' for release 'my-release-uuid'",
+                "start service 'db' for release 'my-release-uuid'",
                 "install service 'web' for release 'my-release-uuid'",
             )
             // an optional dependency is waited on like a required one, it only
             // differs once the condition has terminally failed
-            + seq!("start service 'db' for release 'my-release-uuid'")
             + seq!("optionally wait until service 'db' for release 'my-release-uuid' is healthy")
             + seq!("start service 'web' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
@@ -1080,10 +1079,11 @@ fn it_orders_a_realistic_dependency_graph() {
                 }
             },
         }),
-        // db and oneshot have no deps and start in parallel, as do their awaits,
-        // with a single `await db healthy` shared by server and client. server
-        // starts after db is healthy; client starts last, gated on db healthy,
-        // server started and oneshot completed.
+        // db and oneshot have no deps and are installed and started in parallel.
+        // Each dependent is installed once its dependencies are. A single
+        // `await db healthy` is shared by server and client. server starts after
+        // db is healthy, concurrently with the oneshot await; client starts last,
+        // gated on db healthy, server started and oneshot completed.
         seq!("initialize release 'my-release-uuid' for app with uuid 'my-app-uuid'")
             + par!(
                 "initialize service 'client' for release 'my-release-uuid'",
@@ -1093,23 +1093,23 @@ fn it_orders_a_realistic_dependency_graph() {
             )
             + seq!("pull image 'alpine:latest'")
             + par!(
-                "install service 'client' for release 'my-release-uuid'",
                 "install service 'db' for release 'my-release-uuid'",
                 "install service 'oneshot' for release 'my-release-uuid'",
-                "install service 'server' for release 'my-release-uuid'",
             )
             + par!(
                 "start service 'db' for release 'my-release-uuid'",
                 "start service 'oneshot' for release 'my-release-uuid'",
+                "install service 'server' for release 'my-release-uuid'",
             )
             + par!(
+                "install service 'client' for release 'my-release-uuid'",
                 "wait until service 'db' for release 'my-release-uuid' is healthy",
+            )
+            + par!(
                 "wait until service 'oneshot' for release 'my-release-uuid' has completed",
-            )
-            + seq!(
                 "start service 'server' for release 'my-release-uuid'",
-                "start service 'client' for release 'my-release-uuid'",
             )
+            + seq!("start service 'client' for release 'my-release-uuid'")
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'"),
     );
 }
@@ -1308,17 +1308,239 @@ fn it_recreates_a_service_that_joined_a_reconfigured_namespace() {
         seq!(
             "prepare release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "take locks for app with uuid 'my-app-uuid'",
-            // the dependency is replaced first, then the service that joined it
+            // the service that joined the namespace is removed first, then the
+            // dependency is replaced
+            "stop service 'web' for release 'my-release-uuid'",
+            "remove container for service 'web' for release 'my-release-uuid'",
             "stop service 'db' for release 'my-release-uuid'",
             "remove container for service 'db' for release 'my-release-uuid'",
             "install service 'db' for release 'my-release-uuid'",
-            "stop service 'web' for release 'my-release-uuid'",
-            "remove container for service 'web' for release 'my-release-uuid'",
-            "install service 'web' for release 'my-release-uuid'",
+        ) + par!(
             "start service 'db' for release 'my-release-uuid'",
+            "install service 'web' for release 'my-release-uuid'",
+        ) + seq!(
             "start service 'web' for release 'my-release-uuid'",
             "finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",
             "release locks for app with uuid 'my-app-uuid'",
         ),
+    );
+}
+
+#[test]
+fn it_recreates_a_restarting_dependent_when_its_dependency_changes_across_releases() {
+    init_tracing();
+    // only 'db' changes in the new release, but 'web' has a `restart: true`
+    // dependency on it, so it is re-created instead of migrated
+    let db = |cmd: &str| {
+        json!({
+            "id": 1,
+            "image": "alpine:latest",
+            "started": true,
+            "config": {"command": ["sh", "-c", cmd]},
+        })
+    };
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {
+                        "db": with_container(db("old"), "old-release_db"),
+                        "web": with_container(web.clone(), "old-release_web"),
+                    }
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": db("new"), "web": web}
+                }
+            }}},
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'db' for release 'new-release'",
+                "initialize service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "install service 'db' for release 'new-release'",
+                "take locks for app with uuid 'my-app-uuid'",
+                // 'web' is removed before the 'db' it depends on
+                "stop service 'web' for release 'old-release'",
+                "uninstall service 'web' for release 'old-release'",
+                "stop service 'db' for release 'old-release'",
+                "uninstall service 'db' for release 'old-release'",
+            )
+            + par!(
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+                "start service 'db' for release 'new-release'",
+                "install service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "start service 'web' for release 'new-release'",
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "release locks for app with uuid 'my-app-uuid'",
+            ),
+    );
+}
+
+#[test]
+fn it_migrates_a_restarting_dependent_along_with_its_dependency() {
+    init_tracing();
+    // 'web' has a `restart: true` dependency on 'db', neither changes in the new
+    // release, so both are migrated while only 'log' is re-created
+    let svc = |id: u32, cmd: &str| {
+        json!({
+            "id": id,
+            "image": "alpine:latest",
+            "started": true,
+            "config": {"command": ["sh", "-c", cmd]},
+        })
+    };
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {
+                        "db": with_container(svc(1, "db"), "old-release_db"),
+                        "web": with_container(web.clone(), "old-release_web"),
+                        "log": with_container(svc(3, "old"), "old-release_log"),
+                    }
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": svc(1, "db"), "web": web, "log": svc(3, "new")}
+                }
+            }}},
+        }),
+        seq!("initialize release 'new-release' for app with uuid 'my-app-uuid'")
+            + par!(
+                "initialize service 'db' for release 'new-release'",
+                "initialize service 'log' for release 'new-release'",
+                "initialize service 'web' for release 'new-release'",
+            )
+            + seq!(
+                "install service 'log' for release 'new-release'",
+                // services are only migrated once locks are taken
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'log' for release 'old-release'",
+                "uninstall service 'log' for release 'old-release'",
+            )
+            + dag!(
+                seq!("start service 'log' for release 'new-release'"),
+                par!(
+                    "remove data for 'db' for release 'old-release'",
+                    "migrate service 'db' to release 'new-release'",
+                ),
+                par!(
+                    "remove data for 'web' for release 'old-release'",
+                    "migrate service 'web' to release 'new-release'",
+                ),
+            )
+            + par!(
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            )
+            + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_migrates_a_restarting_dependent_whose_dependency_is_not_in_its_release() {
+    init_tracing();
+    // 'db' is already in the new release but not in the release of 'web'
+    // but we can assume it's part of an interrupted migration otherwise 'web' would already
+    // be gone given the uninstall ordering enforced by the engine.
+    let db = json!({
+        "id": 1,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+    });
+    let web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {"network_mode": "service:db"},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |mut svc: Value, name: &str| {
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "old-release": {
+                    "installed": true,
+                    "services": {"web": with_container(web.clone(), "old-release_web")}
+                },
+                "new-release": {
+                    "installed": false,
+                    "services": {"db": with_container(db.clone(), "new-release_db")}
+                }
+            }}},
+            "images": {"alpine:latest": {"config": {}, "download_progress": 100, "oci_id": "111"}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "new-release": {
+                    "installed": true,
+                    "services": {"db": db, "web": web}
+                }
+            }}},
+        }),
+        seq!("initialize service 'web' for release 'new-release'",)
+            + par!(
+                "remove data for 'web' for release 'old-release'",
+                "migrate service 'web' to release 'new-release'",
+            )
+            + par!(
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            ),
     );
 }

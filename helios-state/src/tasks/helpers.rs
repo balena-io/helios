@@ -3,9 +3,9 @@ use mahler::state::Map;
 use crate::common_types::Uuid;
 use crate::models::{
     Container, ContainerStatus, DependsOn, DependsOnCondition, Device, DeviceTarget, Health,
-    ImageRef, Network, NetworkTarget, Service, ServiceConfig, ServiceTarget, Volume, VolumeTarget,
+    ImageRef, Network, NetworkTarget, Service, ServiceTarget, Volume, VolumeTarget,
 };
-use crate::oci::{Mount, NetworkMode};
+use crate::oci::Mount;
 
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
@@ -182,9 +182,13 @@ pub fn any_dependency_failed(
     )
 }
 
-/// The services of the release that reach the given service's container through
-/// their network namespace, directly or through another service.
-pub fn services_joining_namespace<'a>(
+/// The services of the release that are restarted along with the given
+/// service, i.e. those with a `restart: true` dependency on it, directly or
+/// through another such service.
+///
+/// Dependents come before the services they depend on, so the result is the
+/// order in which they can be stopped.
+pub fn services_restarting_with<'a>(
     device: &'a Device,
     app_uuid: &Uuid,
     rel_uuid: &Uuid,
@@ -194,21 +198,21 @@ pub fn services_joining_namespace<'a>(
         return Vec::new();
     };
 
-    // a service joining a dependent joins the same namespace, and the release is
-    // validated as acyclic so the walk terminates
-    let mut found: Vec<&'a String> = Vec::new();
-    let mut targets = vec![svc_name];
-    while let Some(target) = targets.pop() {
+    // post-order walk over the dependents, so every service is pushed after the
+    // services that depend on it; the release is validated as acyclic so the
+    // walk terminates
+    fn visit<'a>(services: &'a Map<String, Service>, target: &str, found: &mut Vec<&'a String>) {
         for (name, svc) in services.iter() {
-            if matches!(&svc.config.network_mode, Some(NetworkMode::Service(joined)) if joined == target)
-                && !found.contains(&name)
-            {
+            let restarts = svc.depends_on.get(target).is_some_and(|dep| dep.restart);
+            if restarts && !found.contains(&name) {
+                visit(services, name, found);
                 found.push(name);
-                targets.push(name.as_str());
             }
         }
     }
 
+    let mut found = Vec::new();
+    visit(services, svc_name, &mut found);
     found
 }
 
@@ -342,7 +346,7 @@ pub fn find_future_service<'a>(
 
 /// Check that the resources the service is linked to allow it to move to the
 /// target release with its container intact. A volume or network whose config
-/// changes across releases, or a joined namespace whose service is being
+/// changes across releases, or a `restart: true` dependency that is being
 /// replaced, means the container has to be recreated instead.
 fn linked_resources_can_migrate(
     device: &Device,
@@ -350,8 +354,9 @@ fn linked_resources_can_migrate(
     app_uuid: &Uuid,
     rel_uuid: &Uuid,
     t_rel_uuid: &Uuid,
-    cfg: &ServiceConfig,
+    svc: &Service,
 ) -> bool {
+    let cfg = &svc.config;
     let release = device
         .apps
         .get(app_uuid)
@@ -382,22 +387,38 @@ fn linked_resources_can_migrate(
         }
     });
 
-    // A service that joined a namespace holds the id of that container, so it can
-    // only move if the service it joined moves with it rather than being replaced.
-    let namespace_ok = match &cfg.network_mode {
-        Some(NetworkMode::Service(dep_name)) => match (
-            release.and_then(|r| r.services.get(dep_name)),
-            t_release.and_then(|r| r.services.get(dep_name)),
-        ) {
-            (Some(dep), Some(t_dep)) => {
-                service_matches_target(device, t_device, app_uuid, rel_uuid, dep, t_rel_uuid, t_dep)
-            }
-            _ => false,
-        },
-        _ => true,
-    };
+    // A service is re-created along with its `restart: true` dependencies, so it
+    // can only move if those move with it rather than being replaced. This also
+    // covers a service joining the namespace of another, as it holds the id of
+    // that container.
+    let moved_release = device
+        .apps
+        .get(app_uuid)
+        .and_then(|app| app.releases.get(t_rel_uuid));
+    let dependencies_ok =
+        svc.depends_on
+            .iter()
+            .filter(|(_, dep)| dep.restart)
+            .all(|(dep_name, _)| {
+                match (
+                    release.and_then(|r| r.services.get(dep_name)),
+                    t_release.and_then(|r| r.services.get(dep_name)),
+                ) {
+                    (Some(dep), Some(t_dep)) => service_matches_target(
+                        device, t_device, app_uuid, rel_uuid, dep, t_rel_uuid, t_dep,
+                    ),
+                    // a dependency is only removed from a release after its
+                    // `restart: true` dependents, unless it moves with its
+                    // container intact, so one already in the target release
+                    // has moved ahead of the service
+                    (None, Some(_)) => moved_release
+                        .and_then(|r| r.services.get(dep_name))
+                        .is_some_and(|dep| dep.oci.is_some()),
+                    _ => false,
+                }
+            });
 
-    volumes_ok && networks_ok && namespace_ok
+    volumes_ok && networks_ok && dependencies_ok
 }
 
 /// Check whether the current service can be migrated to the given target
@@ -417,14 +438,7 @@ pub fn service_matches_target(
         && svc.config == t_svc.config
         && svc.started == t_svc.started
         && svc.depends_on == t_svc.depends_on
-        && linked_resources_can_migrate(
-            device,
-            t_device,
-            app_uuid,
-            rel_uuid,
-            t_rel_uuid,
-            &svc.config,
-        )
+        && linked_resources_can_migrate(device, t_device, app_uuid, rel_uuid, t_rel_uuid, svc)
 }
 
 /// Check whether a running service needs to be stopped to converge towards
@@ -546,11 +560,12 @@ mod tests {
         svc(json!({"id": 1, "image": "alpine:latest", "config": {}, "oci": oci}))
     }
 
-    /// Whether `web`, which joins `db`, can move to the target release with its
-    /// container intact. `db_cmd` is db's command in the target release.
-    fn web_matches_across(from: &str, to: &str, db_cmd: &str) -> bool {
-        let web = json!({"id": 1, "image": "alpine:latest", "started": true,
-                         "config": {"network_mode": "service:db"}});
+    /// Whether `web`, which depends on `db` with the given `restart`, can move to
+    /// the target release with its container intact. `db_cmd` is db's command in
+    /// the target release.
+    fn web_matches_across(from: &str, to: &str, db_cmd: &str, restart: bool) -> bool {
+        let web = json!({"id": 1, "image": "alpine:latest", "started": true, "config": {},
+                         "depends_on": {"db": {"condition": "service_started", "restart": restart, "required": true}}});
         let db = |cmd: &str| {
             json!({"id": 2, "image": "alpine:latest", "started": true,
                                     "config": {"command": [cmd]}})
@@ -597,56 +612,95 @@ mod tests {
     }
 
     #[test]
-    fn a_service_migrates_when_the_namespace_it_joined_migrates_too() {
-        assert!(web_matches_across("old-rel", "new-rel", "one"));
+    fn a_service_migrates_when_its_restarting_dependency_migrates_too() {
+        assert!(web_matches_across("old-rel", "new-rel", "one", true));
     }
 
     #[test]
-    fn a_service_cannot_migrate_when_the_namespace_it_joined_is_replaced() {
-        // db is recreated, so the id web holds goes stale
-        assert!(!web_matches_across("old-rel", "new-rel", "two"));
+    fn a_service_cannot_migrate_when_its_restarting_dependency_is_replaced() {
+        // db is recreated, so web is recreated along with it
+        assert!(!web_matches_across("old-rel", "new-rel", "two", true));
     }
 
-    /// A service joining `dep`'s network namespace, or none.
-    fn joining(dep: Option<&str>) -> serde_json::Value {
-        let network_mode = dep.map(|name| json!(format!("service:{name}")));
-        json!({"id": 1, "image": "alpine:latest", "config": {"network_mode": network_mode}})
+    #[test]
+    fn a_service_migrates_when_a_dependency_without_restart_is_replaced() {
+        assert!(web_matches_across("old-rel", "new-rel", "two", false));
     }
 
-    fn joining_namespace_of(device: &Device, svc_name: &str) -> Vec<String> {
-        services_joining_namespace(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
+    /// A service with a `depends_on` entry per `(name, restart)` pair.
+    fn depending_on(entries: &[(&str, bool)]) -> serde_json::Value {
+        let depends_on: serde_json::Map<_, _> = entries
+            .iter()
+            .map(|(name, restart)| {
+                (
+                    name.to_string(),
+                    json!({"condition": "service_started", "restart": restart, "required": true}),
+                )
+            })
+            .collect();
+        json!({"id": 1, "image": "alpine:latest", "config": {}, "depends_on": depends_on})
+    }
+
+    fn restarting_with(device: &Device, svc_name: &str) -> Vec<String> {
+        services_restarting_with(device, &"app-uuid".into(), &"rel-uuid".into(), svc_name)
             .into_iter()
             .cloned()
             .collect()
     }
 
     #[test]
-    fn finds_the_services_joining_a_namespace() {
+    fn finds_the_services_restarting_with_a_service() {
         let device = device_with(json!({
-            "db": joining(None),
-            "web": joining(Some("db")),
-            "other": joining(None),
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", true)]),
+            "other": depending_on(&[]),
         }));
-        assert_eq!(joining_namespace_of(&device, "db"), vec!["web".to_string()]);
+        assert_eq!(restarting_with(&device, "db"), vec!["web".to_string()]);
     }
 
     #[test]
-    fn follows_a_chain_of_joined_namespaces() {
-        // 'log' reaches 'db' through 'web', so it loses its namespace too
+    fn skips_dependents_that_do_not_restart() {
         let device = device_with(json!({
-            "db": joining(None),
-            "web": joining(Some("db")),
-            "log": joining(Some("web")),
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", false)]),
         }));
-        let mut found = joining_namespace_of(&device, "db");
-        found.sort();
-        assert_eq!(found, vec!["log".to_string(), "web".to_string()]);
+        assert!(restarting_with(&device, "db").is_empty());
     }
 
     #[test]
-    fn finds_nothing_for_a_namespace_no_one_joined() {
-        let device = device_with(json!({"db": joining(None), "web": joining(None)}));
-        assert!(joining_namespace_of(&device, "db").is_empty());
+    fn follows_a_chain_of_restarting_dependents() {
+        // 'log' restarts with 'web', which restarts with 'db'
+        let device = device_with(json!({
+            "db": depending_on(&[]),
+            "web": depending_on(&[("db", true)]),
+            "log": depending_on(&[("web", true)]),
+        }));
+        assert_eq!(
+            restarting_with(&device, "db"),
+            vec!["log".to_string(), "web".to_string()]
+        );
+    }
+
+    #[test]
+    fn orders_dependents_before_their_dependencies() {
+        // 'x' depends on 'db' directly, but also on 'y', which only reaches
+        // 'db' through 'z', so 'x' still comes before 'y'
+        let device = device_with(json!({
+            "db": depending_on(&[]),
+            "x": depending_on(&[("db", true), ("y", true)]),
+            "y": depending_on(&[("z", true)]),
+            "z": depending_on(&[("db", true)]),
+        }));
+        assert_eq!(
+            restarting_with(&device, "db"),
+            vec!["x".to_string(), "y".to_string(), "z".to_string()]
+        );
+    }
+
+    #[test]
+    fn finds_nothing_for_a_service_without_dependents() {
+        let device = device_with(json!({"db": depending_on(&[]), "web": depending_on(&[])}));
+        assert!(restarting_with(&device, "db").is_empty());
     }
 
     /// Build a `depends_on` of `condition` entries with the given
