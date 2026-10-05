@@ -1,4 +1,46 @@
 - commits:
+    - subject: Use hickory DNS resolver on requests to the remote backend
+      hash: d9beb496a52f450bff6c5a6091d032f74ab8244c
+      body: >
+        When used within an alpine container, helios (via reqwest) will use the
+
+        musl `getaddrinfo` system call to resolve the remote address. On musl,
+
+        this call performs both ipv6 and ipv4 requests, and if any fail it
+
+        reports back `SERVFAIL` which results in the whole request to fail and
+
+        the error
+
+
+        ```
+
+        hyper_util::client::legacy::Error(Connect, ConnectError("dns error",
+        Custom { kind: Uncategorized, error: "failed to lookup address
+        information: Try again" }))
+
+        ```
+
+
+        Usually this is not an issue, but in a misconfigured network this can
+
+        happen.
+
+
+        This commit toggles the hickory-dns feature of reqwest in order to use a
+
+        separate resolver. This should make connection to the backend more
+
+        robust to different types of networks.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.28.3
+  title: ""
+  date: 2026-10-05T22:04:48.569Z
+- commits:
     - subject: Update flowzone config
       hash: 1bfe435fbe293ba1c3f2caf4d7ecd2c7a468627d
       body: |
