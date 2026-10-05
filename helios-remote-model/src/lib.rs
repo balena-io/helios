@@ -399,8 +399,8 @@ pub struct Release {
     pub networks: HashMap<String, Network>,
 }
 
-/// Turn every `network_mode: service:{name}` and `ipc: service:{name}` into a
-/// `depends_on` entry on that service, as the engine refuses to start a container
+/// Turn every `network_mode: service:{name}`, `ipc: service:{name}` and
+/// `pid: service:{name}` into a `depends_on` entry on that service, as the engine refuses to start a container
 /// whose namespace target is not running. An explicit entry keeps its condition,
 /// but is made `required` and `restart`.
 fn inject_namespace_depends_on(services: &mut HashMap<String, Service>) -> Result<(), String> {
@@ -419,7 +419,13 @@ fn inject_namespace_depends_on(services: &mut HashMap<String, Service>) -> Resul
                 }
                 _ => None,
             };
-            network.into_iter().chain(ipc)
+            let pid = match &svc.composition.pid {
+                Some(PidMode::Service(dep_name)) => {
+                    Some((svc_name.clone(), dep_name.clone(), "PID"))
+                }
+                _ => None,
+            };
+            network.into_iter().chain(ipc).chain(pid)
         })
         .collect();
 
@@ -925,6 +931,93 @@ mod tests {
                       "composition": {"ipc": "service:b"}},
                 "b": {"id": 2, "image": "alpine:latest",
                       "composition": {"ipc": "shareable", "depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular dependency"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn pid_service_implies_a_started_dependency() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        let dep = release.services["web"]
+            .composition
+            .depends_on
+            .get("db")
+            .expect("an implicit dependency on 'db'");
+        assert_eq!(dep.condition, DependsOnCondition::ServiceStarted);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn pid_service_makes_an_explicit_dependency_required_and_restart() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {
+                            "pid": "service:db",
+                            "depends_on": {"db": {
+                                "condition": "service_healthy",
+                                "required": false,
+                                "restart": false
+                            }}
+                        }},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        // the explicit condition is kept
+        let dep = &release.services["web"].composition.depends_on["db"];
+        assert_eq!(dep.condition, DependsOnCondition::ServiceHealthy);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn rejects_pid_of_undefined_service() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:ghost"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("undefined service 'ghost'"));
+    }
+
+    #[test]
+    fn rejects_pid_of_itself() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:web"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("its own PID namespace"));
+    }
+
+    #[test]
+    fn rejects_cycle_through_pid() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest",
+                      "composition": {"pid": "service:b"}},
+                "b": {"id": 2, "image": "alpine:latest",
+                      "composition": {"depends_on": ["a"]}}
             }
         }))
         .unwrap_err();

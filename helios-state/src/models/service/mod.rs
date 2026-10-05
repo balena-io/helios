@@ -9,13 +9,13 @@ use crate::labels::LABEL_SERVICE_ID;
 pub use crate::oci::Health;
 use crate::oci::{
     self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck, IpcMode,
-    LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
-    TmpfsOptions, Ulimit,
+    LocalContainer, Mount, NetworkMode, NetworkSettings, PidMode, PortMapping, PortProtocol,
+    RestartPolicy, TmpfsOptions, Ulimit,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
     DurationNanos, DurationSecs, IpcMode as RemoteIpcMode, Mount as RemoteMount,
-    NetworkMode as RemoteNetworkMode, PortProtocol as RemotePortProtocol,
+    NetworkMode as RemoteNetworkMode, PidMode as RemotePidMode, PortProtocol as RemotePortProtocol,
     RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
     TmpfsOptions as RemoteTmpfsOptions,
 };
@@ -245,6 +245,13 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteIpcMode::Service(name) => IpcMode::Service(name),
         });
 
+        let pid = composition.pid.map(|m| match m {
+            RemotePidMode::Host => PidMode::Host,
+            // kept as the service name here, `Container::create` resolves it to the
+            // container the release gave that service
+            RemotePidMode::Service(name) => PidMode::Service(name),
+        });
+
         // Convert the service mounts. Collecting into a `BTreeSet` canonicalizes
         // the order, so reorderings in the remote composition don't propagate.
         let volumes: BTreeSet<Mount> = composition
@@ -374,6 +381,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .map(|c| (c * 1_000_000_000.0).round() as i64)
                     .unwrap_or(0),
                 oom_score_adj: composition.oom_score_adj,
+                pid,
                 pids_limit: composition.pids_limit,
                 ulimits: composition
                     .ulimits

@@ -497,6 +497,11 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.ipc_mode.take())
             .filter(|m| !m.is_empty())
             .map(IpcMode::from);
+        let pid = host_config
+            .as_mut()
+            .and_then(|hc| hc.pid_mode.take())
+            .filter(|m| !m.is_empty())
+            .map(PidMode::from);
         // Only the modes that displace user networks. For a user network the
         // engine puts the network name here instead, and a name cannot hold a colon.
         // `bridge` is reserved by the engine for its default network, so it is
@@ -704,6 +709,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             mem_reservation,
             nano_cpus,
             oom_score_adj,
+            pid,
             pids_limit,
             ulimits,
             privileged,
@@ -1192,6 +1198,62 @@ impl<'de> Deserialize<'de> for IpcMode {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         String::deserialize(deserializer).map(IpcMode::from)
+    }
+}
+
+/// Container-level PID mode. Mirrors the compose `pid` setting.
+///
+/// `Host` shares the host PID namespace and `Container` joins another container's
+/// PID namespace by name or id. `Service` names a service, which is resolved to a
+/// `Container` before the config reaches the engine. `Other` passes platform
+/// specific modes through untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PidMode {
+    Host,
+    Container(String),
+    Service(String),
+    Other(String),
+}
+
+impl std::fmt::Display for PidMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PidMode::Host => f.write_str("host"),
+            PidMode::Container(id) => write!(f, "container:{id}"),
+            PidMode::Service(name) => write!(f, "service:{name}"),
+            PidMode::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<String> for PidMode {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "host" => PidMode::Host,
+            _ => match value.split_once(':') {
+                Some(("container", id)) if !id.is_empty() => PidMode::Container(id.to_owned()),
+                Some(("service", name)) if !name.is_empty() => PidMode::Service(name.to_owned()),
+                _ => PidMode::Other(value),
+            },
+        }
+    }
+}
+
+// serialized as the compose string form, so a mode reads the same wherever it appears
+impl Serialize for PidMode {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for PidMode {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(PidMode::from)
     }
 }
 
@@ -1757,6 +1819,9 @@ pub struct ContainerConfig {
     /// process (-1000..=1000)
     pub oom_score_adj: Option<i64>,
 
+    /// PID namespace mode
+    pub pid: Option<PidMode>,
+
     /// Maximum number of process IDs allowed in the container
     pub pids_limit: Option<i64>,
 
@@ -1835,6 +1900,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             mem_reservation,
             nano_cpus,
             oom_score_adj,
+            pid,
             pids_limit,
             ulimits,
             privileged,
@@ -1960,6 +2026,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             nano_cpus: non_zero(nano_cpus),
             network_mode: host_network_mode,
             oom_score_adj,
+            pid_mode: pid.map(|m| m.to_string()),
             pids_limit,
             ulimits: (!ulimits.is_empty()).then(|| {
                 ulimits
@@ -2040,6 +2107,10 @@ fn resolve_service_references(config: &mut ContainerConfig, namespace: &impl Nam
         let id = namespace.to_identifier(name);
         config.ipc = Some(IpcMode::Container(id));
     }
+    if let Some(PidMode::Service(name)) = config.pid.as_ref() {
+        let id = namespace.to_identifier(name);
+        config.pid = Some(PidMode::Container(id));
+    }
 }
 
 #[cfg(test)]
@@ -2075,11 +2146,20 @@ mod tests {
             resolve_service_references(&mut config, &ns);
             assert_eq!(config.ipc, Some(mode));
         }
+        for mode in [PidMode::Host, PidMode::Container("db_other".to_string())] {
+            let mut config = ContainerConfig {
+                pid: Some(mode.clone()),
+                ..Default::default()
+            };
+            resolve_service_references(&mut config, &ns);
+            assert_eq!(config.pid, Some(mode));
+        }
 
         let mut config = ContainerConfig::default();
         resolve_service_references(&mut config, &ns);
         assert_eq!(config.network_mode, None);
         assert_eq!(config.ipc, None);
+        assert_eq!(config.pid, None);
     }
 
     #[test]
@@ -2103,6 +2183,16 @@ mod tests {
             config.ipc,
             Some(IpcMode::Container("db_rel-uuid".to_string()))
         );
+
+        let mut config = ContainerConfig {
+            pid: Some(PidMode::Service("db".to_string())),
+            ..Default::default()
+        };
+        resolve_service_references(&mut config, &LocalNamespace::from("rel-uuid"));
+        assert_eq!(
+            config.pid,
+            Some(PidMode::Container("db_rel-uuid".to_string()))
+        );
     }
 
     #[test]
@@ -2122,6 +2212,14 @@ mod tests {
         assert_eq!(
             IpcMode::from("service:".to_string()),
             IpcMode::Other("service:".to_string())
+        );
+        assert_eq!(
+            PidMode::from("container:".to_string()),
+            PidMode::Other("container:".to_string())
+        );
+        assert_eq!(
+            PidMode::from("service:".to_string()),
+            PidMode::Other("service:".to_string())
         );
     }
 
@@ -2153,6 +2251,20 @@ mod tests {
         assert_eq!(IpcMode::from("shareable".to_string()), IpcMode::Shareable);
         assert_eq!(IpcMode::from("none".to_string()), IpcMode::None);
         assert_eq!(IpcMode::from("host".to_string()), IpcMode::Host);
+
+        assert_eq!(
+            PidMode::from("container:abc".to_string()),
+            PidMode::Container("abc".to_string())
+        );
+        assert_eq!(
+            PidMode::from("service:db".to_string()),
+            PidMode::Service("db".to_string())
+        );
+        assert_eq!(
+            PidMode::from("private".to_string()),
+            PidMode::Other("private".to_string())
+        );
+        assert_eq!(PidMode::from("host".to_string()), PidMode::Host);
     }
     use bollard::models::{HostConfig, Mount as EngineMount};
     use pretty_assertions::assert_eq;
@@ -2597,6 +2709,7 @@ mod tests {
                 cgroupns_mode: Some(bollard::models::HostConfigCgroupnsModeEnum::HOST),
                 cpuset_cpus: Some("0-3".to_string()),
                 ipc_mode: Some("shareable".to_string()),
+                pid_mode: Some("host".to_string()),
                 runtime: Some("runc".to_string()),
                 userns_mode: Some("host".to_string()),
                 uts_mode: Some("host".to_string()),
@@ -2621,6 +2734,7 @@ mod tests {
         assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
         assert_eq!(c.config.ipc, Some(IpcMode::Shareable));
+        assert_eq!(c.config.pid, Some(PidMode::Host));
         assert_eq!(c.config.runtime.as_deref(), Some("runc"));
         assert_eq!(c.config.userns_mode.as_deref(), Some("host"));
         assert_eq!(c.config.uts.as_deref(), Some("host"));
@@ -2640,6 +2754,7 @@ mod tests {
             domainname: Some("example.com".to_string()),
             hostname: Some("my-host".to_string()),
             ipc: Some(IpcMode::Container("db_rel-uuid".to_string())),
+            pid: Some(PidMode::Container("db_rel-uuid".to_string())),
             runtime: Some("runc".to_string()),
             stop_signal: Some("SIGTERM".to_string()),
             user: Some("1000:1000".to_string()),
@@ -2662,6 +2777,7 @@ mod tests {
         assert_eq!(hc.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(hc.cpuset_cpus.as_deref(), Some("0-3"));
         assert_eq!(hc.ipc_mode.as_deref(), Some("container:db_rel-uuid"));
+        assert_eq!(hc.pid_mode.as_deref(), Some("container:db_rel-uuid"));
         assert_eq!(hc.runtime.as_deref(), Some("runc"));
         assert_eq!(hc.userns_mode.as_deref(), Some("host"));
         assert_eq!(hc.uts_mode.as_deref(), Some("host"));
@@ -3374,6 +3490,7 @@ mod tests {
                 cgroup_parent: Some(String::new()),
                 cpuset_cpus: Some(String::new()),
                 ipc_mode: Some(String::new()),
+                pid_mode: Some(String::new()),
                 cpu_realtime_period: Some(0),
                 cpu_realtime_runtime: Some(0),
                 cpu_shares: Some(0),
@@ -3409,6 +3526,7 @@ mod tests {
         assert_eq!(c.config.userns_mode, None);
         assert_eq!(c.config.uts, None);
         assert_eq!(c.config.ipc, None);
+        assert_eq!(c.config.pid, None);
     }
 
     #[test]

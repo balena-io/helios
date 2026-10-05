@@ -14,6 +14,7 @@ mod healthcheck;
 mod ipc;
 mod network_mode;
 mod networks;
+mod pid;
 mod ports;
 mod restart_policy;
 mod tmpfs;
@@ -28,6 +29,7 @@ pub use healthcheck::*;
 pub use ipc::*;
 pub use network_mode::*;
 pub use networks::*;
+pub use pid::*;
 pub use ports::*;
 pub use restart_policy::*;
 pub use tmpfs::*;
@@ -222,6 +224,10 @@ pub struct ServiceComposition {
     /// Kernel parameters (sysctls) to set in the container. Only kernel-namespaced values are permitted.
     #[serde(default, deserialize_with = "deserialize_sysctls")]
     pub sysctls: Option<HashMap<String, String>>,
+
+    /// PID namespace mode. `service:{name}` joins the namespace of another service.
+    #[serde(default)]
+    pub pid: Option<PidMode>,
 
     #[serde(default)]
     pub pids_limit: Option<i64>,

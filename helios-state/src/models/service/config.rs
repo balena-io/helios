@@ -7,7 +7,7 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::{self, IpcMode, LocalNamespace, Mount, Namespace, NetworkMode};
+use crate::oci::{self, IpcMode, LocalNamespace, Mount, Namespace, NetworkMode, PidMode};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
@@ -18,6 +18,7 @@ const LABEL_CONFIG_ULIMITS: &str = "io.balena.private.config.ulimits";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
 const LABEL_CONFIG_NETWORK_MODE: &str = "io.balena.private.config.network-mode";
 const LABEL_CONFIG_IPC: &str = "io.balena.private.config.ipc";
+const LABEL_CONFIG_PID: &str = "io.balena.private.config.pid";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
@@ -65,6 +66,7 @@ impl_field_tracking!(oci::ContainerConfig {
     init,
     ipc,
     network_mode,
+    pid,
     pids_limit,
     runtime,
     shm_size,
@@ -147,6 +149,13 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             && matches!(config.ipc, Some(IpcMode::Container(_)))
         {
             config.ipc = Some(IpcMode::from(mode));
+        }
+
+        // Same as above for the PID mode
+        if let Some(mode) = labels.remove(LABEL_CONFIG_PID)
+            && matches!(config.pid, Some(PidMode::Container(_)))
+        {
+            config.pid = Some(PidMode::from(mode));
         }
 
         // Read the list of healthcheck subfields the composition set
@@ -303,6 +312,10 @@ impl ServiceConfig {
             Some(mode @ IpcMode::Service(_)) => Some(mode.to_string()),
             _ => None,
         };
+        let pid_service = match &config.pid {
+            Some(mode @ PidMode::Service(_)) => Some(mode.to_string()),
+            _ => None,
+        };
         let labels = &mut config.labels;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
@@ -377,6 +390,9 @@ impl ServiceConfig {
         }
         if let Some(mode) = ipc_service {
             labels.insert(LABEL_CONFIG_IPC.to_string(), mode);
+        }
+        if let Some(mode) = pid_service {
+            labels.insert(LABEL_CONFIG_PID.to_string(), mode);
         }
 
         // Set app and service metadata as labels when creating the container
@@ -626,6 +642,60 @@ mod tests {
 
         let back = ServiceConfig::from(rendered);
         assert_eq!(back.ipc, None);
+    }
+
+    #[test]
+    fn service_pid_survives_a_round_trip() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            pid: Some(PidMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        // the reference stays in composition form, `Container::create` resolves it
+        assert_eq!(rendered.pid, Some(PidMode::Service("db".to_string())));
+
+        // and the engine reports the container it resolved to
+        rendered.pid = Some(PidMode::Container("0123abcd".to_string()));
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, Some(PidMode::Service("db".to_string())));
+    }
+
+    #[test]
+    fn a_service_pid_the_engine_did_not_apply_is_read_as_reported() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            pid: Some(PidMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.pid = Some(PidMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, Some(PidMode::Other("private".to_string())));
+    }
+
+    #[test]
+    fn host_pid_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            pid: Some(PidMode::Host),
+            ..Default::default()
+        });
+        assert_eq!(back.pid, Some(PidMode::Host));
+    }
+
+    #[test]
+    fn an_engine_default_pid_is_not_read_as_a_mode() {
+        // with no mode given the engine reports its default
+        let mut rendered = ServiceConfig(oci::ContainerConfig::default()).into_oci_config(
+            1,
+            "web",
+            &make_uuid(),
+            &Default::default(),
+            &[],
+        );
+        rendered.pid = Some(PidMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, None);
     }
 
     #[test]
