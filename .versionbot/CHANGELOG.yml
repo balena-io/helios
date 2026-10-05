@@ -1,4 +1,90 @@
 - commits:
+    - subject: Make network_mode service force a required and restart dependency
+      hash: 1f5d04430ab4372e175181987bad17f8e8a1ea7a
+      body: |
+        Before this a user could declare a composition with network mode service
+        but an optional dependency on the same service. Such a configuration is
+        contradictory because the namespacing makes it necessary that the
+        dependency is running and that a re-creation of the dependency also
+        re-creates the dependent.
+
+        This diverges from docker-compose behavior but is necessary to avoid
+        an inconsistent app state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use `restart:true` to determine if a dependency can migrate
+      hash: f7d8f0126c07a143cf337db65815a5c9eae30afe
+      body: >
+        Updates `linked_resources_can_migrate` to use dependencies with
+        `restart: true`
+
+        to determine if a service can be migrated to a new release or needs to
+
+        be re-created.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Re-create dependents when their dependency is reconfigured
+      hash: 4bd4b8a5ae470a654622d836633e226a5932925c
+      body: |
+        A service re-configuration means the container needs to be re-created,
+        changing its id. This means that any containers namespacing the
+        dependency should also be re-created. For simplicity we chose to
+        re-create any service depending on another with `restart: true`, which
+        covers all namespacing configurations (ipc, pid, network_mode)
+
+        In order to do this, this commit modifies the
+        `stop_service_when_requirements_are_met` to make sure the dependency is
+        respected every time a service is stopped.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Create services in dependency order
+      hash: 069c5cb2816f0b3065526a5e7796697407c07323
+      body: >
+        The compose configurations `network_mode`, `pid`, `oci`, create implicit
+
+        dependencies between containers, with the dependent referencing the
+
+        dependency by container id (translated by the engine from a container
+        name).
+
+        This means that the dependency needs to exist before the dependent.
+
+
+        For simplicity, this changes the code so service install operations
+
+        happen only after any dependencies have been created. While this means a
+
+        bit of serialization of install operations, its an acceptable trade-off
+
+        for reduced complexity
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Update mahler to 0.27.1
+      hash: 13b18f64a739723036048aec6d2235ebaa688248
+      body: |
+        Some tests were failing due to the nondetermistic nature of Rust TypeId,
+        the latest version of mahler fixes the issue
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.1
+  title: ""
+  date: 2026-10-05T23:06:31.171Z
+- commits:
     - subject: Return error on trigger_poll on input failure
       hash: fc9af44c51016018f2b27ca16b3c7a7620e0410a
       body: |
