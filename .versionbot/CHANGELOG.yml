@@ -1,4 +1,20 @@
 - commits:
+    - subject: Return error on trigger_poll on input failure
+      hash: fc9af44c51016018f2b27ca16b3c7a7620e0410a
+      body: |
+        This shifts to using the axum Json extractor rather than deserialing the
+        body for the `trigger_poll` call, so the response matches what is
+        returned from other API endpoints, returning an error message to the
+        client rather than creating a server side warning.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.0
+  title: ""
+  date: 2026-10-05T22:33:34.929Z
+- commits:
     - subject: Use hickory DNS resolver on requests to the remote backend
       hash: d9beb496a52f450bff6c5a6091d032f74ab8244c
       body: >

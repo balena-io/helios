@@ -911,7 +911,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helios"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "clap",
  "helios-api",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "helios-api"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "axum",
  "helios-legacy",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "helios-balenahup"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "helios-oci",
  "helios-remote-model",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "helios-legacy"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "axum",
  "clap",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "helios-oci"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "bollard",
  "chrono",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "helios-remote"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "helios-remote-model",
  "helios-state",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "helios-remote-model"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "go-parse-duration",
  "helios-util",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "helios-state"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "helios-balenahup",
  "helios-legacy",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "helios-store"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "globset",
  "helios-util",
@@ -1063,7 +1063,7 @@ dependencies = [
 
 [[package]]
 name = "helios-util"
-version = "0.28.3"
+version = "0.29.0"
 dependencies = [
  "addr",
  "axum",
