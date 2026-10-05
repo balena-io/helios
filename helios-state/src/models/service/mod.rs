@@ -8,15 +8,16 @@ use crate::labels::LABEL_SERVICE_ID;
 
 pub use crate::oci::Health;
 use crate::oci::{
-    self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck,
+    self, BindPropagation, Cgroup, ContainerConfig, DateTime, DeviceMapping, Healthcheck, IpcMode,
     LocalContainer, Mount, NetworkMode, NetworkSettings, PortMapping, PortProtocol, RestartPolicy,
     TmpfsOptions, Ulimit,
 };
 use crate::remote_model::{
     BindPropagation as RemoteBindPropagation, ByteSize, Cgroup as RemoteCgroup, DurationMicros,
-    DurationNanos, DurationSecs, Mount as RemoteMount, NetworkMode as RemoteNetworkMode,
-    PortProtocol as RemotePortProtocol, RestartPolicy as RemoteRestartPolicy,
-    Service as RemoteServiceTarget, TmpfsOptions as RemoteTmpfsOptions,
+    DurationNanos, DurationSecs, IpcMode as RemoteIpcMode, Mount as RemoteMount,
+    NetworkMode as RemoteNetworkMode, PortProtocol as RemotePortProtocol,
+    RestartPolicy as RemoteRestartPolicy, Service as RemoteServiceTarget,
+    TmpfsOptions as RemoteTmpfsOptions,
 };
 
 use super::image::ImageRef;
@@ -235,6 +236,15 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             RemoteNetworkMode::Service(name) => NetworkMode::Service(name),
         });
 
+        let ipc = composition.ipc.map(|m| match m {
+            RemoteIpcMode::Shareable => IpcMode::Shareable,
+            RemoteIpcMode::None => IpcMode::None,
+            RemoteIpcMode::Host => IpcMode::Host,
+            // kept as the service name here, `Container::create` resolves it to the
+            // container the release gave that service
+            RemoteIpcMode::Service(name) => IpcMode::Service(name),
+        });
+
         // Convert the service mounts. Collecting into a `BTreeSet` canonicalizes
         // the order, so reorderings in the remote composition don't propagate.
         let volumes: BTreeSet<Mount> = composition
@@ -347,6 +357,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                     .collect(),
                 hostname: composition.hostname,
                 init: composition.init,
+                ipc,
                 labels,
                 mem_limit: composition.mem_limit.map(ByteSize::to_bytes).unwrap_or(0),
                 mem_reservation: composition

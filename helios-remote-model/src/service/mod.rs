@@ -11,6 +11,7 @@ mod command;
 mod depends_on;
 mod devices;
 mod healthcheck;
+mod ipc;
 mod network_mode;
 mod networks;
 mod ports;
@@ -24,6 +25,7 @@ pub use command::*;
 pub use depends_on::*;
 pub use devices::*;
 pub use healthcheck::*;
+pub use ipc::*;
 pub use network_mode::*;
 pub use networks::*;
 pub use ports::*;
@@ -142,6 +144,10 @@ pub struct ServiceComposition {
     /// for Podman containers.conf).
     #[serde(default)]
     pub init: Option<bool>,
+
+    /// IPC namespace mode. `service:{name}` joins the namespace of a `shareable` service.
+    #[serde(default)]
+    pub ipc: Option<IpcMode>,
 
     #[serde(default)]
     pub labels: Labels,

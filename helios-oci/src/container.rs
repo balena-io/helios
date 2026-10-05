@@ -172,7 +172,7 @@ impl<N: Namespace> Container<'_, N> {
             platform: String::from(""),
         });
 
-        resolve_network_mode(&mut config, &namespace);
+        resolve_service_references(&mut config, &namespace);
 
         let mut config: ContainerCreateBody = config.into();
         config.image = Some(image.to_string());
@@ -492,6 +492,11 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.sysctls.take())
             .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
+        let ipc = host_config
+            .as_mut()
+            .and_then(|hc| hc.ipc_mode.take())
+            .filter(|m| !m.is_empty())
+            .map(IpcMode::from);
         // Only the modes that displace user networks. For a user network the
         // engine puts the network name here instead, and a name cannot hold a colon.
         let network_mode = host_config
@@ -690,6 +695,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             healthcheck,
             hostname,
             init,
+            ipc,
             labels,
             mem_limit,
             mem_reservation,
@@ -1118,6 +1124,68 @@ impl<'de> Deserialize<'de> for NetworkMode {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         String::deserialize(deserializer).map(NetworkMode::from)
+    }
+}
+
+/// Container-level IPC mode. Mirrors the compose `ipc` setting.
+///
+/// The engine modes are recognized explicitly and `Container` joins another
+/// container's IPC namespace by name or id. `Service` names a service, which is
+/// resolved to a `Container` before the config reaches the engine. `Other` passes
+/// platform specific modes through untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IpcMode {
+    None,
+    Host,
+    Shareable,
+    Container(String),
+    Service(String),
+    Other(String),
+}
+
+impl std::fmt::Display for IpcMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IpcMode::None => f.write_str("none"),
+            IpcMode::Host => f.write_str("host"),
+            IpcMode::Shareable => f.write_str("shareable"),
+            IpcMode::Container(id) => write!(f, "container:{id}"),
+            IpcMode::Service(name) => write!(f, "service:{name}"),
+            IpcMode::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<String> for IpcMode {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "none" => IpcMode::None,
+            "host" => IpcMode::Host,
+            "shareable" => IpcMode::Shareable,
+            _ => match value.split_once(':') {
+                Some(("container", id)) if !id.is_empty() => IpcMode::Container(id.to_owned()),
+                Some(("service", name)) if !name.is_empty() => IpcMode::Service(name.to_owned()),
+                _ => IpcMode::Other(value),
+            },
+        }
+    }
+}
+
+// serialized as the compose string form, so a mode reads the same wherever it appears
+impl Serialize for IpcMode {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for IpcMode {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(IpcMode::from)
     }
 }
 
@@ -1619,6 +1687,9 @@ pub struct ContainerConfig {
     /// default, `Some(_)` overrides it.
     pub init: Option<bool>,
 
+    /// IPC namespace mode
+    pub ipc: Option<IpcMode>,
+
     /// User-defined key/value metadata
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
@@ -1752,6 +1823,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             healthcheck,
             hostname,
             init,
+            ipc,
             labels,
             mem_limit,
             mem_reservation,
@@ -1875,6 +1947,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
                     .collect()
             }),
             init,
+            ipc_mode: ipc.map(|m| m.to_string()),
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
             mounts: engine_mounts,
@@ -1952,10 +2025,14 @@ impl<N: Namespace> LocalContainer<N> {
 
 /// Point a `service:` reference at the container the namespace gave that service,
 /// as the engine has no notion of services. Every other mode is left alone.
-fn resolve_network_mode(config: &mut ContainerConfig, namespace: &impl Namespace) {
+fn resolve_service_references(config: &mut ContainerConfig, namespace: &impl Namespace) {
     if let Some(NetworkMode::Service(name)) = config.network_mode.as_ref() {
         let id = namespace.to_identifier(name);
         config.network_mode = Some(NetworkMode::Container(id));
+    }
+    if let Some(IpcMode::Service(name)) = config.ipc.as_ref() {
+        let id = namespace.to_identifier(name);
+        config.ipc = Some(IpcMode::Container(id));
     }
 }
 
@@ -1976,13 +2053,27 @@ mod tests {
                 network_mode: Some(mode.clone()),
                 ..Default::default()
             };
-            resolve_network_mode(&mut config, &ns);
+            resolve_service_references(&mut config, &ns);
             assert_eq!(config.network_mode, Some(mode));
+        }
+        for mode in [
+            IpcMode::Shareable,
+            IpcMode::None,
+            IpcMode::Host,
+            IpcMode::Container("db_other".to_string()),
+        ] {
+            let mut config = ContainerConfig {
+                ipc: Some(mode.clone()),
+                ..Default::default()
+            };
+            resolve_service_references(&mut config, &ns);
+            assert_eq!(config.ipc, Some(mode));
         }
 
         let mut config = ContainerConfig::default();
-        resolve_network_mode(&mut config, &ns);
+        resolve_service_references(&mut config, &ns);
         assert_eq!(config.network_mode, None);
+        assert_eq!(config.ipc, None);
     }
 
     #[test]
@@ -1991,10 +2082,20 @@ mod tests {
             network_mode: Some(NetworkMode::Service("db".to_string())),
             ..Default::default()
         };
-        resolve_network_mode(&mut config, &LocalNamespace::from("rel-uuid"));
+        resolve_service_references(&mut config, &LocalNamespace::from("rel-uuid"));
         assert_eq!(
             config.network_mode,
             Some(NetworkMode::Container("db_rel-uuid".to_string()))
+        );
+
+        let mut config = ContainerConfig {
+            ipc: Some(IpcMode::Service("db".to_string())),
+            ..Default::default()
+        };
+        resolve_service_references(&mut config, &LocalNamespace::from("rel-uuid"));
+        assert_eq!(
+            config.ipc,
+            Some(IpcMode::Container("db_rel-uuid".to_string()))
         );
     }
 
@@ -2007,6 +2108,14 @@ mod tests {
         assert_eq!(
             NetworkMode::from("service:".to_string()),
             NetworkMode::Other("service:".to_string())
+        );
+        assert_eq!(
+            IpcMode::from("container:".to_string()),
+            IpcMode::Other("container:".to_string())
+        );
+        assert_eq!(
+            IpcMode::from("service:".to_string()),
+            IpcMode::Other("service:".to_string())
         );
     }
 
@@ -2025,6 +2134,22 @@ mod tests {
             NetworkMode::from("bridge".to_string()),
             NetworkMode::Other("bridge".to_string())
         );
+
+        assert_eq!(
+            IpcMode::from("container:abc".to_string()),
+            IpcMode::Container("abc".to_string())
+        );
+        assert_eq!(
+            IpcMode::from("service:db".to_string()),
+            IpcMode::Service("db".to_string())
+        );
+        assert_eq!(
+            IpcMode::from("private".to_string()),
+            IpcMode::Other("private".to_string())
+        );
+        assert_eq!(IpcMode::from("shareable".to_string()), IpcMode::Shareable);
+        assert_eq!(IpcMode::from("none".to_string()), IpcMode::None);
+        assert_eq!(IpcMode::from("host".to_string()), IpcMode::Host);
     }
     use bollard::models::{HostConfig, Mount as EngineMount};
     use pretty_assertions::assert_eq;
@@ -2435,6 +2560,7 @@ mod tests {
                 cgroup_parent: Some("/custom".to_string()),
                 cgroupns_mode: Some(bollard::models::HostConfigCgroupnsModeEnum::HOST),
                 cpuset_cpus: Some("0-3".to_string()),
+                ipc_mode: Some("shareable".to_string()),
                 runtime: Some("runc".to_string()),
                 userns_mode: Some("host".to_string()),
                 uts_mode: Some("host".to_string()),
@@ -2458,6 +2584,7 @@ mod tests {
         assert_eq!(c.config.cgroup, Cgroup::Host);
         assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
+        assert_eq!(c.config.ipc, Some(IpcMode::Shareable));
         assert_eq!(c.config.runtime.as_deref(), Some("runc"));
         assert_eq!(c.config.userns_mode.as_deref(), Some("host"));
         assert_eq!(c.config.uts.as_deref(), Some("host"));
@@ -2476,6 +2603,7 @@ mod tests {
             cpuset: Some("0-3".to_string()),
             domainname: Some("example.com".to_string()),
             hostname: Some("my-host".to_string()),
+            ipc: Some(IpcMode::Container("db_rel-uuid".to_string())),
             runtime: Some("runc".to_string()),
             stop_signal: Some("SIGTERM".to_string()),
             user: Some("1000:1000".to_string()),
@@ -2497,6 +2625,7 @@ mod tests {
         );
         assert_eq!(hc.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(hc.cpuset_cpus.as_deref(), Some("0-3"));
+        assert_eq!(hc.ipc_mode.as_deref(), Some("container:db_rel-uuid"));
         assert_eq!(hc.runtime.as_deref(), Some("runc"));
         assert_eq!(hc.userns_mode.as_deref(), Some("host"));
         assert_eq!(hc.uts_mode.as_deref(), Some("host"));
@@ -3208,6 +3337,7 @@ mod tests {
             host_config: Some(HostConfig {
                 cgroup_parent: Some(String::new()),
                 cpuset_cpus: Some(String::new()),
+                ipc_mode: Some(String::new()),
                 cpu_realtime_period: Some(0),
                 cpu_realtime_runtime: Some(0),
                 cpu_shares: Some(0),
@@ -3242,6 +3372,7 @@ mod tests {
         assert_eq!(c.config.oom_score_adj, None);
         assert_eq!(c.config.userns_mode, None);
         assert_eq!(c.config.uts, None);
+        assert_eq!(c.config.ipc, None);
     }
 
     #[test]
