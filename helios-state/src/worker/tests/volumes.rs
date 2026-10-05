@@ -1,7 +1,7 @@
 use super::helpers::*;
 
 use mahler::dag::{Dag, par, seq};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn it_finds_a_workflow_to_create_volumes() {
@@ -717,6 +717,84 @@ fn it_finds_a_workflow_when_a_volume_in_use_becomes_external() {
                 "install service 'my-service' for release 'my-release-uuid'",
                 "start service 'my-service' for release 'my-release-uuid'",
             ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_recreates_the_restarting_dependents_of_a_service_using_an_updated_volume() {
+    init_tracing();
+    // 'db' is removed as the volume it mounts changes, and 'web', which has a
+    // `restart: true` dependency on it, is removed first and re-created after
+    let db = json!({
+        "id": 1,
+        "image": "ubuntu:latest",
+        "started": true,
+        "config": {"volumes": [{"type": "volume", "source": "my-volume", "target": "/data"}]},
+    });
+    let web = json!({
+        "id": 2,
+        "image": "ubuntu:latest",
+        "started": true,
+        "config": {},
+        "depends_on": {
+            "db": {"condition": "service_started", "restart": true, "required": true}
+        },
+    });
+    let with_container = |svc: &Value, name: &str| {
+        let mut svc = svc.clone();
+        svc["oci"] = running_container(name);
+        svc
+    };
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "my-release-uuid": {
+                    "installed": true,
+                    "services": {
+                        "db": with_container(&db, "my-release-uuid_db"),
+                        "web": with_container(&web, "my-release-uuid_web"),
+                    },
+                    "volumes": {
+                        "my-volume": {"oci_name": "my-app-uuid_my-volume", "config": {"driver": "local"}},
+                    },
+                }
+            }}},
+            "images": {"ubuntu:latest": {"oci_id": "abcde", "download_progress": 100}},
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {"my-app-uuid": {"id": 1, "name": "my-app", "releases": {
+                "my-release-uuid": {
+                    "installed": true,
+                    "services": {"db": db, "web": web},
+                    "volumes": {
+                        "my-volume": {"config": {"driver": "local", "driver_opts": {"type": "tmpfs"}}},
+                    },
+                }
+            }}},
+        }),
+        release_update(
+            "my-release-uuid",
+            "my-app-uuid",
+            seq!(
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'web' for release 'my-release-uuid'",
+                "uninstall service 'web' for release 'my-release-uuid'",
+                "stop service 'db' for release 'my-release-uuid'",
+                "uninstall service 'db' for release 'my-release-uuid'",
+            ) + par!(
+                "initialize service 'db' for release 'my-release-uuid'",
+                "initialize service 'web' for release 'my-release-uuid'",
+                "remove volume 'my-volume' for app 'my-app-uuid'",
+            ) + seq!(
+                "setup volume 'my-volume' for app 'my-app-uuid'",
+                "install service 'db' for release 'my-release-uuid'",
+            ) + par!(
+                "start service 'db' for release 'my-release-uuid'",
+                "install service 'web' for release 'my-release-uuid'",
+            ) + seq!("start service 'web' for release 'my-release-uuid'"),
         ) + seq!("release locks for app with uuid 'my-app-uuid'"),
     );
 }
