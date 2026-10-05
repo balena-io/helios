@@ -139,13 +139,6 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             config.network_mode = Some(NetworkMode::from(mode));
         }
 
-        // A composition sets a mode or lists networks, never both, so a mode
-        // means the target has none. The engine still reports one for `bridge`,
-        // which it attaches to the default bridge network.
-        if config.network_mode.is_some() {
-            config.networks.clear();
-        }
-
         // The engine can only report a service reference as the container it
         // resolved to, so take the reference from the label. Any other mode is read
         // as the engine reports it, so a mode the engine did not apply shows up as a
@@ -524,7 +517,7 @@ mod tests {
             &Default::default(),
             &[],
         );
-        rendered.network_mode = Some(NetworkMode::Other("bridge".to_string()));
+        rendered.network_mode = Some(NetworkMode::Bridge);
 
         let back = ServiceConfig::from(rendered);
         assert_eq!(back.network_mode, None);
@@ -542,13 +535,10 @@ mod tests {
     #[test]
     fn bridge_network_mode_survives_a_round_trip() {
         let (_, back) = round_trip(oci::ContainerConfig {
-            network_mode: Some(NetworkMode::Other("bridge".to_string())),
+            network_mode: Some(NetworkMode::Bridge),
             ..Default::default()
         });
-        assert_eq!(
-            back.network_mode,
-            Some(NetworkMode::Other("bridge".to_string()))
-        );
+        assert_eq!(back.network_mode, Some(NetworkMode::Bridge));
     }
 
     #[test]

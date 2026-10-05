@@ -499,13 +499,16 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .map(IpcMode::from);
         // Only the modes that displace user networks. For a user network the
         // engine puts the network name here instead, and a name cannot hold a colon.
+        // `bridge` is reserved by the engine for its default network, so it is
+        // never the name of a user network.
         let network_mode = host_config
             .as_mut()
             .and_then(|hc| hc.network_mode.take())
             .and_then(|m| match NetworkMode::from(m) {
-                mode @ (NetworkMode::None | NetworkMode::Host | NetworkMode::Container(_)) => {
-                    Some(mode)
-                }
+                mode @ (NetworkMode::None
+                | NetworkMode::Host
+                | NetworkMode::Bridge
+                | NetworkMode::Container(_)) => Some(mode),
                 _ => None,
             });
         let privileged = host_config
@@ -643,7 +646,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let working_dir = config.as_mut().and_then(|c| c.working_dir.take());
 
         // Read network endpoint configurations from the container's network settings.
-        // When network_mode is `host` or `none`, networks are not user-managed — leave empty.
+        // When a network mode is set, networks are not user-managed — leave empty.
         let networks = if network_mode.is_some() {
             IndexMap::new()
         } else {
@@ -1068,7 +1071,7 @@ impl From<NetworkSettings> for EndpointSettings {
 
 /// Container-level network mode. Mirrors the compose `network_mode` setting.
 ///
-/// `None` and `Host` are recognized explicitly and `Container` joins another
+/// `None`, `Host` and `Bridge` are recognized explicitly and `Container` joins another
 /// container's network namespace by name or id. `Service` names a service, which
 /// is resolved to a `Container` before the config reaches the engine. `Other`
 /// passes platform specific modes through untouched.
@@ -1076,6 +1079,7 @@ impl From<NetworkSettings> for EndpointSettings {
 pub enum NetworkMode {
     None,
     Host,
+    Bridge,
     Container(String),
     Service(String),
     Other(String),
@@ -1086,6 +1090,7 @@ impl std::fmt::Display for NetworkMode {
         match self {
             NetworkMode::None => f.write_str("none"),
             NetworkMode::Host => f.write_str("host"),
+            NetworkMode::Bridge => f.write_str("bridge"),
             NetworkMode::Container(id) => write!(f, "container:{id}"),
             NetworkMode::Service(name) => write!(f, "service:{name}"),
             NetworkMode::Other(s) => f.write_str(s),
@@ -1098,6 +1103,7 @@ impl From<String> for NetworkMode {
         match value.as_str() {
             "none" => NetworkMode::None,
             "host" => NetworkMode::Host,
+            "bridge" => NetworkMode::Bridge,
             _ => match value.split_once(':') {
                 Some(("container", id)) if !id.is_empty() => NetworkMode::Container(id.to_owned()),
                 Some(("service", name)) if !name.is_empty() => {
@@ -2046,7 +2052,7 @@ mod tests {
         for mode in [
             NetworkMode::Host,
             NetworkMode::None,
-            NetworkMode::Other("bridge".to_string()),
+            NetworkMode::Bridge,
             NetworkMode::Container("db_other".to_string()),
         ] {
             let mut config = ContainerConfig {
@@ -2130,10 +2136,7 @@ mod tests {
             NetworkMode::Service("db".to_string())
         );
         assert_eq!(NetworkMode::from("host".to_string()), NetworkMode::Host);
-        assert_eq!(
-            NetworkMode::from("bridge".to_string()),
-            NetworkMode::Other("bridge".to_string())
-        );
+        assert_eq!(NetworkMode::from("bridge".to_string()), NetworkMode::Bridge);
 
         assert_eq!(
             IpcMode::from("container:abc".to_string()),
@@ -2547,6 +2550,39 @@ mod tests {
         };
         let c: LocalContainer = resp.try_into().unwrap();
         assert_eq!(c.config.ports, ports);
+    }
+
+    #[test]
+    fn inspect_reads_only_the_network_modes_that_displace_user_networks() {
+        let inspect = |mode: &str| -> Option<NetworkMode> {
+            let resp = ContainerInspectResponse {
+                id: Some("cid".to_string()),
+                name: Some("/svc".to_string()),
+                image: Some("img".to_string()),
+                created: Some("2026-01-01T00:00:00Z".to_string()),
+                host_config: Some(HostConfig {
+                    network_mode: Some(mode.to_string()),
+                    ..Default::default()
+                }),
+                state: Some(bollard::models::ContainerState {
+                    status: Some(ContainerStateStatusEnum::RUNNING),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let c: LocalContainer = resp.try_into().unwrap();
+            c.config.network_mode
+        };
+
+        assert_eq!(inspect("host"), Some(NetworkMode::Host));
+        assert_eq!(inspect("none"), Some(NetworkMode::None));
+        assert_eq!(
+            inspect("container:0123abcd"),
+            Some(NetworkMode::Container("0123abcd".to_string()))
+        );
+        assert_eq!(inspect("bridge"), Some(NetworkMode::Bridge));
+        // for a user network the engine reports the network name
+        assert_eq!(inspect("default_app-uuid"), None);
     }
 
     #[test]

@@ -3,9 +3,10 @@ use serde::{Deserialize, Deserializer};
 /// Service `network_mode` as defined by the Compose spec.
 ///
 /// `none` and `host` are recognized explicitly. While not part of the spec, `bridge` is also
-/// supported. `service:{name}` joins the network namespace of another service in the
-/// release, which the release validation turns into an implicit `depends_on`. Other platform specific modes are not supported as they might
-/// break, and `container:{name}` is rejected, as helios names the containers it manages.
+/// supported for docker compatibility. `service:{name}` joins the network namespace of another
+/// service in the release, which the release validation turns into an implicit `depends_on`.
+/// Other platform specific modes are not supported as they might break, and `container:{name}`
+/// is rejected, as helios names the containers it manages.
 #[derive(Debug, PartialEq)]
 pub enum NetworkMode {
     None,
