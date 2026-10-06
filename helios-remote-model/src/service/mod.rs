@@ -146,6 +146,11 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub labels: Labels,
 
+    /// Service level `mac_address`. Moved onto the highest priority network
+    /// when the release is validated, where it is left as `None`.
+    #[serde(default)]
+    pub(crate) mac_address: Option<String>,
+
     #[serde(default)]
     pub mem_limit: Option<ByteSize>,
 
