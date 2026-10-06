@@ -1658,6 +1658,7 @@ impl From<TmpfsOptions> for String {
 /// A single resource limit override for a container. The limit name (e.g.
 /// `nofile`) is the key of the enclosing `ulimits` map.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct Ulimit {
     /// Soft limit, enforced by the kernel for the container's processes
     pub soft: i64,
@@ -3756,5 +3757,25 @@ mod tests {
         // path, so it is treated as a volume name like any other non-absolute
         // source.
         assert_eq!(kinds, vec!["volume", "volume", "bind"]);
+    }
+
+    #[test]
+    fn serializes_only_engine_reported_fields_by_default() {
+        // A default config serializes to only the fields the engine reports
+        // for every container, so that the serialized form of any config is
+        // what the caller set. A new field failing this needs a
+        // `skip_serializing_if`.
+        assert_eq!(
+            serde_json::to_value(ContainerConfig::default()).unwrap(),
+            serde_json::json!({"restart_policy": {"name": "no"}})
+        );
+        assert_eq!(
+            serde_json::to_value(Healthcheck::default()).unwrap(),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            serde_json::to_value(NetworkSettings::default()).unwrap(),
+            serde_json::json!({})
+        );
     }
 }
