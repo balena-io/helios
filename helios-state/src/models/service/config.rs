@@ -126,6 +126,12 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         // does not displace the networks the engine reports below.
         config.remove_untracked(&label_config_fields);
 
+        // The engine can report `bridge` for a container on user networks, so the
+        // networks are only dropped when the composition asked for the mode.
+        if config.network_mode == Some(NetworkMode::Bridge) {
+            config.networks.clear();
+        }
+
         let labels = &mut config.labels;
 
         // Get the app_uuid for use in later operations
@@ -537,6 +543,38 @@ mod tests {
 
         let back = ServiceConfig::from(rendered);
         assert_eq!(back.network_mode, None);
+    }
+
+    #[test]
+    fn user_networks_reported_with_a_bridge_mode_are_kept_when_the_composition_set_none() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            networks: [("default_app".to_string(), Default::default())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.network_mode = Some(NetworkMode::Bridge);
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, None);
+        assert_eq!(back.networks.len(), 1);
+    }
+
+    #[test]
+    fn networks_reported_with_a_requested_bridge_mode_are_dropped() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Bridge),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered
+            .networks
+            .insert("podman".to_string(), Default::default());
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, Some(NetworkMode::Bridge));
+        assert!(back.networks.is_empty());
     }
 
     #[test]

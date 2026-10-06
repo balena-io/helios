@@ -502,10 +502,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.pid_mode.take())
             .filter(|m| !m.is_empty())
             .map(PidMode::from);
-        // Only the modes that displace user networks. For a user network the
-        // engine puts the network name here instead, and a name cannot hold a colon.
-        // `bridge` is reserved by the engine for its default network, so it is
-        // never the name of a user network.
+        // Only the modes that displace user networks. Docker reports the network
+        // name here for a user network, which cannot hold a colon.
         let network_mode = host_config
             .as_mut()
             .and_then(|hc| hc.network_mode.take())
@@ -652,7 +650,9 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
 
         // Read network endpoint configurations from the container's network settings.
         // When a network mode is set, networks are not user-managed — leave empty.
-        let networks = if network_mode.is_some() {
+        // `bridge` is the exception: Podman reports it for containers on user
+        // networks too, so the networks are kept to let the caller tell the two apart.
+        let networks = if matches!(&network_mode, Some(m) if *m != NetworkMode::Bridge) {
             IndexMap::new()
         } else {
             value
@@ -2695,6 +2695,42 @@ mod tests {
         assert_eq!(inspect("bridge"), Some(NetworkMode::Bridge));
         // for a user network the engine reports the network name
         assert_eq!(inspect("default_app-uuid"), None);
+    }
+
+    #[test]
+    fn inspect_keeps_the_networks_reported_with_a_bridge_mode() {
+        let inspect = |networks: &[&str]| -> LocalContainer {
+            let resp = ContainerInspectResponse {
+                id: Some("cid".to_string()),
+                name: Some("/svc".to_string()),
+                image: Some("img".to_string()),
+                created: Some("2026-01-01T00:00:00Z".to_string()),
+                host_config: Some(HostConfig {
+                    network_mode: Some("bridge".to_string()),
+                    ..Default::default()
+                }),
+                network_settings: Some(bollard::models::NetworkSettings {
+                    networks: Some(
+                        networks
+                            .iter()
+                            .map(|n| (n.to_string(), Default::default()))
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                state: Some(bollard::models::ContainerState {
+                    status: Some(ContainerStateStatusEnum::RUNNING),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            resp.try_into().unwrap()
+        };
+
+        // Podman reports `bridge` for a container on a user network
+        let c = inspect(&["default_app-uuid"]);
+        assert_eq!(c.config.network_mode, Some(NetworkMode::Bridge));
+        assert!(c.config.networks.contains_key("default_app-uuid"));
     }
 
     #[test]
