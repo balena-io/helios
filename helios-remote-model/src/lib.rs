@@ -496,6 +496,42 @@ fn validate_depends_on(services: &HashMap<String, Service>) -> Result<(), String
     Ok(())
 }
 
+/// Move the service level `mac_address` onto the highest priority network, which
+/// is the first entry of the service networks. A value already set on that
+/// network must match.
+fn apply_service_mac_address(
+    svc_name: &str,
+    composition: &mut ServiceComposition,
+) -> Result<(), String> {
+    let Some(mac_address) = composition.mac_address.take() else {
+        return Ok(());
+    };
+
+    if composition.network_mode.is_some() {
+        return Err(format!(
+            "service {svc_name} declares mutually exclusive `network_mode` and `mac_address`"
+        ));
+    }
+
+    // The service has at least one network at this point, either declared
+    // or the injected default
+    let (net_name, settings) = composition
+        .networks
+        .get_index_mut(0)
+        .expect("service without network_mode has networks");
+    let settings = settings.get_or_insert_with(Default::default);
+
+    if let Some(existing) = &settings.mac_address
+        && !existing.eq_ignore_ascii_case(&mac_address)
+    {
+        return Err(format!(
+            "service {svc_name}: the service-level mac_address should have the same value as network {net_name}"
+        ));
+    }
+    settings.mac_address.get_or_insert(mac_address);
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for Release {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -551,6 +587,9 @@ impl<'de> Deserialize<'de> for Release {
                     .entry("default".to_string())
                     .or_insert(None);
             }
+
+            apply_service_mac_address(svc_name, &mut svc.composition)
+                .map_err(serde::de::Error::custom)?;
         }
 
         // Injected before the checks below, so the implicit entries are validated too
@@ -576,6 +615,86 @@ impl<'de> Deserialize<'de> for Release {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn release_with(composition: Value, networks: Value) -> Result<Release, serde_json::Error> {
+        serde_json::from_value(json!({
+            "services": {"web": {"id": 1, "image": "alpine:latest", "composition": composition}},
+            "networks": networks
+        }))
+    }
+
+    #[test]
+    fn service_mac_address_moves_to_default_network() {
+        let release = release_with(json!({"mac_address": "02:42:ac:11:65:43"}), json!({})).unwrap();
+        let comp = &release.services["web"].composition;
+        assert_eq!(comp.mac_address, None);
+        assert_eq!(
+            comp.networks["default"].as_ref().unwrap().mac_address,
+            Some("02:42:ac:11:65:43".to_string())
+        );
+    }
+
+    #[test]
+    fn service_mac_address_moves_to_highest_priority_network() {
+        let release = release_with(
+            json!({
+                "mac_address": "02:42:ac:11:65:43",
+                "networks": {"low": {"priority": 1}, "high": {"priority": 10}}
+            }),
+            json!({"low": {}, "high": {}}),
+        )
+        .unwrap();
+        let nets = &release.services["web"].composition.networks;
+        assert_eq!(
+            nets["high"].as_ref().unwrap().mac_address,
+            Some("02:42:ac:11:65:43".to_string())
+        );
+        assert_eq!(nets["low"].as_ref().unwrap().mac_address, None);
+    }
+
+    #[test]
+    fn service_mac_address_accepts_same_value_on_network() {
+        release_with(
+            json!({
+                "mac_address": "02:42:AC:11:65:43",
+                "networks": {"net": {"mac_address": "02:42:ac:11:65:43"}}
+            }),
+            json!({"net": {}}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_service_mac_address_differing_from_network() {
+        let err = release_with(
+            json!({
+                "mac_address": "02:42:ac:11:65:43",
+                "networks": {"net": {"mac_address": "02:42:ac:11:65:44"}}
+            }),
+            json!({"net": {}}),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "the service-level mac_address should have the same value as network net"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_service_mac_address_with_network_mode() {
+        let err = release_with(
+            json!({"mac_address": "02:42:ac:11:65:43", "network_mode": "bridge"}),
+            json!({}),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("mutually exclusive `network_mode` and `mac_address`"),
+            "got: {err}"
+        );
+    }
 
     #[test]
     fn rejects_depends_on_undefined_service() {
