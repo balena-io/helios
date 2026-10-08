@@ -11,8 +11,10 @@ mod command;
 mod depends_on;
 mod devices;
 mod healthcheck;
+mod ipc;
 mod network_mode;
 mod networks;
+mod pid;
 mod ports;
 mod restart_policy;
 mod tmpfs;
@@ -24,8 +26,10 @@ pub use command::*;
 pub use depends_on::*;
 pub use devices::*;
 pub use healthcheck::*;
+pub use ipc::*;
 pub use network_mode::*;
 pub use networks::*;
+pub use pid::*;
 pub use ports::*;
 pub use restart_policy::*;
 pub use tmpfs::*;
@@ -143,6 +147,10 @@ pub struct ServiceComposition {
     #[serde(default)]
     pub init: Option<bool>,
 
+    /// IPC namespace mode. `service:{name}` joins the namespace of a `shareable` service.
+    #[serde(default)]
+    pub ipc: Option<IpcMode>,
+
     #[serde(default)]
     pub labels: Labels,
 
@@ -216,6 +224,10 @@ pub struct ServiceComposition {
     /// Kernel parameters (sysctls) to set in the container. Only kernel-namespaced values are permitted.
     #[serde(default, deserialize_with = "deserialize_sysctls")]
     pub sysctls: Option<HashMap<String, String>>,
+
+    /// PID namespace mode. `service:{name}` joins the namespace of another service.
+    #[serde(default)]
+    pub pid: Option<PidMode>,
 
     #[serde(default)]
     pub pids_limit: Option<i64>,

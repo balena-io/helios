@@ -7,7 +7,7 @@ use serde_json as json;
 
 use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
-use crate::oci::{self, LocalNamespace, Mount, Namespace, NetworkMode};
+use crate::oci::{self, IpcMode, LocalNamespace, Mount, Namespace, NetworkMode, PidMode};
 
 const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
 const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
@@ -17,6 +17,8 @@ const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
 const LABEL_CONFIG_ULIMITS: &str = "io.balena.private.config.ulimits";
 const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
 const LABEL_CONFIG_NETWORK_MODE: &str = "io.balena.private.config.network-mode";
+const LABEL_CONFIG_IPC: &str = "io.balena.private.config.ipc";
+const LABEL_CONFIG_PID: &str = "io.balena.private.config.pid";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
@@ -62,6 +64,9 @@ impl_field_tracking!(oci::ContainerConfig {
     healthcheck,
     hostname,
     init,
+    ipc,
+    network_mode,
+    pid,
     pids_limit,
     runtime,
     shm_size,
@@ -108,33 +113,55 @@ impl DerefMut for ServiceConfig {
 impl From<oci::ContainerConfig> for ServiceConfig {
     /// Convert from an OCI container to a service configuration
     fn from(mut config: oci::ContainerConfig) -> Self {
+        // Read the list of fields defined in the composition used to create
+        // this container
+        let label_config_fields: HashSet<String> = config
+            .labels
+            .remove(LABEL_CONFIG_FIELDS)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+
+        // Drop fields not in the composition as the engine fills these in
+        // with default values. Done first so a mode the composition did not set
+        // does not displace the networks the engine reports below.
+        config.remove_untracked(&label_config_fields);
+
+        // The engine can report `bridge` for a container on user networks, so the
+        // networks are only dropped when the composition asked for the mode.
+        if config.network_mode == Some(NetworkMode::Bridge) {
+            config.networks.clear();
+        }
+
         let labels = &mut config.labels;
 
         // Get the app_uuid for use in later operations
         let maybe_app_uuid = labels.remove(LABEL_APP_UUID);
 
-        // Read the list of fields defined in the composition used to create
-        // this container
-        let label_config_fields: HashSet<String> = labels
-            .remove(LABEL_CONFIG_FIELDS)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
+        // The engine can only report a service reference as the container it
+        // resolved to, so take the reference from the label. Any other mode is read
+        // as the engine reports it, so a mode the engine did not apply shows up as a
+        // difference with the target.
+        if let Some(mode) = labels.remove(LABEL_CONFIG_NETWORK_MODE)
+            && matches!(config.network_mode, Some(NetworkMode::Container(_)))
+        {
+            config.network_mode = Some(NetworkMode::from(mode));
+        }
 
-        // The engine does not report a mode back the way it was given, so take
-        // it from the label. A container with no label predates it and keeps the
-        // old read of `none` and `host`.
-        config.network_mode = match labels.remove(LABEL_CONFIG_NETWORK_MODE) {
-            Some(mode) => Some(NetworkMode::from(mode)),
-            None => config
-                .network_mode
-                .filter(|m| matches!(m, NetworkMode::None | NetworkMode::Host)),
-        };
+        // The engine can only report a service reference as the container it
+        // resolved to, so take the reference from the label. Any other mode is read
+        // as the engine reports it, so a mode the engine did not apply shows up as a
+        // difference with the target.
+        if let Some(mode) = labels.remove(LABEL_CONFIG_IPC)
+            && matches!(config.ipc, Some(IpcMode::Container(_)))
+        {
+            config.ipc = Some(IpcMode::from(mode));
+        }
 
-        // A composition sets a mode or lists networks, never both, so a mode
-        // means the target has none. The engine still reports one for `bridge`,
-        // which it attaches to the default bridge network.
-        if config.network_mode.is_some() {
-            config.networks.clear();
+        // Same as above for the PID mode
+        if let Some(mode) = labels.remove(LABEL_CONFIG_PID)
+            && matches!(config.pid, Some(PidMode::Container(_)))
+        {
+            config.pid = Some(PidMode::from(mode));
         }
 
         // Read the list of healthcheck subfields the composition set
@@ -227,10 +254,6 @@ impl From<oci::ContainerConfig> for ServiceConfig {
             .unwrap_or_default();
         labels.retain(|k, _| label_config_labels_value.contains(k));
 
-        // Drop fields not in the composition as the engine fills these in
-        // with default values.
-        config.remove_untracked(&label_config_fields);
-
         // Remove untracked healthcheck subfields. If healthcheck: {},
         // collapse to None to allow the service to inherit the image's
         // HEALTHCHECK.
@@ -287,7 +310,18 @@ impl ServiceConfig {
             .map(|s| json::Value::String(s.to_owned()))
             .collect::<json::Value>();
 
-        let network_mode = config.network_mode.as_ref().map(NetworkMode::to_string);
+        let network_mode_service = match &config.network_mode {
+            Some(mode @ NetworkMode::Service(_)) => Some(mode.to_string()),
+            _ => None,
+        };
+        let ipc_service = match &config.ipc {
+            Some(mode @ IpcMode::Service(_)) => Some(mode.to_string()),
+            _ => None,
+        };
+        let pid_service = match &config.pid {
+            Some(mode @ PidMode::Service(_)) => Some(mode.to_string()),
+            _ => None,
+        };
         let labels = &mut config.labels;
 
         // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
@@ -357,8 +391,14 @@ impl ServiceConfig {
 
         // the composition form, the only one that survives a read back. `Container::create`
         // resolves a service reference before the engine sees it
-        if let Some(mode) = network_mode {
+        if let Some(mode) = network_mode_service {
             labels.insert(LABEL_CONFIG_NETWORK_MODE.to_string(), mode);
+        }
+        if let Some(mode) = ipc_service {
+            labels.insert(LABEL_CONFIG_IPC.to_string(), mode);
+        }
+        if let Some(mode) = pid_service {
+            labels.insert(LABEL_CONFIG_PID.to_string(), mode);
         }
 
         // Set app and service metadata as labels when creating the container
@@ -443,16 +483,21 @@ mod tests {
 
     #[test]
     fn service_network_mode_survives_a_round_trip() {
-        let (rendered, back) = round_trip(oci::ContainerConfig {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
             network_mode: Some(NetworkMode::Service("db".to_string())),
             ..Default::default()
-        });
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
 
         // the reference stays in composition form, `Container::create` resolves it
         assert_eq!(
             rendered.network_mode,
             Some(NetworkMode::Service("db".to_string()))
         );
+
+        // and the engine reports the container it resolved to
+        rendered.network_mode = Some(NetworkMode::Container("0123abcd".to_string()));
+        let back = ServiceConfig::from(rendered);
         assert_eq!(
             back.network_mode,
             Some(NetworkMode::Service("db".to_string()))
@@ -460,50 +505,33 @@ mod tests {
     }
 
     #[test]
-    fn a_mode_leaves_no_engine_managed_networks_behind() {
-        // the engine puts a `bridge` container on the default bridge network
+    fn a_service_network_mode_the_engine_did_not_apply_is_read_as_reported() {
         let mut rendered = ServiceConfig(oci::ContainerConfig {
-            network_mode: Some(NetworkMode::Other("bridge".to_string())),
+            network_mode: Some(NetworkMode::Service("db".to_string())),
             ..Default::default()
         })
         .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
-        rendered
-            .networks
-            .insert("bridge".to_string(), Default::default());
-
-        let back = ServiceConfig::from(rendered);
-        assert!(back.networks.is_empty());
-    }
-
-    #[test]
-    fn bridge_network_mode_survives_a_round_trip() {
-        let (_, back) = round_trip(oci::ContainerConfig {
-            network_mode: Some(NetworkMode::Other("bridge".to_string())),
-            ..Default::default()
-        });
-        assert_eq!(
-            back.network_mode,
-            Some(NetworkMode::Other("bridge".to_string()))
-        );
-    }
-
-    #[test]
-    fn host_network_mode_survives_a_round_trip_without_the_label() {
-        // a container created before the label existed still reads back
-        let mut rendered = ServiceConfig(oci::ContainerConfig {
-            network_mode: Some(NetworkMode::Host),
-            ..Default::default()
-        })
-        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
-        rendered.labels.remove(LABEL_CONFIG_NETWORK_MODE);
+        rendered.network_mode = Some(NetworkMode::Host);
 
         let back = ServiceConfig::from(rendered);
         assert_eq!(back.network_mode, Some(NetworkMode::Host));
     }
 
     #[test]
-    fn an_engine_reported_network_name_is_not_read_as_a_mode() {
-        // for a user network the engine puts the network name in network_mode
+    fn a_network_mode_the_engine_did_not_apply_is_read_as_reported() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Host),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.network_mode = Some(NetworkMode::None);
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, Some(NetworkMode::None));
+    }
+
+    #[test]
+    fn an_engine_reported_network_mode_is_not_read_when_the_composition_set_none() {
         let mut rendered = ServiceConfig(oci::ContainerConfig::default()).into_oci_config(
             1,
             "web",
@@ -511,10 +539,201 @@ mod tests {
             &Default::default(),
             &[],
         );
-        rendered.network_mode = Some(NetworkMode::Other("default_test-app-uuid".to_string()));
+        rendered.network_mode = Some(NetworkMode::Bridge);
 
         let back = ServiceConfig::from(rendered);
         assert_eq!(back.network_mode, None);
+    }
+
+    #[test]
+    fn user_networks_reported_with_a_bridge_mode_are_kept_when_the_composition_set_none() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            networks: [("default_app".to_string(), Default::default())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.network_mode = Some(NetworkMode::Bridge);
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, None);
+        assert_eq!(back.networks.len(), 1);
+    }
+
+    #[test]
+    fn networks_reported_with_a_requested_bridge_mode_are_dropped() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Bridge),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered
+            .networks
+            .insert("podman".to_string(), Default::default());
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.network_mode, Some(NetworkMode::Bridge));
+        assert!(back.networks.is_empty());
+    }
+
+    #[test]
+    fn host_network_mode_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Host),
+            ..Default::default()
+        });
+        assert_eq!(back.network_mode, Some(NetworkMode::Host));
+    }
+
+    #[test]
+    fn bridge_network_mode_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Bridge),
+            ..Default::default()
+        });
+        assert_eq!(back.network_mode, Some(NetworkMode::Bridge));
+    }
+
+    #[test]
+    fn service_ipc_survives_a_round_trip() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            ipc: Some(IpcMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+
+        // the reference stays in composition form, `Container::create` resolves it
+        assert_eq!(rendered.ipc, Some(IpcMode::Service("db".to_string())));
+
+        // and the engine reports the container it resolved to
+        rendered.ipc = Some(IpcMode::Container("0123abcd".to_string()));
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.ipc, Some(IpcMode::Service("db".to_string())));
+    }
+
+    #[test]
+    fn a_service_ipc_the_engine_did_not_apply_is_read_as_reported() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            ipc: Some(IpcMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.ipc = Some(IpcMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.ipc, Some(IpcMode::Other("private".to_string())));
+    }
+
+    #[test]
+    fn shareable_ipc_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            ipc: Some(IpcMode::Shareable),
+            ..Default::default()
+        });
+        assert_eq!(back.ipc, Some(IpcMode::Shareable));
+    }
+
+    #[test]
+    fn host_ipc_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            ipc: Some(IpcMode::Host),
+            ..Default::default()
+        });
+        assert_eq!(back.ipc, Some(IpcMode::Host));
+    }
+
+    #[test]
+    fn none_ipc_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            ipc: Some(IpcMode::None),
+            ..Default::default()
+        });
+        assert_eq!(back.ipc, Some(IpcMode::None));
+    }
+
+    #[test]
+    fn an_ipc_the_engine_did_not_apply_is_read_as_reported() {
+        // the engine falls back to its default when it does not support the mode
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            ipc: Some(IpcMode::Shareable),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.ipc = Some(IpcMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.ipc, Some(IpcMode::Other("private".to_string())));
+    }
+
+    #[test]
+    fn an_engine_default_ipc_is_not_read_as_a_mode() {
+        // with no mode given the engine reports its default
+        let mut rendered = ServiceConfig(oci::ContainerConfig::default()).into_oci_config(
+            1,
+            "web",
+            &make_uuid(),
+            &Default::default(),
+            &[],
+        );
+        rendered.ipc = Some(IpcMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.ipc, None);
+    }
+
+    #[test]
+    fn service_pid_survives_a_round_trip() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            pid: Some(PidMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        // the reference stays in composition form, `Container::create` resolves it
+        assert_eq!(rendered.pid, Some(PidMode::Service("db".to_string())));
+
+        // and the engine reports the container it resolved to
+        rendered.pid = Some(PidMode::Container("0123abcd".to_string()));
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, Some(PidMode::Service("db".to_string())));
+    }
+
+    #[test]
+    fn a_service_pid_the_engine_did_not_apply_is_read_as_reported() {
+        let mut rendered = ServiceConfig(oci::ContainerConfig {
+            pid: Some(PidMode::Service("db".to_string())),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+        rendered.pid = Some(PidMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, Some(PidMode::Other("private".to_string())));
+    }
+
+    #[test]
+    fn host_pid_survives_a_round_trip() {
+        let (_, back) = round_trip(oci::ContainerConfig {
+            pid: Some(PidMode::Host),
+            ..Default::default()
+        });
+        assert_eq!(back.pid, Some(PidMode::Host));
+    }
+
+    #[test]
+    fn an_engine_default_pid_is_not_read_as_a_mode() {
+        // with no mode given the engine reports its default
+        let mut rendered = ServiceConfig(oci::ContainerConfig::default()).into_oci_config(
+            1,
+            "web",
+            &make_uuid(),
+            &Default::default(),
+            &[],
+        );
+        rendered.pid = Some(PidMode::Other("private".to_string()));
+
+        let back = ServiceConfig::from(rendered);
+        assert_eq!(back.pid, None);
     }
 
     #[test]

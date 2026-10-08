@@ -399,30 +399,53 @@ pub struct Release {
     pub networks: HashMap<String, Network>,
 }
 
-/// Turn every `network_mode: service:{name}` into a `depends_on` entry on that
-/// service, as the engine refuses to start a container whose network namespace
-/// target is not running. An explicit entry keeps its condition, but is made
-/// `required` and `restart`.
-fn inject_network_mode_depends_on(services: &mut HashMap<String, Service>) -> Result<(), String> {
-    let referenced: Vec<(String, String)> = services
+/// Turn every `network_mode: service:{name}`, `ipc: service:{name}` and
+/// `pid: service:{name}` into a `depends_on` entry on that service, as the engine refuses to start a container
+/// whose namespace target is not running. An explicit entry keeps its condition,
+/// but is made `required` and `restart`.
+fn inject_namespace_depends_on(services: &mut HashMap<String, Service>) -> Result<(), String> {
+    let referenced: Vec<(String, String, &str)> = services
         .iter()
-        .filter_map(|(svc_name, svc)| match &svc.composition.network_mode {
-            Some(NetworkMode::Service(dep_name)) => Some((svc_name.clone(), dep_name.clone())),
-            _ => None,
+        .flat_map(|(svc_name, svc)| {
+            let network = match &svc.composition.network_mode {
+                Some(NetworkMode::Service(dep_name)) => {
+                    Some((svc_name.clone(), dep_name.clone(), "network"))
+                }
+                _ => None,
+            };
+            let ipc = match &svc.composition.ipc {
+                Some(IpcMode::Service(dep_name)) => {
+                    Some((svc_name.clone(), dep_name.clone(), "IPC"))
+                }
+                _ => None,
+            };
+            let pid = match &svc.composition.pid {
+                Some(PidMode::Service(dep_name)) => {
+                    Some((svc_name.clone(), dep_name.clone(), "PID"))
+                }
+                _ => None,
+            };
+            network.into_iter().chain(ipc).chain(pid)
         })
         .collect();
 
-    for (svc_name, dep_name) in referenced {
+    for (svc_name, dep_name, namespace) in referenced {
         if dep_name == svc_name {
             return Err(format!(
-                "service '{svc_name}' cannot join its own network namespace"
+                "service '{svc_name}' cannot join its own {namespace} namespace"
             ));
         }
         // a cycle through `depends_on` is reported by the check that follows,
         // but a service that is not in the release has no container to join
-        if !services.contains_key(&dep_name) {
+        let Some(dep) = services.get(&dep_name) else {
             return Err(format!(
-                "service '{svc_name}' joins the network namespace of undefined service '{dep_name}'"
+                "service '{svc_name}' joins the {namespace} namespace of undefined service '{dep_name}'"
+            ));
+        };
+        // the engine only lets a container join an IPC namespace its owner made shareable
+        if namespace == "IPC" && dep.composition.ipc != Some(IpcMode::Shareable) {
+            return Err(format!(
+                "service '{svc_name}' joins the IPC namespace of service '{dep_name}', which is not `shareable`"
             ));
         }
         if let Some(svc) = services.get_mut(&svc_name) {
@@ -593,7 +616,7 @@ impl<'de> Deserialize<'de> for Release {
         }
 
         // Injected before the checks below, so the implicit entries are validated too
-        inject_network_mode_depends_on(&mut raw.services).map_err(serde::de::Error::custom)?;
+        inject_namespace_depends_on(&mut raw.services).map_err(serde::de::Error::custom)?;
 
         // Verify service dependencies are valid at the release level.
         validate_depends_on(&raw.services).map_err(serde::de::Error::custom)?;
@@ -786,6 +809,213 @@ mod tests {
             "services": {
                 "a": {"id": 1, "image": "alpine:latest",
                       "composition": {"network_mode": "service:b"}},
+                "b": {"id": 2, "image": "alpine:latest",
+                      "composition": {"depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular dependency"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn ipc_service_implies_a_started_dependency() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"ipc": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest",
+                       "composition": {"ipc": "shareable"}}
+            }
+        }))
+        .unwrap();
+
+        let dep = release.services["web"]
+            .composition
+            .depends_on
+            .get("db")
+            .expect("an implicit dependency on 'db'");
+        assert_eq!(dep.condition, DependsOnCondition::ServiceStarted);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn ipc_service_makes_an_explicit_dependency_required_and_restart() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {
+                            "ipc": "service:db",
+                            "depends_on": {"db": {
+                                "condition": "service_healthy",
+                                "required": false,
+                                "restart": false
+                            }}
+                        }},
+                "db": {"id": 2, "image": "alpine:latest",
+                       "composition": {"ipc": "shareable"}}
+            }
+        }))
+        .unwrap();
+
+        // the explicit condition is kept
+        let dep = &release.services["web"].composition.depends_on["db"];
+        assert_eq!(dep.condition, DependsOnCondition::ServiceHealthy);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn network_mode_and_ipc_can_join_the_same_service() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"network_mode": "service:db", "ipc": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest",
+                       "composition": {"ipc": "shareable"}}
+            }
+        }))
+        .unwrap();
+
+        let depends_on = &release.services["web"].composition.depends_on;
+        assert_eq!(depends_on.len(), 1);
+        assert!(depends_on["db"].required);
+        assert!(depends_on["db"].restart);
+    }
+
+    #[test]
+    fn rejects_ipc_of_a_service_that_is_not_shareable() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"ipc": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("not `shareable`"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_ipc_of_undefined_service() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"ipc": "service:ghost"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("undefined service 'ghost'"));
+    }
+
+    #[test]
+    fn rejects_ipc_of_itself() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"ipc": "service:web"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("its own IPC namespace"));
+    }
+
+    #[test]
+    fn rejects_cycle_through_ipc() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest",
+                      "composition": {"ipc": "service:b"}},
+                "b": {"id": 2, "image": "alpine:latest",
+                      "composition": {"ipc": "shareable", "depends_on": ["a"]}}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("circular dependency"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn pid_service_implies_a_started_dependency() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:db"}},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        let dep = release.services["web"]
+            .composition
+            .depends_on
+            .get("db")
+            .expect("an implicit dependency on 'db'");
+        assert_eq!(dep.condition, DependsOnCondition::ServiceStarted);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn pid_service_makes_an_explicit_dependency_required_and_restart() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {
+                            "pid": "service:db",
+                            "depends_on": {"db": {
+                                "condition": "service_healthy",
+                                "required": false,
+                                "restart": false
+                            }}
+                        }},
+                "db": {"id": 2, "image": "alpine:latest"}
+            }
+        }))
+        .unwrap();
+
+        // the explicit condition is kept
+        let dep = &release.services["web"].composition.depends_on["db"];
+        assert_eq!(dep.condition, DependsOnCondition::ServiceHealthy);
+        assert!(dep.required);
+        assert!(dep.restart);
+    }
+
+    #[test]
+    fn rejects_pid_of_undefined_service() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:ghost"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("undefined service 'ghost'"));
+    }
+
+    #[test]
+    fn rejects_pid_of_itself() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "web": {"id": 1, "image": "alpine:latest",
+                        "composition": {"pid": "service:web"}}
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("its own PID namespace"));
+    }
+
+    #[test]
+    fn rejects_cycle_through_pid() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "a": {"id": 1, "image": "alpine:latest",
+                      "composition": {"pid": "service:b"}},
                 "b": {"id": 2, "image": "alpine:latest",
                       "composition": {"depends_on": ["a"]}}
             }
