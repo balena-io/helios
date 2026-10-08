@@ -740,7 +740,7 @@ mod tests {
     fn preserves_explicit_config_fields_using_label_config_fields() {
         let original = oci::ContainerConfig {
             command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            cgroup: oci::Cgroup::Host,
+            cgroup: Some(oci::Cgroup::Host),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             cpu_rt_period: 1_000_000,
