@@ -1,4 +1,94 @@
 - commits:
+    - subject: Handle default bridge network_mode on podman
+      hash: 6cbb599742fe6bf45ba34310344c9f46f89c0ce9
+      body: >
+        When a network has been defined, docker will report the network name in
+
+        the `network_mode` field, however podman will report `bridge`, which is
+
+        a valid `network_mode`. When inspecting the container, we now keep both
+
+        the network_mode and the network list, when the network_mode value
+        return `bridge`
+
+        and let the state model conversion use the field tracking to determine
+        the
+
+        right way to read the state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for compose service `pid` configuration
+      hash: d62e4120c324b27ef59883e853a8fadb6b3a1d7d
+      body: |
+        While the compose-spec leaves the value platform specific, at least
+        docker and podman support both `host` and `service:<name>`. The latter
+        is implemented in the same way as it's done for network_mode and ipc,
+        with an implicit lifecycle dependency defined between the services.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add `Bridge` network mode variant
+      hash: e76e8bc773012315afbd92501e82d125e880182e
+      body: |
+        The engine reports `bridge` for containers on the default network, so
+        the mode needs to be a recognized variant to be read back and compared
+        against the target. The mode is never the name of a user network as it
+        is reserved by the engine.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Only read network mode label for the `service` case
+      hash: 19a06c2a8734b9d902d3891774111b8a7181fc1a
+      body: >
+        This makes the processing of the network mode label a bit more
+
+        strict. The label now is only set when network_mode: service was used
+
+        when creating the container. Otherwise the network mode processing falls
+        back
+
+        to the default field tracking. This prevents the following scenario:
+
+        - user sets network mode X
+
+        - engine does not support network mode X so it quietly reverts to its
+          default Y
+        - the target has not been reached, but the label reads X so the user
+          never realizes
+
+        the correct behavior on this scenario is to fail fall to a re-try loop,
+
+        which will warn the user (and balena) of the issue.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for compose Services `ipc` property
+      hash: 2afa924ad866a8f0fe90f48f9de3c77066f2ca1d
+      body: |
+        Adds support for `ipc` configuration. Supported values are `shareable`
+        and `service:<name>` as per the compose-spec and `host` and `none` for
+        docker compatibility.
+
+        Setting a `service:<name>` IPC configuration, creates an implied
+        lifecycle dependency to referenced service.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.3
+  title: ""
+  date: 2026-10-08T00:10:48.811Z
+- commits:
     - subject: Accept services.mac_address compose property
       hash: 678ebd050dd5cfe24e8815d1992296d5879b261b
       body: >
