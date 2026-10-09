@@ -6,7 +6,6 @@ use bollard::config::{CreateImageInfo, ImageInspect};
 use bollard::query_parameters::{
     CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
 };
-use serde::{Deserialize, Serialize};
 use tokio_stream::{Stream, StreamExt};
 
 use super::util::types::ImageUri;
@@ -206,24 +205,6 @@ impl Stream for PullProgress {
     }
 }
 
-#[serde_with::skip_serializing_none]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct ImageConfig {
-    /// Command to run specified as an array of strings
-    pub cmd: Option<Vec<String>>,
-
-    /// User-defined key/value metadata
-    pub labels: Option<HashMap<String, String>>,
-}
-
-impl From<bollard::config::ImageConfig> for ImageConfig {
-    fn from(value: bollard::config::ImageConfig) -> Self {
-        let bollard::config::ImageConfig { cmd, labels, .. } = value;
-        Self { cmd, labels }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct LocalImage {
     /// The content-addressable ID of an image.
@@ -236,9 +217,6 @@ pub struct LocalImage {
     /// digests of image manifests that reference the image.
     pub id: String,
 
-    /// Configuration of the image. These fields are used as defaults when starting a container from the image.
-    pub config: ImageConfig,
-
     /// Image references stored by the engine (`RepoTags`).
     pub repo_tags: Vec<String>,
 }
@@ -248,13 +226,8 @@ impl TryFrom<ImageInspect> for LocalImage {
 
     fn try_from(value: ImageInspect) -> Result<Self> {
         let id = value.id.ok_or("image ID should not be nil")?;
-        let config = value.config.map(|c| c.into()).unwrap_or_default();
         let repo_tags = value.repo_tags.unwrap_or_default();
 
-        Ok(Self {
-            id,
-            config,
-            repo_tags,
-        })
+        Ok(Self { id, repo_tags })
     }
 }

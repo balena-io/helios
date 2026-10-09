@@ -6,7 +6,7 @@ pub use bollard::auth::DockerCredentials as Credentials;
 pub use bollard::errors::Error as ConnectionError;
 
 mod image;
-pub use image::{Image, ImageConfig, LocalImage};
+pub use image::{Image, LocalImage};
 
 mod registry;
 pub use registry::RegistryAuth;
