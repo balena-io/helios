@@ -329,10 +329,9 @@ fn it_finds_a_workflow_for_migrating_volumes_with_linked_services() {
                 seq!("remove data for volume 'my-vol' from release 'old-release'"),
             )
             + par!(
-                "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "update image metadata for service 'my-svc' of release 'new-release'"
-            )
-            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'"
+            ),
     );
 }
 
@@ -670,10 +669,9 @@ fn it_finds_a_workflow_for_migrating_networks_with_linked_services() {
                 )
             )
             + par!(
-                "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "update image metadata for service 'my-svc' of release 'new-release'"
-            )
-            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'"
+            ),
     );
 }
 
@@ -985,10 +983,9 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                 seq!("remove data for volume 'my-vol' from release 'old-release'"),
             )
             + par!(
-                "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "update image metadata for service 'my-svc' of release 'new-release'",
-            )
-            + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'",),
+                "finish release 'new-release' for app with uuid 'my-app-uuid'",
+                "remove release 'old-release' for app with uuid 'my-app-uuid'"
+            ),
     );
 }
 

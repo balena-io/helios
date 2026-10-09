@@ -637,13 +637,10 @@ fn it_finds_a_workflow_for_updating_services() {
                 ),
             )
             + par!(
-                "remove release 'old-release' for app with uuid 'my-app-uuid'",
-                "update image metadata for service 'service3' of release 'new-release'"
-            )
-            + seq!(
                 "finish release 'new-release' for app with uuid 'my-app-uuid'",
-                "release locks for app with uuid 'my-app-uuid'"
-            ),
+                "remove release 'old-release' for app with uuid 'my-app-uuid'"
+            )
+            + seq!("release locks for app with uuid 'my-app-uuid'"),
     );
 }
 

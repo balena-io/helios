@@ -781,18 +781,27 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
 /// Migrate a service to the current release from another location
 fn migrate_service(
     maybe_svc: View<Option<Service>>,
-    RawTarget(t_svc): RawTarget<Service>,
-    Args((_, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
+    RawTarget((src_svc, tgt_img)): RawTarget<(Service, ImageRef)>,
+    Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
     docker: Res<Docker>,
+    store: Res<DocumentStore>,
 ) -> IO<Service, Error> {
-    enforce!(t_svc.oci.is_some(), "source service must have a container");
-    let svc = maybe_svc.create(t_svc);
+    enforce!(
+        src_svc.oci.is_some(),
+        "source service must have a container"
+    );
+    let svc = maybe_svc.create(Service {
+        image: tgt_img,
+        ..src_svc
+    });
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()
             .expect("docker resource should be available");
 
-        let tgt_image = svc.image.clone();
+        let local_store = store.as_ref().expect("store should be available");
+
+        let tgt_img = svc.image.clone();
 
         let container = svc.oci.as_ref().expect("container must be available");
         let container_id = docker
@@ -808,9 +817,18 @@ fn migrate_service(
             .await
             .context("failed to inspect container for service")?;
         *svc = Service::from(local_container);
+
         // preserve the target image URI, this prevents the
         // engine image sha from being used spuriously during comparison
-        svc.image = tgt_image;
+        svc.image = tgt_img;
+
+        // store the image uri that corresponds to the current release service
+        local_store
+            .put(
+                format!("apps/{app_uuid}/releases/{rel_uuid}/services/{svc_name}/image"),
+                &svc.image,
+            )
+            .await?;
 
         Ok(svc)
     })
@@ -1499,7 +1517,7 @@ fn uninstall_service_when_requirements_are_met(
     // Migration path: a future release expects the same service with
     // matching image/config/started state. State-only remove from the
     // current release, then migrate the container into the future release.
-    if let Some((t_rel_uuid, tgt_svc)) =
+    if let Some((t_rel_uuid, t_svc)) =
         find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
     {
         let target_release_exists = device
@@ -1507,7 +1525,7 @@ fn uninstall_service_when_requirements_are_met(
             .get(&app_uuid)
             .is_some_and(|app| app.releases.contains_key(t_rel_uuid));
         let can_migrate_as_is = service_matches_target(
-            &device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, tgt_svc,
+            &device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, t_svc,
         );
         // Either no service in the app needs stopping (lock-free), or locks
         // were already taken upstream.
@@ -1525,7 +1543,7 @@ fn uninstall_service_when_requirements_are_met(
                 remove_service.into_task(),
                 migrate_service
                     .with_arg("commit", t_rel_uuid.as_str())
-                    .with_target(&*svc),
+                    .with_target((&*svc, &*t_svc.image)),
             ];
         }
     }
