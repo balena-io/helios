@@ -119,12 +119,49 @@ impl Image<'_> {
             .with_context(|| format!("failed to inspect image {image}"))
     }
 
-    /// Removes an image, along with any untagged parent images that were referenced by that image.
+    /// Removes an image reference. The engine removes the image once its last reference is gone.
+    ///
+    /// This looks up all tags matching the `registry/image` part of the reference and removes the
+    /// tags if any, reverting to removing the image image by reference if no tags exist.
+    ///
+    /// This is done this way in particularly for podman, where an image may be retrievable by
+    /// `repo@digest`, but it may not be removable by that reference if the image has been
+    /// re-tagged at some point.
     pub async fn remove(&self, image: &ImageUri) -> Result<()> {
+        if image.digest().is_none() {
+            return self.remove_ref(image.as_str()).await;
+        }
+
+        // NOTE: this step will fail if the image was pulled by its balena-delta
+        let info = match self.inspect(image).await {
+            Ok(info) => info,
+            Err(e) if e.is_not_found() => return Ok(()),
+            Err(e) => return Err(e),
+        };
+
+        let repo = image.repo();
+        let tags: Vec<String> = info
+            .repo_tags
+            .into_iter()
+            .filter(|tag| tag.parse::<ImageUri>().is_ok_and(|uri| uri.repo() == repo))
+            .collect();
+
+        if tags.is_empty() {
+            return self.remove_ref(image).await;
+        }
+
+        for tag in tags {
+            self.remove_ref(&tag).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn remove_ref(&self, name: &str) -> Result<()> {
         match self
             .0
             .inner()
-            .remove_image(image.as_str(), Option::<RemoveImageOptions>::None, None)
+            .remove_image(name, Option::<RemoveImageOptions>::None, None)
             .await
         {
             Ok(_) => Ok(()),
@@ -132,9 +169,7 @@ impl Image<'_> {
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
             }) => Ok(()),
-            Err(e) => {
-                Err(Error::from(e).context(format!("failed to remove image {}", image.as_str())))
-            }
+            Err(e) => Err(Error::from(e).context(format!("failed to remove image {name}"))),
         }
     }
 }
@@ -203,6 +238,9 @@ pub struct LocalImage {
 
     /// Configuration of the image. These fields are used as defaults when starting a container from the image.
     pub config: ImageConfig,
+
+    /// Image references stored by the engine (`RepoTags`).
+    pub repo_tags: Vec<String>,
 }
 
 impl TryFrom<ImageInspect> for LocalImage {
@@ -211,7 +249,12 @@ impl TryFrom<ImageInspect> for LocalImage {
     fn try_from(value: ImageInspect) -> Result<Self> {
         let id = value.id.ok_or("image ID should not be nil")?;
         let config = value.config.map(|c| c.into()).unwrap_or_default();
+        let repo_tags = value.repo_tags.unwrap_or_default();
 
-        Ok(Self { id, config })
+        Ok(Self {
+            id,
+            config,
+            repo_tags,
+        })
     }
 }
