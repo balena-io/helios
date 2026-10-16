@@ -363,6 +363,8 @@ impl From<RemoteServiceTarget> for ServiceTarget {
                 init: composition.init,
                 ipc,
                 labels,
+                // the composition does not configure the logging driver
+                log_config: Default::default(),
                 mem_limit: composition.mem_limit.map(ByteSize::to_bytes).unwrap_or(0),
                 mem_reservation: composition
                     .mem_reservation

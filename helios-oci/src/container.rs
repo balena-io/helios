@@ -492,6 +492,11 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             .and_then(|hc| hc.sysctls.take())
             .unwrap_or_default();
         let init = host_config.as_mut().and_then(|hc| hc.init.take());
+        let log_config = host_config
+            .as_mut()
+            .and_then(|hc| hc.log_config.take())
+            .and_then(|lc| lc.config)
+            .unwrap_or_default();
         let ipc = host_config
             .as_mut()
             .and_then(|hc| hc.ipc_mode.take())
@@ -705,6 +710,7 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
             init,
             ipc,
             labels,
+            log_config,
             mem_limit,
             mem_reservation,
             nano_cpus,
@@ -1762,6 +1768,11 @@ pub struct ContainerConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
 
+    /// Options passed to the container's logging driver, as an
+    /// option -> value map. The driver is the engine default.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub log_config: HashMap<String, String>,
+
     /// Memory limit in bytes
     #[serde(skip_serializing_if = "is_zero")]
     pub mem_limit: i64,
@@ -1896,6 +1907,7 @@ impl From<ContainerConfig> for ContainerCreateBody {
             init,
             ipc,
             labels,
+            log_config: log_options,
             mem_limit,
             mem_reservation,
             nano_cpus,
@@ -2018,6 +2030,10 @@ impl From<ContainerConfig> for ContainerCreateBody {
             }),
             init,
             ipc_mode: ipc.map(|m| m.to_string()),
+            log_config: (!log_options.is_empty()).then_some(bollard::models::HostConfigLogConfig {
+                typ: None,
+                config: Some(log_options),
+            }),
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
             mounts: engine_mounts,
@@ -2994,6 +3010,54 @@ mod tests {
         // An empty map should not emit a Sysctls entry on the engine request
         let empty: ContainerCreateBody = ContainerConfig::default().into();
         assert_eq!(empty.host_config.unwrap().sysctls, None);
+    }
+
+    #[test]
+    fn inspect_reads_log_options() {
+        let resp = ContainerInspectResponse {
+            id: Some("cid".to_string()),
+            name: Some("/svc".to_string()),
+            image: Some("img".to_string()),
+            created: Some("2026-01-01T00:00:00Z".to_string()),
+            host_config: Some(HostConfig {
+                log_config: Some(bollard::models::HostConfigLogConfig {
+                    typ: Some("journald".to_string()),
+                    config: Some(HashMap::from([("env".to_string(), "FOO".to_string())])),
+                }),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                status: Some(ContainerStateStatusEnum::RUNNING),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(
+            c.config.log_config,
+            HashMap::from([("env".to_string(), "FOO".to_string())])
+        );
+    }
+
+    #[test]
+    fn container_create_body_emits_log_options() {
+        let cfg = ContainerConfig {
+            log_config: HashMap::from([("env".to_string(), "FOO".to_string())]),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.log_config,
+            Some(bollard::models::HostConfigLogConfig {
+                typ: None,
+                config: Some(HashMap::from([("env".to_string(), "FOO".to_string())])),
+            })
+        );
+
+        // An empty map should not emit a LogConfig entry on the engine request
+        let empty: ContainerCreateBody = ContainerConfig::default().into();
+        assert_eq!(empty.host_config.unwrap().log_config, None);
     }
 
     #[test]

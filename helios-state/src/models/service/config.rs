@@ -12,6 +12,7 @@ const LABEL_CONFIG_MAP: &str = "io.balena.private.config.map";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
+const ENV_LOGS_LEVEL: &str = "BALENA_LOGS_LEVEL";
 
 /// Map of the object keys present in the composition-defined container config, recursively.
 ///
@@ -314,6 +315,15 @@ impl ServiceConfig {
             labels.insert(LABEL_DEPENDS_ON.to_string(), encoded);
         }
 
+        // Tag the container logs with the service id, and with the log level if
+        // the container environment sets it
+        config
+            .log_config
+            .insert("labels".to_string(), LABEL_SERVICE_ID.to_string());
+        config
+            .log_config
+            .insert("env".to_string(), ENV_LOGS_LEVEL.to_string());
+
         // add BALENA_ env vars that are tied to the container lifetime
         config
             .environment
@@ -376,6 +386,24 @@ mod tests {
             map["networks"]["default_test-app-uuid"]["aliases"],
             json::json!(["db"])
         );
+    }
+
+    #[test]
+    fn sets_log_options_outside_the_config_map() {
+        let (rendered, back) = round_trip(oci::ContainerConfig::default());
+
+        assert_eq!(
+            rendered.log_config,
+            HashMap::from([
+                ("labels".to_string(), LABEL_SERVICE_ID.to_string()),
+                ("env".to_string(), ENV_LOGS_LEVEL.to_string()),
+            ])
+        );
+        let map: json::Value = json::from_str(&rendered.labels[LABEL_CONFIG_MAP]).unwrap();
+        assert!(map.get("log_options").is_none());
+
+        // the options are not part of the composition and are dropped on read back
+        assert!(back.log_config.is_empty());
     }
 
     #[test]
