@@ -17,7 +17,9 @@ use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
     Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
 };
-use crate::oci::{Client as Docker, Error as OciError, Mount, WithContext};
+use crate::oci::{
+    Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
+};
 use crate::store::{self, DocumentStore};
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
@@ -673,9 +675,11 @@ fn remove_network_when_requirements_are_met(
     // Migration path: same-named network in a future release with matching
     // config. Wait for the new release to register the network in state,
     // then perform a state-only removal — the Docker network is preserved
-    // for the new release to adopt.
+    // for the new release to adopt. Skip networks that have a different naming scheme.
+    let oci_name = LocalNamespace::from(app_uuid.as_str()).to_identifier(&net_name);
     if let Some((t_rel_uuid, future_net)) =
         find_future_network(&t_device, &app_uuid, &rel_uuid, &net_name)
+        && net.oci_name == oci_name
         && net.config == future_net.config
     {
         let new_release_has_network = device
@@ -692,9 +696,11 @@ fn remove_network_when_requirements_are_met(
     }
 
     // Otherwise: stop and uninstall any services using the network, then
-    // remove it on a subsequent retry once no dependents remain.
+    // remove it on a subsequent retry once no dependents remain. Services
+    // created by the legacy supervisor reference the network by its engine name
     let mut tasks = uninstall_services_depending_on(&device, &app_uuid, |svc| {
         svc.config.networks.contains_key(&net_name)
+            || svc.config.networks.contains_key(&net.oci_name)
     });
     if tasks.is_empty() {
         tasks.push(uninstall_network.into_task());
