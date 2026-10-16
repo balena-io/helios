@@ -954,6 +954,7 @@ fn install_service(
     svc.oci.replace(Container::mock());
     svc.started = false;
     svc.config = tgt.config;
+    svc.depends_on = tgt.depends_on;
     with_io(svc, async move |mut svc| {
         let docker = docker
             .as_ref()
@@ -1375,7 +1376,8 @@ fn reconfigure_service(
     Args((app_uuid, rel_uuid, _)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
-    if svc.config != tgt.config {
+    // depends_on is stored as a container label, so changing it requires a re-create
+    if svc.config != tgt.config || svc.depends_on != tgt.depends_on {
         // set release.installed to false if a reconfiguration is needed
         if release_already_installed(&device, &app_uuid, &rel_uuid) {
             tasks.push(ensure_release_is_finalized.into_task());
