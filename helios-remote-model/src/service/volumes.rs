@@ -333,6 +333,13 @@ fn parse_long(m: LongMount) -> Result<Mount, String> {
                     "bind mount source '{source}' is not in the allowed list"
                 ));
             }
+            // `:` separates the fields of an engine bind spec, so a path
+            // containing it cannot be expressed as one.
+            if source.contains(':') || target.contains(':') {
+                return Err(format!(
+                    "bind mount paths cannot contain ':' (got '{source}' -> '{target}')"
+                ));
+            }
             let BindOptions {
                 propagation,
                 create_host_path,
@@ -524,6 +531,22 @@ mod tests {
         }]))
         .unwrap_err();
         assert!(err.to_string().contains("should be a canonical path"));
+    }
+
+    #[test]
+    fn long_form_bind_with_colon_rejected() {
+        for (source, target) in [("/tmp/data:v2", "/data"), ("/tmp/data", "/data:v2")] {
+            let err = serde_json::from_value::<VolumesConfig>(json!([{
+                "type": "bind",
+                "source": source,
+                "target": target
+            }]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("cannot contain ':'"),
+                "{source} -> {target}: {err}"
+            );
+        }
     }
 
     #[test]
