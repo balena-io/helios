@@ -1418,10 +1418,44 @@ impl Mount {
             source: source.to_owned(),
             read_only,
             propagation: propagation.unwrap_or_default(),
-            // A bind mount creates the host path by default, however this is a problem
-            // in podman. Since all mounts are encoded in HostConfig.Binds, there is no way
-            // to tell if the user set `create_host_path: false` when creating  the container
+            // The engine always creates a missing source for `HostConfig.Binds`, which is
+            // also how `Mount::to_bind_spec` encodes `create_host_path: true`. Podman
+            // reports every mount in this field, so `create_host_path: false` cannot be
+            // recovered there.
             create_host_path: true,
+        })
+    }
+
+    /// Encode a bind mount that creates its host path as a `HostConfig.Binds`
+    /// spec (`source:target[:options]`).
+    ///
+    /// `BindOptions.CreateMountpoint` only exists since Engine API v1.42 and
+    /// is dropped by older engines, while `HostConfig.Binds` makes the engine
+    /// create a missing source on every API version. Returns `None` for any
+    /// other mount, which must go through `HostConfig.Mounts`.
+    fn to_bind_spec(&self) -> Option<String> {
+        let Self::Bind {
+            target,
+            source,
+            read_only,
+            propagation,
+            create_host_path: true,
+        } = self
+        else {
+            return None;
+        };
+
+        let mut opts = Vec::new();
+        if *read_only {
+            opts.push("ro".to_string());
+        }
+        opts.push(MountBindOptionsPropagationEnum::from(*propagation).to_string());
+
+        let spec = format!("{source}:{target}");
+        Some(if opts.is_empty() {
+            spec
+        } else {
+            format!("{spec}:{}", opts.join(","))
         })
     }
 }
@@ -1459,13 +1493,11 @@ impl From<Mount> for bollard::models::Mount {
                 source,
                 read_only,
                 propagation,
-                create_host_path,
+                create_host_path: false,
             } => {
-                let bind_options = if propagation != BindPropagation::default() || create_host_path
-                {
+                let bind_options = if propagation != BindPropagation::default() {
                     Some(MountBindOptions {
                         propagation: Some(propagation.into()),
-                        create_mountpoint: create_host_path.then_some(true),
                         ..Default::default()
                     })
                 } else {
@@ -1496,6 +1528,17 @@ impl From<Mount> for bollard::models::Mount {
                     tmpfs_options,
                     ..Default::default()
                 }
+            }
+            // Binds that create their host path are encoded with `Mount::to_bind_spec`,
+            // since engines before API v1.42 ignore `BindOptions.CreateMountpoint`.
+            Mount::Bind {
+                target,
+                create_host_path: true,
+                ..
+            } => {
+                unreachable!(
+                    "Mount::Bind (target='{target}') creating its host path must be written as a bind spec"
+                )
             }
             // `Other` only comes from reading an existing container; it must
             // never reach a create request. Panic to surface the programmer
@@ -1973,11 +2016,14 @@ impl From<ContainerConfig> for ContainerCreateBody {
             (host_network_mode, Some(networking_config))
         };
 
-        let engine_mounts = if volumes.is_empty() {
-            None
-        } else {
-            Some(volumes.into_iter().map(Into::into).collect())
-        };
+        let mut binds = Vec::new();
+        let mut mounts = Vec::new();
+        for mount in volumes {
+            match mount.to_bind_spec() {
+                Some(spec) => binds.push(spec),
+                None => mounts.push(mount.into()),
+            }
+        }
 
         let (exposed_ports, port_bindings) = if ports.is_empty() {
             (None, None)
@@ -2020,7 +2066,8 @@ impl From<ContainerConfig> for ContainerCreateBody {
             ipc_mode: ipc.map(|m| m.to_string()),
             memory: non_zero(mem_limit),
             memory_reservation: non_zero(mem_reservation),
-            mounts: engine_mounts,
+            binds: (!binds.is_empty()).then_some(binds),
+            mounts: (!mounts.is_empty()).then_some(mounts),
             nano_cpus: non_zero(nano_cpus),
             network_mode: host_network_mode,
             oom_score_adj,
@@ -3757,6 +3804,87 @@ mod tests {
         // path, so it is treated as a volume name like any other non-absolute
         // source.
         assert_eq!(kinds, vec!["volume", "volume", "bind"]);
+    }
+
+    fn create_host_path_test_volumes() -> BTreeSet<Mount> {
+        BTreeSet::from([
+            Mount::Bind {
+                target: "/created".to_string(),
+                source: "/host/created".to_string(),
+                read_only: false,
+                propagation: BindPropagation::default(),
+                create_host_path: true,
+            },
+            Mount::Bind {
+                target: "/created-ro".to_string(),
+                source: "/host/created-ro".to_string(),
+                read_only: true,
+                propagation: BindPropagation::Rshared,
+                create_host_path: true,
+            },
+            Mount::Bind {
+                target: "/existing".to_string(),
+                source: "/host/existing".to_string(),
+                read_only: false,
+                propagation: BindPropagation::default(),
+                create_host_path: false,
+            },
+            Mount::Volume {
+                target: "/vol".to_string(),
+                source: "vol-one".to_string(),
+                read_only: false,
+                nocopy: false,
+                subpath: None,
+            },
+        ])
+    }
+
+    #[test]
+    fn container_create_body_emits_create_host_path_binds_as_binds() {
+        let cfg = ContainerConfig {
+            volumes: create_host_path_test_volumes(),
+            ..Default::default()
+        };
+        let body: ContainerCreateBody = cfg.into();
+        let hc = body.host_config.unwrap();
+
+        // The engine only creates a missing bind source on every API version
+        // when the bind is passed through `HostConfig.Binds`.
+        assert_eq!(
+            hc.binds.unwrap(),
+            vec![
+                // the propagation defaults to `private` if not set
+                "/host/created:/created:private".to_string(),
+                "/host/created-ro:/created-ro:ro,rshared".to_string(),
+            ]
+        );
+        let targets: Vec<String> = hc
+            .mounts
+            .unwrap()
+            .into_iter()
+            .map(|m| m.target.unwrap())
+            .collect();
+        assert_eq!(targets, vec!["/vol", "/existing"]);
+    }
+
+    #[test]
+    fn container_create_body_omits_empty_binds_and_mounts() {
+        let body: ContainerCreateBody = ContainerConfig::default().into();
+        let hc = body.host_config.unwrap();
+        assert!(hc.binds.is_none());
+        assert!(hc.mounts.is_none());
+    }
+
+    #[test]
+    fn create_host_path_binds_round_trip_through_inspect() {
+        let volumes = create_host_path_test_volumes();
+        let cfg = ContainerConfig {
+            volumes: volumes.clone(),
+            ..Default::default()
+        };
+        let hc = ContainerCreateBody::from(cfg).host_config.unwrap();
+        let c: LocalContainer = inspect_with(hc.mounts, hc.binds).try_into().unwrap();
+        assert_eq!(c.config.volumes, volumes);
     }
 
     #[test]
