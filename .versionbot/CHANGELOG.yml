@@ -1,4 +1,109 @@
 - commits:
+    - subject: Remove config from oci and state image models
+      hash: 27708434285d555b47659cb1730088049dfc48a3
+      body: |
+        The image config is not really needed by the state engine and is not
+        relevant information to provide via the API. The existing ImageConfig
+        type was only a partial representation of the image metadata and existed
+        only as a remainder from an original state engine implementation.
+
+        This removes the config entirely, cleaning up some code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use target service image when migrating a service
+      hash: 39028af109c4fc1dcfa025b29e7ac47ceae877f3
+      body: >
+        On service migration, helios moves a service from the running release to
+
+        the target release when the config and images match. However the image
+
+        reference will differ and should be passed when creating the service in
+
+        the new release, as this image is used for reporting to the target
+        state.
+
+
+        Without this, the service may emit a state report to the target state
+
+        referencing the old images by name which will lead to a 401 from the API
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Implement generic field tracking
+      hash: ee6186fe5ba5e22b1bed1f65abd8b88067c8af02
+      body: >
+        When building a container config from the composition, a map of the
+
+        composition is created and stored as a label. The map is used on
+
+        read-back to skip values set by the engine or from the image to
+
+        avoid looping behavior. The map is created from the serialized shape of
+
+        the container config.
+
+
+        This mechanism replaces the individual labels being set for specific
+
+        fields, with a single `io.balena.private.config.map`, that tracks all
+
+        keys set on the target state.
+
+
+        The map also tracks engine-lossy fields as part of the map:
+        `network-mode`, `ipc`, `pid`,
+
+        when set to `service:<name>` are stored as the target defined them so
+
+        they can be retrieved only with the container metadata. Same goes for
+        `network.<name>.aliases`,
+
+        that need to be tracked by value as both helios and the engine add
+
+        aliases and knowing which values were actually set is needed to settle
+
+        the state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Keep non-finite numbers as strings when parsing environment values
+      hash: 62d9bfdaef10b43ad3f0359e0e6eef8ecfd38cff
+      body: |
+        `inf` and `NaN` have no JSON representation, so they would not survive a
+        serialization round trip, and NaN never compares equal to itself. Only
+        finite floats are parsed as numbers.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make ContainerConfig::cgroup an Option
+      hash: f224720ca36aea20f7162543abbfbaf0bae62342
+      body: >
+        Treat an unset cgroup namespace mode as `None` instead of defaulting to
+
+        `Private`, for consistency with other optional fields. An empty
+
+        `cgroupns_mode` reported by the engine is read back as `None`, and
+        `None`
+
+        is not sent on container creation.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.4
+  title: ""
+  date: 2026-10-20T18:19:45.552Z
+- commits:
     - subject: Handle default bridge network_mode on podman
       hash: 6cbb599742fe6bf45ba34310344c9f46f89c0ce9
       body: >
