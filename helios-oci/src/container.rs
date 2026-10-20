@@ -410,8 +410,8 @@ impl<N> TryFrom<ContainerInspectResponse> for LocalContainer<N> {
         let cgroup = host_config
             .as_mut()
             .and_then(|hc| hc.cgroupns_mode.take())
-            .map(Cgroup::from)
-            .unwrap_or_default();
+            .filter(|mode| *mode != bollard::models::HostConfigCgroupnsModeEnum::EMPTY)
+            .map(Cgroup::from);
         let cgroup_parent = host_config
             .as_mut()
             .and_then(|hc| hc.cgroup_parent.take())
@@ -839,11 +839,10 @@ pub struct ContainerState {
 }
 
 /// Cgroup namespace mode for a container.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Cgroup {
     Host,
-    #[default]
     Private,
 }
 
@@ -1659,6 +1658,7 @@ impl From<TmpfsOptions> for String {
 /// A single resource limit override for a container. The limit name (e.g.
 /// `nofile`) is the key of the enclosing `ulimits` map.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct Ulimit {
     /// Soft limit, enforced by the kernel for the container's processes
     pub soft: i64,
@@ -1678,7 +1678,7 @@ pub struct ContainerConfig {
     pub annotations: HashMap<String, String>,
 
     /// Cgroup namespace mode (`host` or `private`)
-    pub cgroup: Cgroup,
+    pub cgroup: Option<Cgroup>,
 
     /// Path to cgroups under which the container's cgroup is created
     pub cgroup_parent: Option<String>,
@@ -1986,12 +1986,10 @@ impl From<ContainerConfig> for ContainerCreateBody {
             (Some(exposed), Some(bindings))
         };
 
-        let cgroupns_mode = Some(cgroup.into());
-
         let host_config = bollard::config::HostConfig {
             annotations: (!annotations.is_empty()).then_some(annotations),
             cgroup_parent,
-            cgroupns_mode,
+            cgroupns_mode: cgroup.map(Into::into),
             cpuset_cpus: cpuset,
             cpu_realtime_period: non_zero(cpu_rt_period),
             cpu_realtime_runtime: non_zero(cpu_rt_runtime),
@@ -2766,7 +2764,7 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
-        assert_eq!(c.config.cgroup, Cgroup::Host);
+        assert_eq!(c.config.cgroup, Some(Cgroup::Host));
         assert_eq!(c.config.cgroup_parent.as_deref(), Some("/custom"));
         assert_eq!(c.config.cpuset.as_deref(), Some("0-3"));
         assert_eq!(c.config.ipc, Some(IpcMode::Shareable));
@@ -2784,7 +2782,7 @@ mod tests {
     #[test]
     fn container_create_body_emits_string_fields() {
         let cfg = ContainerConfig {
-            cgroup: Cgroup::Host,
+            cgroup: Some(Cgroup::Host),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             domainname: Some("example.com".to_string()),
@@ -3523,6 +3521,7 @@ mod tests {
             image: Some("img".to_string()),
             created: Some("2026-01-01T00:00:00Z".to_string()),
             host_config: Some(HostConfig {
+                cgroupns_mode: Some(bollard::models::HostConfigCgroupnsModeEnum::EMPTY),
                 cgroup_parent: Some(String::new()),
                 cpuset_cpus: Some(String::new()),
                 ipc_mode: Some(String::new()),
@@ -3549,6 +3548,7 @@ mod tests {
             ..Default::default()
         };
         let c: LocalContainer = resp.try_into().unwrap();
+        assert_eq!(c.config.cgroup, None);
         assert_eq!(c.config.cgroup_parent, None);
         assert_eq!(c.config.cpuset, None);
         assert_eq!(c.config.cpu_rt_period, 0);
@@ -3757,5 +3757,25 @@ mod tests {
         // path, so it is treated as a volume name like any other non-absolute
         // source.
         assert_eq!(kinds, vec!["volume", "volume", "bind"]);
+    }
+
+    #[test]
+    fn serializes_only_engine_reported_fields_by_default() {
+        // A default config serializes to only the fields the engine reports
+        // for every container, so that the serialized form of any config is
+        // what the caller set. A new field failing this needs a
+        // `skip_serializing_if`.
+        assert_eq!(
+            serde_json::to_value(ContainerConfig::default()).unwrap(),
+            serde_json::json!({"restart_policy": {"name": "no"}})
+        );
+        assert_eq!(
+            serde_json::to_value(Healthcheck::default()).unwrap(),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            serde_json::to_value(NetworkSettings::default()).unwrap(),
+            serde_json::json!({})
+        );
     }
 }

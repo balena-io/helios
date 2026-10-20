@@ -68,7 +68,6 @@ pub(super) fn pull_image(
     // Initialize the image if it doesn't exist
     let image = image.create(Image {
         oci_id: None,
-        config: Default::default(),
         download_progress: 100,
     });
 

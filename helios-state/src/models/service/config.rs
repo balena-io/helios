@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
 use mahler::state::State;
@@ -9,86 +8,171 @@ use crate::common_types::Uuid;
 use crate::labels::{LABEL_APP_UUID, LABEL_SERVICE_ID, LABEL_SERVICE_NAME, LABEL_SUPERVISED};
 use crate::oci::{self, IpcMode, LocalNamespace, Mount, Namespace, NetworkMode, PidMode};
 
-const LABEL_CONFIG_FIELDS: &str = "io.balena.private.config.fields";
-const LABEL_CONFIG_LABELS: &str = "io.balena.private.config.labels";
-const LABEL_CONFIG_ANNOTATIONS: &str = "io.balena.private.config.annotations";
-const LABEL_CONFIG_ENV: &str = "io.balena.private.config.env";
-const LABEL_CONFIG_NETWORKS: &str = "io.balena.private.config.networks";
-const LABEL_CONFIG_ULIMITS: &str = "io.balena.private.config.ulimits";
-const LABEL_CONFIG_HEALTHCHECK: &str = "io.balena.private.config.healthcheck";
-const LABEL_CONFIG_NETWORK_MODE: &str = "io.balena.private.config.network-mode";
-const LABEL_CONFIG_IPC: &str = "io.balena.private.config.ipc";
-const LABEL_CONFIG_PID: &str = "io.balena.private.config.pid";
+const LABEL_CONFIG_MAP: &str = "io.balena.private.config.map";
 pub(super) const LABEL_DEPENDS_ON: &str = "io.balena.private.depends-on";
 const ENV_APP_UUID: &str = "BALENA_APP_UUID";
 const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 
-/// Per-field tracking for config fields whose value the engine or image
-/// fills in when unset, so need to be tracked in LABEL_CONFIG_FIELDS.
-trait WithTrackedFields {
-    /// Set tracked fields to `None` unless their name appears in `fields`.
-    fn remove_untracked(&mut self, fields: &HashSet<String>);
+/// Map of the object keys present in the composition-defined container config, recursively.
+///
+/// The map is built based on the serialization shape of the [`oci::ContainerConfig`]. Fields
+/// skipped during serialization are assumed to not be used in the container creation.
+///
+/// Serialized, the map will have the following shape
+///
+/// ```json
+/// {"foo": null, "bar": {}, "baz": {...}, "network_mode": "service:db"}
+/// ```
+/// this is read as
+/// - `foo` is a leaf, the composition set the value and the key should be read back from the engine
+/// - `bar` has sub-keys, but none were set on the composition, so retrieved sub-keys should be dropped
+/// - `baz` has sub-keys, recurse over them to determine what was set by the composition
+/// - `network_mode` is a leaf holding the composition value, which is restored over the one read
+///   from the engine
+/// - any key absent from the map is skipped on read back
+///
+/// Leaves hold the composition value for the values the engine does not report back as they
+/// were set
+///
+/// - service references in `network_mode`, `ipc` and `pid`, which are resolved to a container id
+///   before the engine sees them, and
+/// - the target aliases of each network (`networks.<id>.aliases`). Helios appends the service
+///   name to the target aliases at create time and the engine appends the container id, so
+///   neither can be told apart from what the composition asked for.
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(transparent)]
+struct ConfigMap(json::Map<String, json::Value>);
 
-    /// Return the names of tracked fields whose value is currently `Some(_)`.
-    fn collect_tracked(&self) -> Vec<&'static str>;
-}
+impl ConfigMap {
+    /// Serialize the config to a JSON object
+    fn map_from(config: &oci::ContainerConfig) -> json::Map<String, json::Value> {
+        // we assume the config is serializable, if it isn't nothing is going to work anyway
+        match json::to_value(config).expect("container config is serializable") {
+            json::Value::Object(map) => map,
+            _ => unreachable!("container config serializes to an object"),
+        }
+    }
 
-macro_rules! impl_field_tracking {
-    ($ty:ty { $($name:ident),* $(,)? }) => {
-        impl WithTrackedFields for $ty {
-            fn remove_untracked(&mut self, fields: &HashSet<String>) {
-                $(
-                    if !fields.contains(stringify!($name)) {
-                        self.$name = None;
-                    }
-                )*
-            }
+    /// Build the map of the keys present in the given config
+    fn build(config: &oci::ContainerConfig) -> Self {
+        // Map the keys in the `value`, recursively
+        fn shape_of(value: &json::Map<String, json::Value>) -> json::Map<String, json::Value> {
+            value
+                .iter()
+                .map(|(key, value)| {
+                    let shape = match value {
+                        json::Value::Object(map) => json::Value::Object(shape_of(map)),
+                        _ => json::Value::Null,
+                    };
+                    (key.clone(), shape)
+                })
+                .collect()
+        }
 
-            fn collect_tracked(&self) -> Vec<&'static str> {
-                let mut out = Vec::new();
-                $(
-                    if self.$name.is_some() {
-                        out.push(stringify!($name));
-                    }
-                )*
-                out
+        let mut map = shape_of(&Self::map_from(config));
+
+        // For those keys that require recording the value, set them after the shape is ready
+        if let Some(mode @ NetworkMode::Service(_)) = &config.network_mode {
+            map.insert("network_mode".to_string(), json::json!(mode));
+        }
+        if let Some(mode @ IpcMode::Service(_)) = &config.ipc {
+            map.insert("ipc".to_string(), json::json!(mode));
+        }
+        if let Some(mode @ PidMode::Service(_)) = &config.pid {
+            map.insert("pid".to_string(), json::json!(mode));
+        }
+        if let Some(networks) = map.get_mut("networks").and_then(json::Value::as_object_mut) {
+            for (net_id, net_config) in &config.networks {
+                if !net_config.aliases.is_empty()
+                    && let Some(net_map) = networks
+                        .get_mut(net_id)
+                        .and_then(json::Value::as_object_mut)
+                {
+                    net_map.insert("aliases".to_string(), json::json!(net_config.aliases));
+                }
             }
         }
-    };
+
+        Self(map)
+    }
+
+    /// Recover the composition-defined config from the config reported by the engine
+    ///
+    /// Keys of the input config that are not part of the map are removed. Anything the
+    /// composition sets will round-trip untouched, while defaults filled by the engine or
+    /// inherited from the image will be dropped.
+    ///
+    /// If the map does not describe a valid config, e.g. it was written by a different version,
+    /// the config is not pruned.
+    ///
+    /// The tracked values are then restored. Service references replace the container
+    /// the engine resolved them to. Network aliases ar reduced to the target aliases.
+    fn restore(&self, config: oci::ContainerConfig) -> oci::ContainerConfig {
+        /// Remove the object keys of `value` that are not part of `shape`.
+        fn prune_tree(
+            value: &mut json::Map<String, json::Value>,
+            shape: &json::Map<String, json::Value>,
+        ) {
+            value.retain(|key, _| shape.contains_key(key));
+            for (key, value) in value.iter_mut() {
+                if let (json::Value::Object(value), Some(json::Value::Object(shape))) =
+                    (value, shape.get(key))
+                {
+                    prune_tree(value, shape);
+                }
+            }
+        }
+
+        let mut value = Self::map_from(&config);
+        prune_tree(&mut value, &self.0);
+
+        // the pruned config is the deserialized value of the pruned tree
+        let mut config = json::from_value(json::Value::Object(value)).unwrap_or(config);
+
+        if matches!(config.network_mode, Some(NetworkMode::Container(_)))
+            && let Some(mode) = self.tracked("network_mode")
+        {
+            config.network_mode = Some(mode);
+        }
+        if matches!(config.ipc, Some(IpcMode::Container(_)))
+            && let Some(mode) = self.tracked("ipc")
+        {
+            config.ipc = Some(mode);
+        }
+        if matches!(config.pid, Some(PidMode::Container(_)))
+            && let Some(mode) = self.tracked("pid")
+        {
+            config.pid = Some(mode);
+        }
+
+        for (net_id, net_config) in config.networks.iter_mut() {
+            let target_aliases = self.aliases(net_id);
+            net_config
+                .aliases
+                .retain(|alias| target_aliases.contains(&alias.as_str()));
+        }
+
+        config
+    }
+
+    /// The composition value tracked for a top level key, if any
+    fn tracked<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        T::deserialize(self.0.get(key)?).ok()
+    }
+
+    /// The target aliases of the given network, as set by the composition
+    fn aliases(&self, net_id: &str) -> Vec<&str> {
+        self.0
+            .get("networks")
+            .and_then(|networks| networks.get(net_id))
+            .and_then(|network| network.get("aliases"))
+            .and_then(json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(json::Value::as_str)
+            .collect()
+    }
 }
-
-impl_field_tracking!(oci::ContainerConfig {
-    cgroup_parent,
-    command,
-    entrypoint,
-    healthcheck,
-    hostname,
-    init,
-    ipc,
-    network_mode,
-    pid,
-    pids_limit,
-    runtime,
-    shm_size,
-    stop_grace_period,
-    stop_signal,
-    oom_score_adj,
-    user,
-    uts,
-    working_dir,
-});
-
-// Engine merges the image's HEALTHCHECK fields into compose healthcheck
-// at container create time when we don't set them, so we need to track
-// which fields are explicitly set by helios.
-impl_field_tracking!(oci::Healthcheck {
-    test,
-    interval,
-    timeout,
-    start_period,
-    start_interval,
-    retries,
-});
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct ServiceConfig(pub(super) oci::ContainerConfig);
@@ -113,127 +197,45 @@ impl DerefMut for ServiceConfig {
 impl From<oci::ContainerConfig> for ServiceConfig {
     /// Convert from an OCI container to a service configuration
     fn from(mut config: oci::ContainerConfig) -> Self {
-        // Read the list of fields defined in the composition used to create
-        // this container
-        let label_config_fields: HashSet<String> = config
-            .labels
-            .remove(LABEL_CONFIG_FIELDS)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
-
-        // Drop fields not in the composition as the engine fills these in
-        // with default values. Done first so a mode the composition did not set
-        // does not displace the networks the engine reports below.
-        config.remove_untracked(&label_config_fields);
-
-        // The engine can report `bridge` for a container on user networks, so the
-        // networks are only dropped when the composition asked for the mode.
-        if config.network_mode == Some(NetworkMode::Bridge) {
-            config.networks.clear();
-        }
-
-        let labels = &mut config.labels;
-
         // Get the app_uuid for use in later operations
-        let maybe_app_uuid = labels.remove(LABEL_APP_UUID);
+        let maybe_app_uuid = config.labels.remove(LABEL_APP_UUID);
 
-        // The engine can only report a service reference as the container it
-        // resolved to, so take the reference from the label. Any other mode is read
-        // as the engine reports it, so a mode the engine did not apply shows up as a
-        // difference with the target.
-        if let Some(mode) = labels.remove(LABEL_CONFIG_NETWORK_MODE)
-            && matches!(config.network_mode, Some(NetworkMode::Container(_)))
-        {
-            config.network_mode = Some(NetworkMode::from(mode));
+        // Read the map of the composition this container was created from
+        let config_map: ConfigMap = config
+            .labels
+            .remove(LABEL_CONFIG_MAP)
+            .and_then(|s| json::from_str(&s).ok())
+            .unwrap_or_default();
+
+        // Drop everything the composition did not define. The engine fills in
+        // defaults for unset config fields, ulimits and annotations, and the
+        // image contributes labels, environment and healthcheck fields.
+        // This step also restores lossy values, e.g. network aliases and `service:<name>` modes.
+        let mut config = config_map.restore(config);
+
+        // A healthcheck left with no fields means the composition set
+        // `healthcheck: {}`, which defers to the image's HEALTHCHECK
+        if config.healthcheck.as_ref().is_some_and(|hc| hc.is_empty()) {
+            config.healthcheck = None;
         }
 
-        // The engine can only report a service reference as the container it
-        // resolved to, so take the reference from the label. Any other mode is read
-        // as the engine reports it, so a mode the engine did not apply shows up as a
-        // difference with the target.
-        if let Some(mode) = labels.remove(LABEL_CONFIG_IPC)
-            && matches!(config.ipc, Some(IpcMode::Container(_)))
-        {
-            config.ipc = Some(IpcMode::from(mode));
-        }
+        let namespace = maybe_app_uuid.map(LocalNamespace::from);
 
-        // Same as above for the PID mode
-        if let Some(mode) = labels.remove(LABEL_CONFIG_PID)
-            && matches!(config.pid, Some(PidMode::Container(_)))
-        {
-            config.pid = Some(PidMode::from(mode));
-        }
+        config.networks = std::mem::take(&mut config.networks)
+            .into_iter()
+            .map(|(net_id, net_config)| {
+                // De-namespace network names by stripping the app_uuid suffix
+                let net_name = match &namespace {
+                    Some(namespace) => namespace.to_entity(&net_id),
+                    None => net_id,
+                };
 
-        // Read the list of healthcheck subfields the composition set
-        let label_config_healthcheck: HashSet<String> = labels
-            .remove(LABEL_CONFIG_HEALTHCHECK)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
+                (net_name, net_config)
+            })
+            .collect();
 
-        // Retain only environment variables that were defined in the composition
-        let label_config_env: Vec<String> = labels
-            .remove(LABEL_CONFIG_ENV)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
-        config
-            .environment
-            .retain(|k, _| label_config_env.contains(k));
-
-        // Retain only annotations that were defined in the composition.
-        let label_config_annotations: Vec<String> = labels
-            .remove(LABEL_CONFIG_ANNOTATIONS)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
-        config
-            .annotations
-            .retain(|k, _| label_config_annotations.contains(k));
-
-        // Retain only ulimits that were defined in the composition. The engine
-        // adds its own defaults which should not be read into the service config.
-        let label_config_ulimits: Vec<String> = labels
-            .remove(LABEL_CONFIG_ULIMITS)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
-        config
-            .ulimits
-            .retain(|k, _| label_config_ulimits.contains(k));
-
-        // De-namespace network names by stripping the app_uuid suffix
-        if let Some(app_uuid) = maybe_app_uuid {
-            let namespace = LocalNamespace::from(app_uuid);
-            let networks = std::mem::take(&mut config.networks);
-            config.networks = networks
-                .into_iter()
-                .map(|(net_id, mut net_config)| {
-                    let net_name = namespace.to_entity(&net_id);
-
-                    // get the list of target aliases from labels
-                    let target_aliases: Vec<String> = labels
-                        .remove(&format!("{LABEL_CONFIG_NETWORKS}.{net_name}.aliases"))
-                        .and_then(|s| json::from_str(&s).ok())
-                        .unwrap_or_default();
-
-                    // keep only aliases that are in the target state
-                    net_config
-                        .aliases
-                        .retain(|alias| target_aliases.contains(alias));
-
-                    // The engine assigns a mac_address when one isn't provided.
-                    // The label marks whether the target set one; if absent,
-                    // drop whatever the engine reported so a round-trip
-                    // doesn't see the engine-assigned address as a config change.
-                    if labels
-                        .remove(&format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"))
-                        .is_none()
-                    {
-                        net_config.mac_address = None;
-                    }
-
-                    (net_name, net_config)
-                })
-                .collect();
-
-            // De-namespace volume mount sources by stripping the app_uuid suffix
+        // De-namespace volume mount sources by stripping the app_uuid suffix
+        if let Some(namespace) = namespace {
             config.volumes = std::mem::take(&mut config.volumes)
                 .into_iter()
                 .map(|mut mount| {
@@ -245,25 +247,6 @@ impl From<oci::ContainerConfig> for ServiceConfig {
                 .collect();
         }
 
-        // Remove labels from the container that were not defined in
-        // the composition. These are coming from the image and should not be
-        // read into the service config
-        let label_config_labels_value: Vec<String> = labels
-            .remove(LABEL_CONFIG_LABELS)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
-        labels.retain(|k, _| label_config_labels_value.contains(k));
-
-        // Remove untracked healthcheck subfields. If healthcheck: {},
-        // collapse to None to allow the service to inherit the image's
-        // HEALTHCHECK.
-        if let Some(hc) = config.healthcheck.as_mut() {
-            hc.remove_untracked(&label_config_healthcheck);
-            if hc.collect_tracked().is_empty() {
-                config.healthcheck = None;
-            }
-        }
-
         Self(config)
     }
 }
@@ -271,10 +254,10 @@ impl From<oci::ContainerConfig> for ServiceConfig {
 impl ServiceConfig {
     /// Converts the service config into container configuration
     ///
-    /// Because some configurations may be defined on the image and the the composition,
-    /// this creates custom labels [`LABEL_CONFIG_FIELDS`], [`LABEL_CONFIG_LABELS`] containing a
-    /// list of composition defined keys and labels. When reading the container state, these fields
-    /// are used to determine if the specific field/label should be read back into the state.
+    /// Because some configurations may be defined on the image and the composition,
+    /// this stores a map of the composition-defined config in the [`LABEL_CONFIG_MAP`]
+    /// label. When reading the container state, the map is used to tell apart what the
+    /// composition set from what the engine and the image filled in.
     ///
     /// Volume mount sources are namespaced so they match the volumes created for the app, except
     /// for the sources listed in `external_volumes`, which refer to volumes that exist outside the
@@ -288,131 +271,6 @@ impl ServiceConfig {
         external_volumes: &[String],
     ) -> oci::ContainerConfig {
         let mut config = self.0;
-
-        // List of config fields coming from the composition. This is only necessary for fields that
-        // may be shared between the image and service, since docker will use the image version as
-        // the default unless overridden
-        let label_config_fields_value = config
-            .collect_tracked()
-            .into_iter()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-
-        // List of healthcheck subfields the composition set. Needed
-        // because the engine merges the image's HEALTHCHECK into service
-        // during container create for any unset subfields.
-        let label_config_healthcheck_value = config
-            .healthcheck
-            .as_ref()
-            .map(|hc| hc.collect_tracked())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-
-        let network_mode_service = match &config.network_mode {
-            Some(mode @ NetworkMode::Service(_)) => Some(mode.to_string()),
-            _ => None,
-        };
-        let ipc_service = match &config.ipc {
-            Some(mode @ IpcMode::Service(_)) => Some(mode.to_string()),
-            _ => None,
-        };
-        let pid_service = match &config.pid {
-            Some(mode @ PidMode::Service(_)) => Some(mode.to_string()),
-            _ => None,
-        };
-        let labels = &mut config.labels;
-
-        // We create a label LABEL_CONFIG_LABELS containing user defined labels on the composition
-        // we will use these when reading the state to remove labels coming from
-        // the image
-        let label_config_labels_value = labels
-            .keys()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-        labels.insert(
-            LABEL_CONFIG_LABELS.to_string(),
-            label_config_labels_value.to_string(),
-        );
-
-        // Store composition-defined environment variable keys
-        let label_config_env_value = config
-            .environment
-            .keys()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-        labels.insert(
-            LABEL_CONFIG_ENV.to_string(),
-            label_config_env_value.to_string(),
-        );
-
-        // Store composition-defined annotation keys so engine-added
-        // annotations can be dropped when reading the container state
-        let label_config_annotations_value = config
-            .annotations
-            .keys()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-        labels.insert(
-            LABEL_CONFIG_ANNOTATIONS.to_string(),
-            label_config_annotations_value.to_string(),
-        );
-
-        // Store composition-defined ulimit names so engine defaults can be
-        // dropped when reading the container state
-        let label_config_ulimits_value = config
-            .ulimits
-            .keys()
-            .map(|s| json::Value::String(s.to_owned()))
-            .collect::<json::Value>();
-        labels.insert(
-            LABEL_CONFIG_ULIMITS.to_string(),
-            label_config_ulimits_value.to_string(),
-        );
-
-        // add BALENA_ env vars that are tied to the container lifetime
-        config
-            .environment
-            .insert(ENV_APP_UUID.to_string(), Some(app_uuid.as_str().into()));
-        config
-            .environment
-            .insert(ENV_SERVICE_NAME.to_string(), Some(svc_name.into()));
-
-        labels.insert(
-            LABEL_CONFIG_FIELDS.to_string(),
-            label_config_fields_value.to_string(),
-        );
-
-        labels.insert(
-            LABEL_CONFIG_HEALTHCHECK.to_string(),
-            label_config_healthcheck_value.to_string(),
-        );
-
-        // the composition form, the only one that survives a read back. `Container::create`
-        // resolves a service reference before the engine sees it
-        if let Some(mode) = network_mode_service {
-            labels.insert(LABEL_CONFIG_NETWORK_MODE.to_string(), mode);
-        }
-        if let Some(mode) = ipc_service {
-            labels.insert(LABEL_CONFIG_IPC.to_string(), mode);
-        }
-        if let Some(mode) = pid_service {
-            labels.insert(LABEL_CONFIG_PID.to_string(), mode);
-        }
-
-        // Set app and service metadata as labels when creating the container
-        labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
-        labels.insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
-        labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
-        labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
-
-        if !depends_on.is_empty()
-            && let Ok(encoded) = json::to_string(depends_on)
-        {
-            labels.insert(LABEL_DEPENDS_ON.to_string(), encoded);
-        }
-
         let namespace = LocalNamespace::from(app_uuid.as_str());
 
         // Namespace volume mount sources so they match the volumes created under the app
@@ -428,36 +286,46 @@ impl ServiceConfig {
             })
             .collect();
 
-        let networks = std::mem::take(&mut config.networks);
-        for (net_name, mut net_config) in networks {
-            // store the target aliases into a label as the engine may insert new aliases
-            // that we want to remove when reading the container state
-            labels.insert(
-                format!("{LABEL_CONFIG_NETWORKS}.{net_name}.aliases"),
-                net_config
-                    .aliases
-                    .iter()
-                    .map(|s| json::Value::String(s.to_owned()))
-                    .collect::<json::Value>()
-                    .to_string(),
-            );
+        // Namespace network names so they match the networks created under the app
+        config.networks = std::mem::take(&mut config.networks)
+            .into_iter()
+            .map(|(net_name, net_config)| (namespace.to_identifier(&net_name), net_config))
+            .collect();
 
-            // mark whether the target set a mac_address so we can drop the
-            // engine-assigned one on read when the composition didn't ask for it
-            if net_config.mac_address.is_some() {
-                labels.insert(
-                    format!("{LABEL_CONFIG_NETWORKS}.{net_name}.mac_address"),
-                    String::new(),
-                );
-            }
+        // Build a map of the composition-defined config before adding
+        // anything of our own below
+        let config_map = ConfigMap::build(&config);
 
-            let net_id = namespace.to_identifier(&net_name);
+        let labels = &mut config.labels;
+        labels.insert(
+            LABEL_CONFIG_MAP.to_string(),
+            json::to_string(&config_map).expect("config map is serializable"),
+        );
 
-            // insert the current service name as an alias on the network
-            // so it can be referenced by name from other containers
+        // Set app and service metadata as labels when creating the container
+        labels.insert(LABEL_SUPERVISED.to_string(), "".to_string());
+        labels.insert(LABEL_APP_UUID.to_string(), app_uuid.to_string());
+        labels.insert(LABEL_SERVICE_NAME.to_string(), svc_name.to_string());
+        labels.insert(LABEL_SERVICE_ID.to_string(), svc_id.to_string());
+
+        if !depends_on.is_empty()
+            && let Ok(encoded) = json::to_string(depends_on)
+        {
+            labels.insert(LABEL_DEPENDS_ON.to_string(), encoded);
+        }
+
+        // add BALENA_ env vars that are tied to the container lifetime
+        config
+            .environment
+            .insert(ENV_APP_UUID.to_string(), Some(app_uuid.as_str().into()));
+        config
+            .environment
+            .insert(ENV_SERVICE_NAME.to_string(), Some(svc_name.into()));
+
+        // insert the current service name as an alias on every network
+        // so it can be referenced by name from other containers
+        for net_config in config.networks.values_mut() {
             net_config.aliases.push(svc_name.to_string());
-
-            config.networks.insert(net_id, net_config);
         }
 
         config
@@ -467,7 +335,7 @@ impl ServiceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
 
     fn make_uuid() -> Uuid {
         Uuid::from("test-app-uuid")
@@ -479,6 +347,35 @@ mod tests {
             ServiceConfig(config).into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
         let back = ServiceConfig::from(rendered.clone());
         (rendered, back)
+    }
+
+    #[test]
+    fn tracks_values_the_engine_does_not_report_in_the_config_map() {
+        let rendered = ServiceConfig(oci::ContainerConfig {
+            ipc: Some(IpcMode::Service("db".to_string())),
+            pid: Some(PidMode::Host),
+            networks: [(
+                "default".to_string(),
+                oci::NetworkSettings {
+                    aliases: Vec::from(["db".to_string()]),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })
+        .into_oci_config(1, "web", &make_uuid(), &Default::default(), &[]);
+
+        // only service references are tracked in the map, and the aliases are the ones
+        // from the composition, without the service name added by helios
+        let map: json::Value = json::from_str(&rendered.labels[LABEL_CONFIG_MAP]).unwrap();
+        assert_eq!(map["ipc"], json::json!("service:db"));
+        assert_eq!(map["pid"], json::Value::Null);
+        assert_eq!(
+            map["networks"]["default_test-app-uuid"]["aliases"],
+            json::json!(["db"])
+        );
     }
 
     #[test]
@@ -737,17 +634,32 @@ mod tests {
     }
 
     #[test]
-    fn preserves_explicit_config_fields_using_label_config_fields() {
+    fn round_trips_a_fully_populated_config() {
         let original = oci::ContainerConfig {
+            annotations: HashMap::from([("com.example.foo".to_string(), "bar".to_string())]),
+            cap_add: Vec::from(["NET_ADMIN".to_string()]),
+            cap_drop: Vec::from(["MKNOD".to_string()]),
             command: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            cgroup: oci::Cgroup::Host,
+            cgroup: Some(oci::Cgroup::Host),
             cgroup_parent: Some("/custom".to_string()),
             cpuset: Some("0-3".to_string()),
             cpu_rt_period: 1_000_000,
             cpu_rt_runtime: 950_000,
             cpu_shares: 2048,
+            device_cgroup_rules: Vec::from(["c 13:* rmw".to_string()]),
+            devices: Vec::from([oci::DeviceMapping {
+                source: "/dev/ttyUSB0".to_string(),
+                target: "/dev/ttyUSB0".to_string(),
+                permissions: "rwm".to_string(),
+            }]),
+            dns: Vec::from(["1.1.1.1".to_string()]),
+            dns_opt: Vec::from(["ndots:2".to_string()]),
+            dns_search: Vec::from(["example.com".to_string()]),
             domainname: Some("example.com".to_string()),
             entrypoint: Some(vec!["/entrypoint.sh".to_string()]),
+            environment: [("DEBUG".to_string(), "1")].into_iter().collect(),
+            extra_hosts: HashMap::from([("db".to_string(), "10.0.0.2".to_string())]),
+            group_add: Vec::from(["audio".to_string()]),
             healthcheck: Some(oci::Healthcheck {
                 test: Some(vec!["CMD".to_string(), "true".to_string()]),
                 interval: Some(30_000_000_000),
@@ -757,58 +669,191 @@ mod tests {
             }),
             hostname: Some("my-host".to_string()),
             init: Some(true),
+            ipc: Some(IpcMode::Shareable),
+            labels: HashMap::from([("com.example.role".to_string(), "db".to_string())]),
             mem_limit: 1073741824,
             mem_reservation: 536870912,
             nano_cpus: 1_500_000_000,
+            networks: [(
+                "default".to_string(),
+                oci::NetworkSettings {
+                    aliases: Vec::from(["db".to_string()]),
+                    ipv4_address: Some("10.0.0.2".to_string()),
+                    ipv6_address: Some("fd00::2".to_string()),
+                    link_local_ips: Vec::from(["169.254.0.2".to_string()]),
+                    mac_address: Some("02:42:ac:11:00:02".to_string()),
+                    driver_opts: HashMap::from([("k".to_string(), "v".to_string())]),
+                    gw_priority: Some(10),
+                },
+            )]
+            .into_iter()
+            .collect(),
             oom_score_adj: Some(-500),
+            pid: Some(PidMode::Host),
             pids_limit: Some(100),
+            ports: ["8080:80", "127.0.0.1:5353:53/udp"]
+                .into_iter()
+                .map(|p| p.parse().unwrap())
+                .collect(),
+            privileged: true,
+            read_only: true,
+            restart_policy: oci::RestartPolicy::OnFailure {
+                max_retries: Some(3),
+            },
             runtime: Some("runc".to_string()),
+            security_opt: Vec::from(["no-new-privileges".to_string()]),
             shm_size: Some(67108864),
             stop_grace_period: Some(30),
             stop_signal: Some("SIGTERM".to_string()),
+            sysctls: HashMap::from([("net.ipv4.ip_forward".to_string(), "1".to_string())]),
+            tmpfs: HashMap::from([(
+                "/run".to_string(),
+                oci::TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            tty: true,
+            ulimits: HashMap::from([(
+                "nofile".to_string(),
+                oci::Ulimit {
+                    soft: 1024,
+                    hard: 2048,
+                },
+            )]),
             user: Some("1000:1000".to_string()),
             userns_mode: Some("host".to_string()),
             uts: Some("host".to_string()),
+            volumes: BTreeSet::from([
+                oci::Mount::Volume {
+                    target: "/data".to_string(),
+                    source: "data".to_string(),
+                    read_only: false,
+                    nocopy: false,
+                    subpath: None,
+                },
+                oci::Mount::Volume {
+                    target: "/shared".to_string(),
+                    source: "shared".to_string(),
+                    read_only: false,
+                    nocopy: false,
+                    subpath: None,
+                },
+                oci::Mount::Bind {
+                    target: "/etc/hosts".to_string(),
+                    source: "/etc/hosts".to_string(),
+                    read_only: true,
+                    propagation: Default::default(),
+                    create_host_path: false,
+                },
+            ]),
             working_dir: Some("/app".to_string()),
             ..Default::default()
         };
         let svc = ServiceConfig(original.clone());
-        let with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
+        let with_labels = svc.into_oci_config(
+            1,
+            "svc",
+            &make_uuid(),
+            &Default::default(),
+            &["shared".to_string()],
+        );
 
+        // Everything the composition defined comes back untouched, and
+        // everything helios added on the way out is gone
         let back = ServiceConfig::from(with_labels);
-        assert_eq!(back.command, original.command);
-        assert_eq!(back.entrypoint, original.entrypoint);
-        assert_eq!(back.cgroup, original.cgroup);
-        assert_eq!(back.cgroup_parent, original.cgroup_parent);
-        assert_eq!(back.cpuset, original.cpuset);
-        assert_eq!(back.cpu_rt_period, original.cpu_rt_period);
-        assert_eq!(back.cpu_rt_runtime, original.cpu_rt_runtime);
-        assert_eq!(back.cpu_shares, original.cpu_shares);
-        assert_eq!(back.domainname, original.domainname);
-        assert_eq!(back.healthcheck, original.healthcheck);
-        assert_eq!(back.hostname, original.hostname);
-        assert_eq!(back.init, original.init);
-        assert_eq!(back.mem_limit, original.mem_limit);
-        assert_eq!(back.mem_reservation, original.mem_reservation);
-        assert_eq!(back.nano_cpus, original.nano_cpus);
-        assert_eq!(back.oom_score_adj, original.oom_score_adj);
-        assert_eq!(back.pids_limit, original.pids_limit);
-        assert_eq!(back.runtime, original.runtime);
-        assert_eq!(back.shm_size, original.shm_size);
-        assert_eq!(back.stop_grace_period, original.stop_grace_period);
-        assert_eq!(back.stop_signal, original.stop_signal);
-        assert_eq!(back.user, original.user);
-        assert_eq!(back.userns_mode, original.userns_mode);
-        assert_eq!(back.uts, original.uts);
-        assert_eq!(back.working_dir, original.working_dir);
+        assert_eq!(back.0, original);
     }
 
     #[test]
-    fn drops_config_fields_when_not_in_label_config_fields() {
+    fn round_trips_a_network_mode_config() {
+        // `network_mode` is mutually exclusive with `networks`
+        let original = oci::ContainerConfig {
+            network_mode: Some(NetworkMode::Host),
+            ..Default::default()
+        };
+        let with_labels = ServiceConfig(original.clone()).into_oci_config(
+            1,
+            "svc",
+            &make_uuid(),
+            &Default::default(),
+            &[],
+        );
+        assert_eq!(ServiceConfig::from(with_labels).0, original);
+    }
+
+    #[test]
+    fn returns_the_config_unpruned_when_the_map_does_not_match_the_schema() {
+        // `restart_policy` cannot be read back without its `name`
+        let config = oci::ContainerConfig {
+            cpu_shares: 1024,
+            restart_policy: oci::RestartPolicy::OnFailure {
+                max_retries: Some(3),
+            },
+            ..Default::default()
+        };
+        let map: ConfigMap = json::from_value(json::json!({"restart_policy": {}})).unwrap();
+
+        assert_eq!(map.restore(config.clone()), config);
+    }
+
+    #[test]
+    fn tolerates_a_map_with_empty_nested_objects() {
+        // The map may describe a composition that set none of the nested keys
+        let populated = oci::ContainerConfig {
+            healthcheck: Some(oci::Healthcheck {
+                test: Some(vec!["CMD".to_string(), "true".to_string()]),
+                ..Default::default()
+            }),
+            networks: [(
+                "default_test-app-uuid".to_string(),
+                oci::NetworkSettings {
+                    ipv4_address: Some("10.0.0.2".to_string()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            restart_policy: oci::RestartPolicy::OnFailure {
+                max_retries: Some(3),
+            },
+            tmpfs: HashMap::from([(
+                "/run".to_string(),
+                oci::TmpfsOptions {
+                    mode: Some("755".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            ulimits: HashMap::from([(
+                "nofile".to_string(),
+                oci::Ulimit {
+                    soft: 1024,
+                    hard: 2048,
+                },
+            )]),
+            ..Default::default()
+        };
+        let map: ConfigMap = json::from_value(json::json!({
+            "healthcheck": {},
+            "networks": {"default_test-app-uuid": {}},
+            "restart_policy": {"name": null},
+            "tmpfs": {"/run": {}},
+            "ulimits": {"nofile": {}},
+        }))
+        .unwrap();
+
+        let pruned = map.restore(populated);
+        assert_eq!(pruned.networks["default_test-app-uuid"].ipv4_address, None);
+        assert_eq!(pruned.tmpfs["/run"].mode, None);
+        assert_eq!(pruned.ulimits["nofile"], oci::Ulimit::default());
+    }
+
+    #[test]
+    fn drops_config_fields_when_not_in_config_map() {
         // Simulate an inspect where the engine/image filled in values the
         // composition never requested. Fields that default to ""/0 are
         // filtered in helios-oci during inspect.
-        let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
+        let labels = HashMap::from([(LABEL_CONFIG_MAP.to_string(), "{}".to_string())]);
         let inspected = oci::ContainerConfig {
             command: Some(vec!["/bin/sh".to_string()]),
             entrypoint: Some(vec!["/docker-entrypoint.sh".to_string()]),
@@ -937,18 +982,51 @@ mod tests {
     }
 
     #[test]
-    fn keeps_ports_without_tracking_label() {
-        // Ports need no entry in LABEL_CONFIG_FIELDS: `HostConfig.PortBindings`
-        // only ever contains what the create request asked for (image EXPOSE
-        // entries surface in `Config.ExposedPorts`, which is never read back).
-        let labels = HashMap::from([(LABEL_CONFIG_FIELDS.to_string(), "[]".to_string())]);
-        let inspected = oci::ContainerConfig {
-            ports: ["8080:80".parse().unwrap()].into_iter().collect(),
-            labels,
+    fn drops_values_for_fields_the_composition_never_set() {
+        // Every serialized field is covered by the map, including the
+        // scalars and lists that no tracking label used to cover
+        let svc = ServiceConfig(oci::ContainerConfig::default());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
+
+        with_labels.cpu_shares = 1024;
+        with_labels.mem_reservation = 536870912;
+        with_labels.ports = ["8080:80".parse().unwrap()].into_iter().collect();
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.cpu_shares, 0);
+        assert_eq!(back.mem_reservation, 0);
+        assert!(back.ports.is_empty());
+    }
+
+    #[test]
+    fn drops_engine_added_network_aliases_and_mac_address() {
+        let networks = [(
+            "default".to_string(),
+            oci::NetworkSettings {
+                aliases: Vec::from(["db".to_string()]),
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+        let original = oci::ContainerConfig {
+            networks,
             ..Default::default()
         };
-        let svc = ServiceConfig::from(inspected);
-        assert_eq!(svc.ports, Vec::from(["8080:80".parse().unwrap()]));
+        let svc = ServiceConfig(original.clone());
+        let mut with_labels = svc.into_oci_config(1, "svc", &make_uuid(), &Default::default(), &[]);
+
+        // Simulate the engine adding the container id as an alias and
+        // assigning a mac address the composition never asked for
+        let net_config = with_labels
+            .networks
+            .get_mut("default_test-app-uuid")
+            .expect("network is namespaced by app uuid");
+        net_config.aliases.push("a1b2c3d4e5f6".to_string());
+        net_config.mac_address = Some("02:42:ac:11:00:02".to_string());
+
+        let back = ServiceConfig::from(with_labels);
+        assert_eq!(back.networks, original.networks);
     }
 
     #[test]

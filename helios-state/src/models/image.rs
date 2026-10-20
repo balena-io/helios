@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use mahler::state::State;
 
 use crate::common_types::ImageUri;
-use crate::oci::{ImageConfig, LocalImage};
+use crate::oci::LocalImage;
 
 /// An image reference is either a image URI or a content addressable image ID
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
@@ -102,17 +102,12 @@ pub struct Image {
 
     /// Image pull progress
     pub download_progress: u8,
-
-    /// Image configuration
-    #[serde(default)]
-    pub config: ImageConfig,
 }
 
 impl From<LocalImage> for Image {
     fn from(img: LocalImage) -> Self {
         Self {
             oci_id: Some(img.id),
-            config: img.config,
             download_progress: 100,
         }
     }

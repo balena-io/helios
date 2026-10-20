@@ -84,7 +84,12 @@ impl FromStr for Value {
         if let Ok(i) = s.parse::<i64>() {
             return Ok(Value::Signed(i));
         }
-        if let Ok(f) = s.parse::<f64>() {
+        // Only finite floats become numbers: `inf` and `NaN` have no JSON
+        // representation, so they would not survive a serialization round
+        // trip, and NaN never compares equal to itself.
+        if let Ok(f) = s.parse::<f64>()
+            && f.is_finite()
+        {
             return Ok(Value::Float(f));
         }
         Ok(Value::String(s.to_string()))
@@ -249,6 +254,16 @@ mod tests {
             Some(&Some(Value::String("localhost".to_string())))
         );
         assert_eq!(env.get("RATIO"), Some(&Some(Value::Float(1.5))));
+    }
+
+    #[test]
+    fn test_parse_keeps_non_finite_numbers_as_strings() {
+        // A non-finite float has no JSON representation and NaN never equals
+        // itself, so these stay strings
+        for raw in ["inf", "-inf", "Infinity", "NaN", "1e400"] {
+            assert_eq!(raw.parse::<Value>(), Ok(Value::String(raw.to_string())));
+        }
+        assert_eq!("1.5".parse::<Value>(), Ok(Value::Float(1.5)));
     }
 
     #[test]
