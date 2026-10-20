@@ -4,7 +4,7 @@ use std::time::Duration;
 use bollard::Docker;
 use bollard::config::RestartPolicy;
 use bollard::config::RestartPolicyNameEnum;
-use bollard::models::VolumeCreateRequest;
+use bollard::models::{HostConfig, VolumeCreateRequest};
 use bollard::query_parameters::RemoveVolumeOptions;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -133,6 +133,26 @@ fn assert_env_contains(env: &[String], expected: &[&str]) {
             "env missing '{entry}'; got {env:?}"
         );
     }
+}
+
+/// Assert the container logs are tagged with the service id label and the log
+/// level env var.
+fn assert_log_options(host_config: &HostConfig) {
+    let options = host_config
+        .log_config
+        .as_ref()
+        .and_then(|lc| lc.config.as_ref())
+        .expect("host_config.log_config not set");
+    assert_eq!(
+        options.get("labels").map(String::as_str),
+        Some("io.balena.service-id"),
+        "unexpected log options {options:?}"
+    );
+    assert_eq!(
+        options.get("env").map(String::as_str),
+        Some("BALENA_LOGS_LEVEL"),
+        "unexpected log options {options:?}"
+    );
 }
 
 fn assert_container_networks(
@@ -484,6 +504,7 @@ async fn test_set_app_target_install_images() {
     let config = container.config.unwrap();
     let host_config = container.host_config.unwrap();
     assert_eq!(config.cmd.unwrap(), vec!["sleep", "infinity"]);
+    assert_log_options(&host_config);
     assert_eq!(
         host_config.restart_policy.unwrap(),
         RestartPolicy {
@@ -520,6 +541,7 @@ async fn test_set_app_target_install_images() {
             "while true; do echo -n 'Hello World!!' | nc -lv -p 8080; done"
         ]
     );
+    assert_log_options(&host_config);
     assert_eq!(
         host_config.restart_policy.unwrap(),
         RestartPolicy {
