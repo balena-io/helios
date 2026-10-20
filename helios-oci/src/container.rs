@@ -1257,11 +1257,13 @@ impl<'de> Deserialize<'de> for PidMode {
 }
 
 /// Bind mount propagation mode. Mirrors the compose `bind.propagation` setting.
+///
+/// Defaults to `rprivate` for Moby and Podman compatibility
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
-    #[default]
     Private,
+    #[default]
     Rprivate,
     Shared,
     Rshared,
@@ -1485,24 +1487,17 @@ impl From<Mount> for bollard::models::Mount {
                 read_only,
                 propagation,
                 create_host_path: false,
-            } => {
-                let bind_options = if propagation != BindPropagation::default() {
-                    Some(MountBindOptions {
-                        propagation: Some(propagation.into()),
-                        ..Default::default()
-                    })
-                } else {
-                    None
-                };
-                bollard::models::Mount {
-                    typ: Some(MountType::BIND),
-                    target: Some(target),
-                    source: Some(source),
-                    read_only: Some(read_only),
-                    bind_options,
+            } => bollard::models::Mount {
+                typ: Some(MountType::BIND),
+                target: Some(target),
+                source: Some(source),
+                read_only: Some(read_only),
+                bind_options: Some(MountBindOptions {
+                    propagation: Some(propagation.into()),
                     ..Default::default()
-                }
-            }
+                }),
+                ..Default::default()
+            },
             Mount::Tmpfs { target, size, mode } => {
                 let tmpfs_options = if size.is_some() || mode.is_some() {
                     Some(MountTmpfsOptions {
@@ -3631,14 +3626,14 @@ mod tests {
                     target: "/container/a".to_string(),
                     source: "/host/a".to_string(),
                     read_only: false,
-                    propagation: BindPropagation::Private,
+                    propagation: BindPropagation::Rprivate,
                     create_host_path: true,
                 },
                 Mount::Bind {
                     target: "/container/b".to_string(),
                     source: "/host/b".to_string(),
                     read_only: true,
-                    propagation: BindPropagation::Private,
+                    propagation: BindPropagation::Rprivate,
                     create_host_path: true,
                 },
                 Mount::Bind {
@@ -3677,7 +3672,7 @@ mod tests {
                 target: "/t".to_string(),
                 source: "/h".to_string(),
                 read_only: false,
-                propagation: BindPropagation::Private,
+                propagation: BindPropagation::Rprivate,
                 create_host_path: true,
             }
         );
@@ -3844,8 +3839,8 @@ mod tests {
         assert_eq!(
             hc.binds.unwrap(),
             vec![
-                // the propagation defaults to `private` if not set
-                "/host/created:/created:private".to_string(),
+                // the default propagation is written out explicitly
+                "/host/created:/created:rprivate".to_string(),
                 "/host/created-ro:/created-ro:ro,rshared".to_string(),
             ]
         );
