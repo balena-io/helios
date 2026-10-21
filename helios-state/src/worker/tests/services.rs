@@ -1541,3 +1541,100 @@ fn it_migrates_a_restarting_dependent_whose_dependency_is_not_in_its_release() {
             ),
     );
 }
+
+fn service_with_dependency_device(
+    web_config: serde_json::Value,
+    web_depends_on: serde_json::Value,
+    with_containers: bool,
+) -> serde_json::Value {
+    let oci = |name: &str| {
+        if with_containers {
+            running_container(name)
+        } else {
+            serde_json::Value::Null
+        }
+    };
+    let mut db = json!({
+        "id": 1,
+        "image": "alpine:latest",
+        "started": true,
+        "config": {},
+    });
+    let mut web = json!({
+        "id": 2,
+        "image": "alpine:latest",
+        "started": true,
+        "depends_on": web_depends_on,
+        "config": web_config,
+    });
+    if with_containers {
+        db["oci"] = oci("my-release-uuid_db");
+        web["oci"] = oci("my-release-uuid_web");
+    }
+    let mut device = json!({
+        "uuid": "my-device-uuid",
+        "apps": {
+            "my-app-uuid": {
+                "id": 1,
+                "name": "my-app-name",
+                "releases": {
+                    "my-release-uuid": {
+                        "installed": true,
+                        "services": { "db": db, "web": web }
+                    }
+                }
+            }
+        },
+    });
+    if with_containers {
+        device["images"] = json!({
+            "alpine:latest": {"oci_id": "abcde", "download_progress": 100}
+        });
+    }
+    device
+}
+
+#[test]
+fn it_finds_a_workflow_to_recreate_a_service_with_a_new_dependency() {
+    init_tracing();
+    let depends_on =
+        json!({"db": {"condition": "service_started", "restart": false, "required": true}});
+    assert_workflow(
+        service_with_dependency_device(json!({"command": ["sleep", "infinity"]}), json!({}), true),
+        service_with_dependency_device(json!({"command": ["sleep", "10"]}), depends_on, false),
+        release_update(
+            "my-release-uuid",
+            "my-app-uuid",
+            seq!(
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'web' for release 'my-release-uuid'",
+                "remove container for service 'web' for release 'my-release-uuid'",
+                "install service 'web' for release 'my-release-uuid'",
+                "start service 'web' for release 'my-release-uuid'",
+            ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
+
+#[test]
+fn it_finds_a_workflow_to_recreate_a_service_when_only_its_dependencies_change() {
+    init_tracing();
+    let config = json!({"command": ["sleep", "infinity"]});
+    let depends_on =
+        json!({"db": {"condition": "service_started", "restart": false, "required": true}});
+    assert_workflow(
+        service_with_dependency_device(config.clone(), json!({}), true),
+        service_with_dependency_device(config, depends_on, false),
+        release_update(
+            "my-release-uuid",
+            "my-app-uuid",
+            seq!(
+                "take locks for app with uuid 'my-app-uuid'",
+                "stop service 'web' for release 'my-release-uuid'",
+                "remove container for service 'web' for release 'my-release-uuid'",
+                "install service 'web' for release 'my-release-uuid'",
+                "start service 'web' for release 'my-release-uuid'",
+            ),
+        ) + seq!("release locks for app with uuid 'my-app-uuid'"),
+    );
+}
