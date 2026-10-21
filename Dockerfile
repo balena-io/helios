@@ -12,7 +12,9 @@ ARG HELIOS_BUILD
 RUN apk add --update --no-cache \
 	build-base \
 	clang clang-dev cmake \
-	rust cargo
+	rust cargo \
+	# eMudhra mitigation
+	'ca-certificates-bundle>=20261020-r0'		
 
 WORKDIR /usr/src/app
 
@@ -48,7 +50,9 @@ LABEL org.opencontainers.image.licenses=APACHE-2.0
 # Install release dependencies
 # socat is used for the healthcheck and also for exposing the
 # socket to a local port
-RUN apk add --update --no-cache socat libstdc++
+RUN apk add --update --no-cache socat libstdc++ \
+			# eMudhra mitigation
+			'ca-certificates-bundle>=20261020-r0'		
 
 COPY scripts /opt/helios
 COPY --from=build /usr/src/app/target/$HELIOS_BUILD/helios /usr/bin
