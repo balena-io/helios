@@ -1,4 +1,22 @@
 - commits:
+    - subject: Re-create services when depends_on changes
+      hash: d5a1cfb1d1567ab15ae7d1a3d8f4e4967d8bc244
+      body: |
+        A service's `depends_on` is only persisted as a container label, but
+        `install_service` kept the previous value instead of taking it from the
+        target, and `reconfigure_service` only compared the service config. A
+        container created without the label (e.g. by the legacy supervisor)
+        would read back an empty `depends_on`, leaving the planner unable to
+        find a workflow to the target.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.6
+  title: ""
+  date: 2026-10-21T20:18:43.176Z
+- commits:
     - subject: Use patched ca-certificates to remove eMudhra intermediate CAs
       hash: 021a0ca2224147afe76db78606d7c867cee246ed
       body: |
