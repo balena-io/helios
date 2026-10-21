@@ -1,5 +1,6 @@
 mod config;
 mod labels;
+mod planning_log;
 mod read;
 mod seek;
 mod tasks;

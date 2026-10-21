@@ -115,6 +115,10 @@ features = [ "trace" ]
 version = "0.3.23"
 features = [ "env-filter", "fmt", "registry", "ansi" ]
 
+# Size-based rotation of the planning failures log
+[workspace.dependencies.rolling-file]
+version = "0.2.0"
+
 [workspace.dependencies.reqwest]
 version = "0.13"
 default-features = false

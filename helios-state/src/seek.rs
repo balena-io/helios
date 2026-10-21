@@ -10,16 +10,18 @@ use tokio::sync::{
     watch::{Receiver, Sender},
 };
 use tokio_stream::StreamExt;
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
+use crate::util::dirs::runtime_dir;
 use crate::util::interrupt::Interrupt;
 use crate::util::locking::ForceAcquireLocks;
 use crate::util::logs;
 
 use super::config::Resources;
 use super::models::{Device, DeviceTarget};
+use super::planning_log::PlanningLog;
 use super::read::{self, StateReader};
 use super::worker::{LocalWorker, create};
 
@@ -138,6 +140,9 @@ pub enum SeekError {
 
     #[error("failed to update state on legacy Supervisor: {0}")]
     LegacyUpdate(#[from] StateUpdateError),
+
+    #[error("failed to open the planning failures log: {0}")]
+    PlanningLogInit(std::io::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +234,7 @@ fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn seek_target(
     worker: &LocalWorker,
     current_state: &mut Device,
@@ -237,6 +243,7 @@ async fn seek_target(
     state_tx: &Sender<LocalState>,
     retry_interval: Duration,
     state_reader: &StateReader,
+    planning_log: &PlanningLog,
 ) -> Result<UpdateStatus, SeekError> {
     info!("applying target state");
 
@@ -247,9 +254,10 @@ async fn seek_target(
         if tracing::enabled!(tracing::Level::INFO) {
             let changes = worker.distance(target)?;
             if !changes.is_empty() {
-                info!("searching workflow for pending state changes:");
+                info!("searching workflow");
+                debug!("pending state changes:");
                 for change in changes {
-                    info!("- {}", logs::mask_sensitive_data(change));
+                    debug!("- {}", logs::mask_sensitive_data(change));
                 }
             } else {
                 info!("no pending state changes");
@@ -257,89 +265,97 @@ async fn seek_target(
         }
 
         let now = Instant::now();
-        if let Some(workflow) = worker.find_workflow(target)? {
-            let has_exceptions = !workflow.exceptions().is_empty();
-            if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
-                warn!("the following operations were ignored during planning");
-                for ignored in workflow.exceptions() {
-                    warn!("- {}", logs::mask_sensitive_data(ignored.operation.clone()));
-                    if let Some(reason) = ignored.reason.as_ref() {
-                        warn!("    reason: {reason}");
-                    }
-                }
+        let workflow = match worker.find_workflow(target) {
+            Ok(workflow) => workflow,
+            Err(e) => {
+                planning_log.record(current_state, target, Some(&e)).await;
+                return Err(e.into());
             }
-
-            if workflow.is_empty() {
-                info!("target state applied");
-                if has_exceptions {
-                    // no changes to make but there are exceptions so we return aborted
-                    return Ok(UpdateStatus::Aborted);
-                }
-                return Ok(UpdateStatus::Done);
-            } else {
-                info!(time = ?now.elapsed(), "workflow found");
-                if tracing::enabled!(tracing::Level::INFO) {
-                    info!("will execute the following tasks:");
-                    for line in workflow.to_string().lines() {
-                        info!("{line}");
-                    }
-                }
-
-                let now = Instant::now();
-                info!("executing workflow");
-
-                let mut stream = std::pin::pin!(worker.run_workflow(workflow));
-
-                loop {
-                    let event = tokio::select! {
-                        _ = interrupt.wait() => {
-                            info!(time = ?now.elapsed(), "interrupted by new target");
-                            return Ok(UpdateStatus::Interrupted)
-                        },
-                        Some(evt) = stream.next() => evt,
-                        else => unreachable!("stream should not close before workflow terminates")
-                    };
-
-                    match event? {
-                        WorkerEvent::StateUpdated(new_state) => {
-                            *current_state = new_state;
-                            report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
-                        }
-                        WorkerEvent::WorkflowFinished(WorkflowStatus::Success) => {
-                            info!(time = ?now.elapsed(), "workflow executed successfully");
-                            info!("target state applied");
-                            if has_exceptions {
-                                // workflow completed but there were skipped changes so we
-                                // return aborted
-                                return Ok(UpdateStatus::Aborted);
-                            }
-                            return Ok(UpdateStatus::Done);
-                        }
-                        // if a recoverable error happened, we try-again
-                        WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
-                            warn!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in {retry_interval:#?}");
-
-                            tokio::select! {
-                                _ = interrupt.wait() => {
-                                    info!(time = ?now.elapsed(), "interrupted by new target");
-                                    return Ok(UpdateStatus::Interrupted)
-                                },
-                                _ = tokio::time::sleep(retry_interval) => {},
-                            }
-
-                            // A failed task reports no state back, but it may have
-                            // changed the engine before failing.
-                            *current_state = state_reader.read().await?;
-
-                            // break-the inner loop after the back-off
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
+        };
+        let Some(workflow) = workflow else {
             warn!(time = ?now.elapsed(), "workflow not found");
+            planning_log.record(current_state, target, None).await;
             return Ok(UpdateStatus::Aborted);
+        };
+
+        let has_exceptions = !workflow.exceptions().is_empty();
+        if tracing::enabled!(tracing::Level::WARN) && has_exceptions {
+            warn!("the following operations were ignored during planning");
+            for ignored in workflow.exceptions() {
+                warn!("- {}", logs::mask_sensitive_data(ignored.operation.clone()));
+                if let Some(reason) = ignored.reason.as_ref() {
+                    warn!("    reason: {reason}");
+                }
+            }
+        }
+
+        if workflow.is_empty() {
+            info!("target state applied");
+            if has_exceptions {
+                // no changes to make but there are exceptions so we return aborted
+                return Ok(UpdateStatus::Aborted);
+            }
+            return Ok(UpdateStatus::Done);
+        } else {
+            info!(time = ?now.elapsed(), "workflow found");
+            if tracing::enabled!(tracing::Level::INFO) {
+                debug!("will execute the following tasks:");
+                for line in workflow.to_string().lines() {
+                    debug!("{line}");
+                }
+            }
+
+            let now = Instant::now();
+            info!("executing workflow");
+
+            let mut stream = std::pin::pin!(worker.run_workflow(workflow));
+
+            loop {
+                let event = tokio::select! {
+                    _ = interrupt.wait() => {
+                        info!(time = ?now.elapsed(), "interrupted by new target");
+                        return Ok(UpdateStatus::Interrupted)
+                    },
+                    Some(evt) = stream.next() => evt,
+                    else => unreachable!("stream should not close before workflow terminates")
+                };
+
+                match event? {
+                    WorkerEvent::StateUpdated(new_state) => {
+                        *current_state = new_state;
+                        report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
+                    }
+                    WorkerEvent::WorkflowFinished(WorkflowStatus::Success) => {
+                        info!(time = ?now.elapsed(), "workflow executed successfully");
+                        info!("target state applied");
+                        if has_exceptions {
+                            // workflow completed but there were skipped changes so we
+                            // return aborted
+                            return Ok(UpdateStatus::Aborted);
+                        }
+                        return Ok(UpdateStatus::Done);
+                    }
+                    // if a recoverable error happened, we try-again
+                    WorkerEvent::WorkflowFinished(WorkflowStatus::Aborted(_)) => {
+                        warn!(time = ?now.elapsed(), "workflow terminated with errors, re-trying in {retry_interval:#?}");
+
+                        tokio::select! {
+                            _ = interrupt.wait() => {
+                                info!(time = ?now.elapsed(), "interrupted by new target");
+                                return Ok(UpdateStatus::Interrupted)
+                            },
+                            _ = tokio::time::sleep(retry_interval) => {},
+                        }
+
+                        // A failed task reports no state back, but it may have
+                        // changed the engine before failing.
+                        *current_state = state_reader.read().await?;
+
+                        // break-the inner loop after the back-off
+                        break;
+                    }
+                }
+            }
         }
     }
     Ok(UpdateStatus::Interrupted)
@@ -372,6 +388,10 @@ pub async fn start_seek(
         registry_auth_client,
         host_runtime_dir,
     } = runtime;
+
+    let planning_log = PlanningLog::open(&runtime_dir())
+        .await
+        .map_err(SeekError::PlanningLogInit)?;
 
     let state_reader = StateReader {
         docker: docker.clone(),
@@ -498,6 +518,7 @@ pub async fn start_seek(
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
                     let state_reader = &state_reader;
+                    let planning_log = &planning_log;
                     let worker = worker
                         .clone()
                         .resource(ForceAcquireLocks::from(update_req.opts.force));
@@ -547,6 +568,7 @@ pub async fn start_seek(
                                 state_tx,
                                 retry_interval,
                                 state_reader,
+                                planning_log,
                             )
                             .await?;
 
