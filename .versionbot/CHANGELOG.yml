@@ -1,4 +1,19 @@
 - commits:
+    - subject: Use patched ca-certificates to remove eMudhra intermediate CAs
+      hash: 021a0ca2224147afe76db78606d7c867cee246ed
+      body: |
+        Helios uses the system CA bundle which on alpine defaults to the image
+        ca-certificates. This installs a patched version of CA certificates that
+        removes the eMudhra CAs.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.5
+  title: ""
+  date: 2026-10-21T15:57:47.124Z
+- commits:
     - subject: Remove config from oci and state image models
       hash: 27708434285d555b47659cb1730088049dfc48a3
       body: |
