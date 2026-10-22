@@ -19,7 +19,7 @@ fn it_finds_a_workflow_for_migrating_networks() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -94,7 +94,7 @@ fn it_finds_a_workflow_for_migrating_networks_with_tagged_image() {
                             },
                             "networks": {
                                 "my-network": {
-                                    "oci_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-network_my-app-uuid",
                                     "config": {
                                         "driver": "bridge",
                                         "enable_ipv6": false,
@@ -476,7 +476,7 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_volume_and_network()
                             },
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -600,7 +600,7 @@ fn it_finds_a_workflow_for_migrating_networks_with_linked_services() {
                             },
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -702,7 +702,7 @@ fn it_should_not_migrate_a_service_that_links_to_a_changing_network() {
                             },
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -791,7 +791,7 @@ fn it_finds_a_workflow_for_migrating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -890,7 +890,7 @@ fn it_finds_a_workflow_for_migrating_services_networks_and_volumes() {
                             },
                             "networks": {
                                 "my-net": {
-                                    "oci_name": "my-app-uuid_my-net",
+                                    "oci_name": "my-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": {
                                             "foo": "bar"
@@ -1008,13 +1008,13 @@ fn it_finds_a_workflow_for_migrating_and_recreating_networks_and_volumes() {
                             "services": {},
                             "networks": {
                                 "same-net": {
-                                    "oci_name": "my-app-uuid_same-net",
+                                    "oci_name": "same-net_my-app-uuid",
                                     "config": {
                                         "driver_opts": { "foo": "bar" },
                                     },
                                 },
                                 "changed-net": {
-                                    "oci_name": "my-app-uuid_changed-net",
+                                    "oci_name": "changed-net_my-app-uuid",
                                     "config": {
                                         "enable_ipv6": false,
                                     },
