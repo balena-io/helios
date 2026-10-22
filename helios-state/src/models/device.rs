@@ -123,7 +123,7 @@ impl DeviceTarget {
                         target: "/tmp/balena".to_string(),
                         source: bind_source.clone(),
                         read_only: false,
-                        propagation: BindPropagation::Private,
+                        propagation: BindPropagation::Rprivate,
                         create_host_path: true,
                     });
 
