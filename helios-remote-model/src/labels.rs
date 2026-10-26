@@ -14,6 +14,12 @@ impl Deref for Labels {
     }
 }
 
+impl Labels {
+    pub(crate) fn remove(&mut self, key: &str) -> Option<String> {
+        self.0.remove(key)
+    }
+}
+
 impl From<Labels> for HashMap<String, String> {
     fn from(value: Labels) -> Self {
         value.0
