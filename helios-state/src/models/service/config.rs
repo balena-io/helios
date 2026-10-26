@@ -39,7 +39,7 @@ const ENV_SERVICE_NAME: &str = "BALENA_SERVICE_NAME";
 /// - the target aliases of each network (`networks.<id>.aliases`). Helios appends the service
 ///   name to the target aliases at create time and the engine appends the container id, so
 ///   neither can be told apart from what the composition asked for.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 struct ConfigMap(json::Map<String, json::Value>);
 
@@ -201,17 +201,22 @@ impl From<oci::ContainerConfig> for ServiceConfig {
         let maybe_app_uuid = config.labels.remove(LABEL_APP_UUID);
 
         // Read the map of the composition this container was created from
-        let config_map: ConfigMap = config
+        let config_map: Option<ConfigMap> = config
             .labels
             .remove(LABEL_CONFIG_MAP)
-            .and_then(|s| json::from_str(&s).ok())
-            .unwrap_or_default();
+            .and_then(|s| json::from_str(&s).ok());
 
         // Drop everything the composition did not define. The engine fills in
         // defaults for unset config fields, ulimits and annotations, and the
         // image contributes labels, environment and healthcheck fields.
         // This step also restores lossy values, e.g. network aliases and `service:<name>` modes.
-        let mut config = config_map.restore(config);
+        //
+        // Without a readable map there is no way to tell the composition values apart,
+        // so the config is kept as reported by the engine.
+        let mut config = match config_map {
+            Some(config_map) => config_map.restore(config),
+            None => config,
+        };
 
         // A healthcheck left with no fields means the composition set
         // `healthcheck: {}`, which defers to the image's HEALTHCHECK
@@ -886,6 +891,38 @@ mod tests {
         assert_eq!(svc.stop_signal, None);
         assert_eq!(svc.user, None);
         assert_eq!(svc.working_dir, None);
+    }
+
+    #[test]
+    fn keeps_the_inspected_config_when_the_config_map_is_unreadable() {
+        let inspected = |config_map: Option<&str>| {
+            let mut labels =
+                HashMap::from([(LABEL_APP_UUID.to_string(), "test-app-uuid".to_string())]);
+            if let Some(config_map) = config_map {
+                labels.insert(LABEL_CONFIG_MAP.to_string(), config_map.to_string());
+            }
+            oci::ContainerConfig {
+                command: Some(vec!["/bin/sh".to_string()]),
+                networks: [(
+                    "default_test-app-uuid".to_string(),
+                    oci::NetworkSettings::default(),
+                )]
+                .into_iter()
+                .collect(),
+                labels,
+                ..Default::default()
+            }
+        };
+
+        for config_map in [None, Some("not json")] {
+            let svc = ServiceConfig::from(inspected(config_map));
+            assert_eq!(svc.command, Some(vec!["/bin/sh".to_string()]));
+            assert_eq!(
+                svc.networks.keys().collect::<Vec<_>>(),
+                vec!["default"],
+                "network names are still de-namespaced"
+            );
+        }
     }
 
     #[test]

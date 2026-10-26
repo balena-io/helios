@@ -10,7 +10,7 @@ use tokio::sync::{
     watch::{Receiver, Sender},
 };
 use tokio_stream::StreamExt;
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::common_types::Uuid;
 use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
@@ -244,15 +244,15 @@ async fn seek_target(
         let worker = worker.clone().initial_state(current_state.clone())?;
 
         // Report the list of pending changes to the logs
-        if tracing::enabled!(tracing::Level::INFO) {
+        if tracing::enabled!(tracing::Level::DEBUG) {
             let changes = worker.distance(target)?;
             if !changes.is_empty() {
-                info!("searching workflow for pending state changes:");
+                debug!("pending state changes:");
                 for change in changes {
-                    info!("- {}", logs::mask_sensitive_data(change));
+                    debug!("- {}", logs::mask_sensitive_data(change));
                 }
             } else {
-                info!("no pending state changes");
+                debug!("no pending state changes")
             }
         }
 
@@ -278,10 +278,10 @@ async fn seek_target(
                 return Ok(UpdateStatus::Done);
             } else {
                 info!(time = ?now.elapsed(), "workflow found");
-                if tracing::enabled!(tracing::Level::INFO) {
-                    info!("will execute the following tasks:");
+                if tracing::enabled!(tracing::Level::DEBUG) {
+                    debug!("will execute the following tasks:");
                     for line in workflow.to_string().lines() {
-                        info!("{line}");
+                        debug!("{line}");
                     }
                 }
 

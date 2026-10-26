@@ -367,7 +367,7 @@ fn it_finds_a_workflow_to_remove_an_app() {
                             },
                             "networks": {
                                 "my-network": {
-                                    "oci_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-network_my-app-uuid",
                                     "config": {
                                         "driver": "bridge",
                                         "driver_opts": {},

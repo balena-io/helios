@@ -179,7 +179,7 @@ fn it_finds_a_workflow_for_updating_networks() {
                             },
                             "networks": {
                                 "my-network": {
-                                    "oci_name": "my-app-uuid_my-network",
+                                    "oci_name": "my-network_my-app-uuid",
                                     "config": {
                                         "driver": "bridge",
                                         "enable_ipv6": false,
@@ -288,5 +288,139 @@ fn it_finds_a_workflow_to_create_multiple_networks_and_finalizes_release_after_n
                 "setup network 'net-b' for app 'my-app-uuid'",
             )
             + seq!("finish release 'my-release-uuid' for app with uuid 'my-app-uuid'",),
+    );
+}
+
+#[test]
+fn it_uninstalls_services_using_a_legacy_network_before_removing_it() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "ubuntu:latest",
+                                    "started": true,
+                                    "oci": running_container("my-release-uuid_my-service"),
+                                    "config": {
+                                        // legacy containers reference the network
+                                        // by its engine name
+                                        "networks": {
+                                            "my-app-uuid_my-network": {}
+                                        }
+                                    },
+                                },
+                            },
+                            "networks": {
+                                "my-network": {
+                                    "oci_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+            "images": {
+                "ubuntu:latest" : {
+                    "oci_id": "abcde",
+                    "download_progress": 100,
+                }
+            }
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {},
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "take locks for app with uuid 'my-app-uuid'",
+            "stop service 'my-service' for release 'my-release-uuid'",
+            "uninstall service 'my-service' for release 'my-release-uuid'",
+            "release locks for app with uuid 'my-app-uuid'",
+            "remove network 'my-network' for app 'my-app-uuid'",
+        ),
+    );
+}
+
+#[test]
+fn it_removes_a_legacy_network_instead_of_migrating_it() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "old-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-network": {
+                                    // legacy networks are namespaced by prefix
+                                    "oci_name": "my-app-uuid_my-network",
+                                    "config": {
+                                        "driver": "bridge",
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "uuid": "my-device-uuid",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "releases": {
+                        "new-release": {
+                            "installed": true,
+                            "services": {},
+                            "networks": {
+                                "my-network": {
+                                    "config": {
+                                        "driver": "bridge",
+                                    },
+                                },
+                            },
+                        }
+                    }
+                }
+            },
+        }),
+        // the new network is created under the app namespace, so the legacy one
+        // must be removed from the engine rather than left for adoption
+        par!(
+            "initialize release 'new-release' for app with uuid 'my-app-uuid'",
+            "remove network 'my-network' for app 'my-app-uuid'",
+        ) + par!(
+            "remove release 'old-release' for app with uuid 'my-app-uuid'",
+            "setup network 'my-network' for app 'my-app-uuid'",
+        ) + seq!("finish release 'new-release' for app with uuid 'my-app-uuid'"),
     );
 }
