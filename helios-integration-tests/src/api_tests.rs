@@ -385,6 +385,23 @@ async fn test_set_app_target_install_images() {
                                 "target": "/host/proc"
                             },
                             {
+                                // The source does not exist on a fresh engine host,
+                                // so the engine must create it for service-two to
+                                // start (checked by the port read below).
+                                "type": "bind",
+                                "source": "/tmp/helios-test/created",
+                                "target": "/created",
+                                "bind": { "create_host_path": true }
+                            },
+                            {
+                                // Must go through `HostConfig.Mounts` instead
+                                "type": "bind",
+                                "source": "/sys",
+                                "target": "/host/sys",
+                                "read_only": true,
+                                "bind": { "create_host_path": false }
+                            },
+                            {
                                 "type": "tmpfs",
                                 "target": "/run/tmp",
                                 "tmpfs": { "size": 65536, "mode": 448 }
@@ -676,8 +693,45 @@ async fn test_set_app_target_install_images() {
     assert_eq!(svc_two_machine_id.source.as_deref(), Some("/proc"));
     assert_eq!(svc_two_machine_id.rw, Some(true));
 
+    let svc_two_created = container_mount(&svc_two_container, "/created");
+    assert_eq!(svc_two_created.typ.as_ref().unwrap(), "bind");
+    assert_eq!(
+        svc_two_created.source.as_deref(),
+        Some("/tmp/helios-test/created")
+    );
+
+    let svc_two_sys = container_mount(&svc_two_container, "/host/sys");
+    assert_eq!(svc_two_sys.typ.as_ref().unwrap(), "bind");
+    assert_eq!(svc_two_sys.source.as_deref(), Some("/sys"));
+    assert_eq!(svc_two_sys.rw, Some(false));
+
     let svc_two_tmp = container_mount(&svc_two_container, "/run/tmp");
     assert_eq!(svc_two_tmp.typ.as_ref().unwrap(), "tmpfs");
+
+    // Binds that create their host path are sent as `HostConfig.Binds` specs,
+    // which create a missing source on every engine API version. Binds with
+    // `create_host_path: false` go through `HostConfig.Mounts`.
+    let svc_two_binds = svc_two_container
+        .host_config
+        .as_ref()
+        .and_then(|hc| hc.binds.as_ref())
+        .expect("host_config.binds not set");
+    assert!(
+        svc_two_binds
+            .iter()
+            .any(|b| b == "/tmp/helios-test/created:/created:rprivate"),
+        "expected `/tmp/helios-test/created:/created:rprivate`; got {svc_two_binds:?}"
+    );
+    assert!(
+        svc_two_binds
+            .iter()
+            .any(|b| b == "/proc:/host/proc:rprivate"),
+        "expected `/proc:/host/proc:rprivate`; got {svc_two_binds:?}"
+    );
+    assert!(
+        !svc_two_binds.iter().any(|b| b.starts_with("/sys:")),
+        "unexpected `/sys` bind spec; got {svc_two_binds:?}"
+    );
 
     // The host-level tmpfs options that were sent to the engine should round-trip
     // through the `HostConfig.Mounts` spec.
@@ -696,6 +750,19 @@ async fn test_set_app_target_install_images() {
         .expect("tmpfs options missing");
     assert_eq!(tmpfs_opts.size_bytes, Some(65536));
     assert_eq!(tmpfs_opts.mode, Some(448));
+
+    let mount_targets: Vec<&str> = svc_two_host_mounts
+        .iter()
+        .filter_map(|m| m.target.as_deref())
+        .collect();
+    assert!(
+        mount_targets.contains(&"/host/sys"),
+        "expected `/host/sys` in host_config.mounts; got {mount_targets:?}"
+    );
+    assert!(
+        !mount_targets.contains(&"/created"),
+        "unexpected `/created` in host_config.mounts; got {mount_targets:?}"
+    );
 
     // Teardown: remove app and confirm images are cleaned up
     delete_app_and_wait(&client, TEST_APP_UUID).await;
