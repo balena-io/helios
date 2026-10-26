@@ -188,7 +188,11 @@ impl From<RemoteVolume> for VolumeConfig {
 
 impl From<RemoteVolume> for VolumeTarget {
     fn from(vol: RemoteVolume) -> Self {
-        VolumeTarget::Internal(vol.into())
+        if vol.external {
+            VolumeTarget::External
+        } else {
+            VolumeTarget::Internal(vol.into())
+        }
     }
 }
 
@@ -274,6 +278,15 @@ mod tests {
             config.labels.get("com.foo.bar"),
             Some(&"app-label".to_string())
         );
+    }
+
+    #[test]
+    fn test_conversion_of_external_volume() {
+        let remote = remote_model::Volume {
+            external: true,
+            ..Default::default()
+        };
+        assert_eq!(VolumeTarget::from(remote), VolumeTarget::External);
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! Mounts requested through `io.balena.features.*` service labels
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use crate::service::{BindMount, Mount, Service};
+use crate::service::{BindMount, Mount, Service, VolumeMount};
+use crate::volume::Volume;
 
 /// A host path bind mounted by a feature label
 struct FeatureBind {
@@ -88,6 +90,11 @@ const FEATURE_BINDS: &[(&str, &[FeatureBind])] = &[
     ),
 ];
 
+const EXTRA_FIRMWARE_LABEL: &str = "io.balena.features.extra-firmware";
+
+/// Name of the external volume mounted by `io.balena.features.extra-firmware`
+const EXTRA_FIRMWARE_VOLUME: &str = "extra-firmware";
+
 /// Remove the feature `label` from the service and return whether the feature is enabled
 ///
 /// A feature is enabled if its label is set to `1` or `true`. Top level service labels take
@@ -132,10 +139,15 @@ fn add_mount(svc_name: &str, svc: &mut Service, label: &str, mount: Mount) -> Re
 
 /// Add the mounts requested by feature labels to the service
 ///
-/// Feature labels are always removed from the service. A feature mount whose target is
-/// already used by another mount of the service is rejected as the definition would be
-/// ambiguous.
-pub(crate) fn add_feature_mounts(svc_name: &str, svc: &mut Service) -> Result<(), String> {
+/// Feature labels are always removed from the service. Volumes requested by a feature are
+/// added to the release `volumes` as external. A feature mount whose target is already used
+/// by another mount of the service, or a feature volume with the name of a release volume,
+/// is rejected as the definition would be ambiguous.
+pub(crate) fn add_feature_mounts(
+    svc_name: &str,
+    svc: &mut Service,
+    volumes: &mut HashMap<String, Volume>,
+) -> Result<(), String> {
     for (label, binds) in FEATURE_BINDS {
         if !take_feature(svc, label) {
             continue;
@@ -151,6 +163,34 @@ pub(crate) fn add_feature_mounts(svc_name: &str, svc: &mut Service) -> Result<()
             add_mount(svc_name, svc, label, mount)?;
         }
     }
+
+    if take_feature(svc, EXTRA_FIRMWARE_LABEL) {
+        // the volume is already external if added by another service using the feature
+        if volumes
+            .get(EXTRA_FIRMWARE_VOLUME)
+            .is_some_and(|vol| !vol.external)
+        {
+            return Err(format!(
+                "service '{svc_name}' uses feature {EXTRA_FIRMWARE_LABEL}, which conflicts with release volume {EXTRA_FIRMWARE_VOLUME}"
+            ));
+        }
+        volumes.insert(
+            EXTRA_FIRMWARE_VOLUME.to_string(),
+            Volume {
+                external: true,
+                ..Default::default()
+            },
+        );
+        let mount = Mount::Volume(VolumeMount {
+            source: EXTRA_FIRMWARE_VOLUME.to_string(),
+            target: "/extra-firmware".to_string(),
+            read_only: false,
+            nocopy: false,
+            subpath: None,
+        });
+        add_mount(svc_name, svc, EXTRA_FIRMWARE_LABEL, mount)?;
+    }
+
     Ok(())
 }
 
@@ -355,6 +395,107 @@ mod tests {
         .unwrap();
         assert_eq!(mounts(&release).len(), 2);
         assert!(mounts(&release).contains(&bind_mount("/sys", "/sys", false, false)));
+    }
+
+    fn extra_firmware_mount() -> Mount {
+        Mount::Volume(VolumeMount {
+            source: "extra-firmware".to_string(),
+            target: "/extra-firmware".to_string(),
+            read_only: false,
+            nocopy: false,
+            subpath: None,
+        })
+    }
+
+    #[test]
+    fn extra_firmware_label_mounts_external_volume() {
+        let release = release_with(
+            json!({}),
+            json!({"io.balena.features.extra-firmware": "1"}),
+            json!([]),
+        )
+        .unwrap();
+        assert_eq!(mounts(&release), [extra_firmware_mount()]);
+        assert!(release.volumes["extra-firmware"].external);
+        assert!(!release.volumes["my-vol"].external);
+        assert!(!has_label(&release, "io.balena.features.extra-firmware"));
+    }
+
+    #[test]
+    fn extra_firmware_volume_is_shared_by_services_using_the_feature() {
+        let release: Release = serde_json::from_value(json!({
+            "services": {
+                "one": {
+                    "id": 1,
+                    "image": "alpine:latest",
+                    "composition": {"labels": {"io.balena.features.extra-firmware": "1"}}
+                },
+                "two": {
+                    "id": 2,
+                    "image": "alpine:latest",
+                    "composition": {"labels": {"io.balena.features.extra-firmware": "true"}}
+                }
+            }
+        }))
+        .unwrap();
+        for svc in ["one", "two"] {
+            assert_eq!(
+                release.services[svc].composition.volumes.as_slice(),
+                [extra_firmware_mount()],
+                "mounts for {svc}"
+            );
+        }
+        assert_eq!(release.volumes.len(), 1);
+        assert!(release.volumes["extra-firmware"].external);
+    }
+
+    #[test]
+    fn extra_firmware_volume_is_not_added_without_label() {
+        let release = release_with(
+            json!({}),
+            json!({"io.balena.features.extra-firmware": "0"}),
+            json!([]),
+        )
+        .unwrap();
+        assert!(mounts(&release).is_empty());
+        assert!(!release.volumes.contains_key("extra-firmware"));
+    }
+
+    #[test]
+    fn rejects_extra_firmware_label_with_extra_firmware_release_volume() {
+        let err = serde_json::from_value::<Release>(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "alpine:latest",
+                    "composition": {"labels": {"io.balena.features.extra-firmware": "1"}}
+                }
+            },
+            "volumes": {"extra-firmware": {}}
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "service 'my-service' uses feature io.balena.features.extra-firmware, which conflicts with release volume extra-firmware"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_firmware_label_with_a_declared_mount_target() {
+        let err = release_with(
+            json!({}),
+            json!({"io.balena.features.extra-firmware": "1"}),
+            json!(["my-vol:/extra-firmware"]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "service 'my-service' declares a mount on /extra-firmware, which conflicts with feature io.balena.features.extra-firmware"
+            ),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
