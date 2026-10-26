@@ -1,4 +1,41 @@
 - commits:
+    - subject: Emit planning details a `debug` level logs
+      hash: fcf1ea67757db8cdde8a8d626f98c4b909516d71
+      body: |
+        The information can be very verbose, particularly when there are a lot
+        of changes (e.g. when migrating from a legacy container). Downgrading to
+        debug makes it easier to filter these logs.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read full container config if no config map is set
+      hash: d0c15d5c1dcbc8e776d93a3903261cdd74cf59c4
+      body: |
+        We need to read existing information from legacy container so we can
+        stop them in the right order when they reference networks.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for legacy network format
+      hash: cd755cd381c58b35b46df6028acace628a965125
+      body: >
+        Legacy networks have different metadata. This ensures that helios can
+        recognize these networks as part of the correct app when reading the
+        state in order to migrate the networks and their dependent containers to
+        the new format.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.8
+  title: ""
+  date: 2026-10-26T23:00:54.018Z
+- commits:
     - subject: Test bind host path creation and propagation in integration tests
       hash: 08aa9e49e5cf7f78f89f67a67eec3fd405d58dff
       body: |
