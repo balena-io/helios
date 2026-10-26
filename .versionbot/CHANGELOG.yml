@@ -1,4 +1,55 @@
 - commits:
+    - subject: Test bind host path creation and propagation in integration tests
+      hash: 08aa9e49e5cf7f78f89f67a67eec3fd405d58dff
+      body: |
+        Check that binds with `create_host_path` are sent as `HostConfig.Binds`
+        specs with `rprivate` propagation, and binds without it go through
+        `HostConfig.Mounts`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Reject a `:` on long volume paths from the target state
+      hash: bc431e170c57f9211d457c223e7b3ff201290f4c
+      body: |
+        This prevents these paths from being interpreted as <path>:<opts> when
+        converting them to binds.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Default bind propagation to rprivate
+      hash: 22b0a4e0921545be59b38a2d4f9dec31d2c67cd4
+      body: |
+        This changes the default bind propagation from `private` to `rprivate`
+        to match the Moby and Podman defaults.
+
+        The default propagation is always set when referencing a volume to avoid
+        a current/target mismatch if the engine default changes.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Create bind host paths through HostConfig.Binds
+      hash: dc6e7c7a9bb28dec90a63f3476916279896bb044
+      body: |
+        `BindOptions.CreateMountpoint` requires Engine API v1.42 and is dropped
+        by older engines such as balenaEngine, making container creation fail
+        when the bind source does not exist. Binds with `create_host_path` are
+        now sent as `HostConfig.Binds` specs, which the engine creates on every
+        API version.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.7
+  title: ""
+  date: 2026-10-26T20:07:46.398Z
+- commits:
     - subject: Re-create services when depends_on changes
       hash: d5a1cfb1d1567ab15ae7d1a3d8f4e4967d8bc244
       body: |
