@@ -1,5 +1,7 @@
 use super::helpers::*;
 
+use crate::models::{Device, DeviceTarget};
+
 use mahler::dag::{Dag, par, seq};
 use serde_json::json;
 
@@ -2615,5 +2617,101 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
             "remove metadata for host OS release 'old-release'",
             "reboot to apply overlay changes",
         ),
+    );
+}
+
+#[test]
+fn it_keeps_the_running_host_release_when_the_target_needs_an_unregistered_runtime() {
+    // The rejected release is surfaced as a rejected app, which is all there
+    // is to plan: the running release stays untouched.
+    init_tracing();
+    let current: Device = serde_json::from_value(json!({
+        "name": "device-name",
+        "uuid": "my-device-uuid",
+        "host": {
+            "meta": {
+                "name": "balenaOS",
+                "version": "5.7.3",
+                "build": "abcd1234",
+            },
+            "releases": {
+                "current-release": {
+                    "app": "hostapp-uuid",
+                    "hostapp": {
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a000000000000000000000000000000000000000000000000000000000000000",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "abcd1234",
+                        "install_attempts": 0,
+                    },
+                    "status": "running",
+                }
+            }
+        },
+    }))
+    .unwrap();
+    let mut target: DeviceTarget = serde_json::from_value(json!({
+        "name": "device-name",
+        "host": {
+            "releases": {
+                "target-release": {
+                    "app": "hostapp-uuid",
+                    "hostapp": {
+                        "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                        "updater": "bh.cr/balena_os/balenahup",
+                        "build": "cde2354",
+                    },
+                    "status": "running",
+                    "overlays": {
+                        "kernel-modules": {
+                            "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                            "status": "active",
+                            "runtime": "extension",
+                        }
+                    }
+                }
+            }
+        },
+    }))
+    .unwrap();
+
+    let reasons = target.reject_unsupported_releases(&current, &["runc".to_string()]);
+    assert_eq!(reasons.len(), 1);
+
+    assert_workflow(
+        serde_json::to_value(current).unwrap(),
+        serde_json::to_value(target).unwrap(),
+        seq!("initialize app with uuid 'hostapp-uuid'"),
+    );
+}
+
+#[cfg(not(feature = "userapps"))]
+#[test]
+fn it_ignores_app_locking_without_userapps() {
+    init_tracing();
+    let workflow = assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+        }),
+        json!({
+            "name": "device-name",
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1,
+                    "name": "my-app",
+                    "locked": true,
+                    "releases": {}
+                }
+            }
+        }),
+        seq!("initialize app with uuid 'my-app-uuid'"),
+    );
+    assert!(
+        workflow
+            .exceptions()
+            .iter()
+            .any(|ignored| ignored.operation.path().as_str() == "/apps/my-app-uuid/locked"),
+        "expected locking to be skipped, got: {:?}",
+        workflow.exceptions()
     );
 }

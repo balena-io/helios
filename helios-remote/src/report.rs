@@ -710,6 +710,69 @@ mod tests {
         assert!(rejected.services.is_empty());
     }
 
+    #[cfg(feature = "balenahup")]
+    #[test]
+    fn it_reports_rejected_host_release_alongside_current() {
+        // A host release rejected by the device is an app entry under the
+        // host app uuid, next to the host release still running.
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "images": {},
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "abcd1234",
+                },
+                "releases": {
+                    "current-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a000000000000000000000000000000000000000000000000000000000000000",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                    }
+                }
+            },
+            "apps": {
+                "hostapp-uuid": {
+                    "id": 0,
+                    "rejected_release": "target-release",
+                    "releases": {}
+                }
+            }
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("hostapp-uuid")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let app = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .and_then(|apps| apps.get(&Uuid::from("hostapp-uuid")))
+            .expect("host app should be in the report");
+
+        assert_eq!(app.release_uuid, Some(Uuid::from("current-release")));
+        let current = app
+            .releases
+            .get(&Uuid::from("current-release"))
+            .expect("current host release entry should be preserved");
+        assert_eq!(current.update_status, UpdateStatus::Done);
+        let rejected = app
+            .releases
+            .get(&Uuid::from("target-release"))
+            .expect("rejected host release entry should be emitted");
+        assert_eq!(rejected.update_status, UpdateStatus::Rejected);
+    }
+
     #[test]
     fn it_reports_never_installed_rejected_app() {
         // A rejected app with no current release: emit an app entry with

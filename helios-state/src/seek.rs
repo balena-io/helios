@@ -521,9 +521,9 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            let refused =
-                                device_target.test_runtime_support(current_state, runtimes);
-                            for reason in &refused {
+                            for reason in
+                                device_target.reject_unsupported_releases(current_state, runtimes)
+                            {
                                 error!("{reason}");
                             }
 
@@ -540,11 +540,6 @@ pub async fn start_seek(
                                 state_reader,
                             )
                             .await?;
-
-                            // Refusing part of the target is not success
-                            if !refused.is_empty() && matches!(update_status, UpdateStatus::Done) {
-                                update_status = UpdateStatus::Aborted;
-                            }
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

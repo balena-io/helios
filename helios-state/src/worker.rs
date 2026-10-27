@@ -5,9 +5,9 @@ use crate::runtime;
 use crate::util::locking::{ForceAcquireLocks, LockSet};
 
 use super::models::Device;
-use super::tasks::with_device_tasks;
 #[cfg(feature = "balenahup")]
 use super::tasks::with_hostapp_tasks;
+use super::tasks::{with_app_tasks, with_device_tasks};
 #[cfg(feature = "userapps")]
 use super::tasks::{with_image_tasks, with_userapp_tasks};
 
@@ -31,13 +31,21 @@ fn worker() -> Worker<Device, Uninitialized> {
     }
     #[cfg(not(feature = "userapps"))]
     {
-        // ignore user apps when planning
+        // ignore app releases and locking when planning, only the app entry
+        // jobs are available
         use mahler::exception;
-        worker = worker.exception(
-            "/apps",
-            exception::update(|| true).with_description(|| "app update support is disabled"),
-        );
+        worker = worker
+            .exception(
+                "/apps/{app_uuid}/releases",
+                exception::update(|| true).with_description(|| "app update support is disabled"),
+            )
+            .exception(
+                "/apps/{app_uuid}/locked",
+                exception::update(|| true).with_description(|| "app update support is disabled"),
+            );
     }
+
+    worker = with_app_tasks(worker);
 
     worker
 }

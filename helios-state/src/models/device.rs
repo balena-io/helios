@@ -11,8 +11,12 @@ use super::image::Image;
 use super::release::ReleaseTarget;
 use super::volume::{LocalVolume, VolumeTarget};
 
+#[cfg(any(feature = "userapps", feature = "balenahup"))]
+use super::app::AppTarget;
 #[cfg(feature = "balenahup")]
 use crate::balenahup::Host;
+#[cfg(any(feature = "userapps", feature = "balenahup"))]
+use crate::remote_model::rejected_release_message;
 
 /// The current state of a device that will be stored
 /// by the worker
@@ -70,22 +74,57 @@ impl Device {
 }
 
 impl DeviceTarget {
-    /// Refuse the parts of the target this device cannot run, and say why.
+    /// Reject the target releases this device cannot meet because of unmet requirements
     ///
-    /// Runs before planning: a target with no runtime for it is bad input.
-    /// Contract checks belong here once service targets carry a runtime.
-    pub fn test_runtime_support(
+    /// For now this function only validates OCI runtime support but in the future it will check for
+    /// different types of requirements (including those defined in contracts)
+    ///
+    /// Runs before planning: A rejected release is replaced by an app with the release set as
+    /// `rejected_release`, the same as a release that failed to parse.
+    pub fn reject_unsupported_releases(
         &mut self,
         device: &Device,
         runtimes: &[oci::Runtime],
     ) -> Vec<String> {
+        #[cfg_attr(
+            not(any(feature = "userapps", feature = "balenahup")),
+            allow(unused_mut)
+        )]
+        let mut reasons = Vec::new();
+
+        #[cfg(feature = "userapps")]
+        for (app_uuid, app) in self.apps.iter_mut() {
+            let unsupported = app.releases.iter().find_map(|(rel_uuid, rel)| {
+                Some((rel_uuid.clone(), unsupported_runtime(rel, runtimes)?))
+            });
+
+            if let Some((rel_uuid, reason)) = unsupported {
+                reasons.push(rejected_release_message(app_uuid, &rel_uuid, &reason));
+                *app = AppTarget::rejected(app.id, app.name.take(), rel_uuid);
+            }
+        }
+
         #[cfg(feature = "balenahup")]
         if let (Some(host_tgt), Some(_)) = (self.host.as_mut(), device.host.as_ref()) {
-            return crate::balenahup::reject_unsupported_releases(host_tgt, runtimes);
+            for rejected in crate::balenahup::reject_unsupported_releases(host_tgt, runtimes) {
+                reasons.push(rejected_release_message(
+                    &rejected.app,
+                    &rejected.release,
+                    &rejected.reason,
+                ));
+                // The host target does not carry the app id and name. Neither is
+                // read for a host app, the same as for apps restored from the
+                // local store with an unknown id
+                self.apps
+                    .insert(rejected.app, AppTarget::rejected(0, None, rejected.release));
+            }
         }
         #[cfg(not(feature = "balenahup"))]
-        let _ = (device, runtimes);
-        Vec::new()
+        let _ = device;
+        #[cfg(not(any(feature = "userapps", feature = "balenahup")))]
+        let _ = runtimes;
+
+        reasons
     }
 
     /// Adds system runtime related context  to the target state
@@ -153,6 +192,20 @@ impl DeviceTarget {
             }
         }
     }
+}
+
+/// Describe the first service of the release asking for a runtime missing from
+/// `runtimes`, if any
+#[cfg(feature = "userapps")]
+fn unsupported_runtime(rel: &ReleaseTarget, runtimes: &[oci::Runtime]) -> Option<String> {
+    rel.services.iter().find_map(|(svc_name, svc)| {
+        let runtime = svc.config.runtime.as_ref()?;
+        (!runtimes.contains(runtime)).then(|| {
+            format!(
+                "service '{svc_name}' requires runtime '{runtime}', which is not available on the device"
+            )
+        })
+    })
 }
 
 /// Reuse the volumes left behind by the legacy supervisor
@@ -239,8 +292,8 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
     fn from(tgt: RemoteDeviceTarget) -> Self {
         let RemoteDeviceTarget { name, apps, .. } = tgt;
 
-        #[cfg(feature = "userapps")]
-        let mut userapps = Map::new();
+        #[cfg(any(feature = "userapps", feature = "balenahup"))]
+        let mut target_apps = Map::new();
         #[cfg(feature = "balenahup")]
         let mut hostapps = Vec::new();
         for (app_uuid, app) in apps {
@@ -255,13 +308,19 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 // Read the userapp info if it exists and the feature is enabled
                 #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
-                    userapps.insert(app_uuid, userapp.into());
+                    target_apps.insert(app_uuid, userapp.into());
                 }
                 #[cfg(not(feature = "userapps"))]
                 RemoteAppTarget::User(_) => {}
+                // Rejected apps are kept with the rejected release set, so the
+                // current release is preserved and the rejection is reported
                 #[cfg(feature = "userapps")]
                 RemoteAppTarget::Rejected(app) if !app.is_host => {
-                    userapps.insert(app_uuid, app.into());
+                    target_apps.insert(app_uuid, app.into());
+                }
+                #[cfg(feature = "balenahup")]
+                RemoteAppTarget::Rejected(app) if app.is_host => {
+                    target_apps.insert(app_uuid, app.into());
                 }
                 _ => {}
             };
@@ -269,9 +328,9 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
 
         Self {
             name: Some(name),
-            #[cfg(feature = "userapps")]
-            apps: userapps,
-            #[cfg(not(feature = "userapps"))]
+            #[cfg(any(feature = "userapps", feature = "balenahup"))]
+            apps: target_apps,
+            #[cfg(not(any(feature = "userapps", feature = "balenahup")))]
             apps: Map::new(),
             // Get only the first hostapp if any
             #[cfg(feature = "balenahup")]
@@ -357,11 +416,12 @@ mod tests {
         assert_eq!(app.rejected_release, Some(Uuid::from("bad-release")));
     }
 
-    #[cfg(all(feature = "userapps", feature = "balenahup"))]
+    #[cfg(feature = "balenahup")]
     #[test]
-    fn rejected_host_app_is_dropped_from_target() {
-        // Rejected host apps are filtered out — the device keeps running
-        // its current host release and there is nothing to report against.
+    fn rejected_host_app_is_included_in_target_with_rejected_release_set() {
+        // A rejected host app leaves no host target, so the device keeps
+        // running its current host release, and is kept as an app with the
+        // rejected release set so the rejection can be reported.
         let remote: crate::remote_model::Device = serde_json::from_value(json!({
             "name": "test-device",
             "apps": {
@@ -387,8 +447,138 @@ mod tests {
         .unwrap();
 
         let target: DeviceTarget = remote.into();
-        assert!(target.apps.is_empty());
         assert!(target.host.is_none());
+        let app = target
+            .apps
+            .get(&Uuid::from("bad-host"))
+            .expect("rejected host app should be in the target");
+        assert_eq!(app.id, 8);
+        assert_eq!(app.name.as_deref(), Some("host"));
+        assert!(app.releases.is_empty());
+        assert_eq!(app.rejected_release, Some(Uuid::from("bad-release")));
+    }
+
+    /// Target of a single app with one release, running `my-service` with the
+    /// given service config.
+    #[cfg(feature = "userapps")]
+    fn target_with_service_config(config: serde_json::Value) -> DeviceTarget {
+        serde_json::from_value(json!({
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1234,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "config": config,
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[cfg(any(feature = "userapps", feature = "balenahup"))]
+    fn runtimes(names: &[&str]) -> Vec<oci::Runtime> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[cfg(feature = "userapps")]
+    #[test]
+    fn a_service_asking_for_an_unregistered_runtime_rejects_its_release() {
+        let mut target = target_with_service_config(json!({"runtime": "nvidia"}));
+        let device = Device::new(Uuid::from("device-uuid"), None);
+
+        let reasons = target.reject_unsupported_releases(&device, &runtimes(&["runc"]));
+
+        assert_eq!(
+            reasons,
+            vec![
+                "invalid target release (my-rele) for app my-app-uuid: service 'my-service' \
+                 requires runtime 'nvidia', which is not available on the device"
+                    .to_string()
+            ]
+        );
+        let app = target.apps.get(&Uuid::from("my-app-uuid")).unwrap();
+        assert_eq!(app.id, 1234);
+        assert_eq!(app.name.as_deref(), Some("my-app"));
+        assert!(app.releases.is_empty());
+        assert_eq!(app.rejected_release, Some(Uuid::from("my-release-uuid")));
+    }
+
+    #[cfg(feature = "userapps")]
+    #[test]
+    fn a_service_asking_for_a_registered_runtime_keeps_its_release() {
+        let mut target = target_with_service_config(json!({"runtime": "runc"}));
+        let device = Device::new(Uuid::from("device-uuid"), None);
+
+        let reasons = target.reject_unsupported_releases(&device, &runtimes(&["runc"]));
+
+        assert!(reasons.is_empty());
+        let app = target.apps.get(&Uuid::from("my-app-uuid")).unwrap();
+        assert_eq!(app.releases.len(), 1);
+        assert_eq!(app.rejected_release, None);
+    }
+
+    #[cfg(feature = "userapps")]
+    #[test]
+    fn a_service_naming_no_runtime_keeps_its_release() {
+        let mut target = target_with_service_config(json!({}));
+        let device = Device::new(Uuid::from("device-uuid"), None);
+
+        let reasons = target.reject_unsupported_releases(&device, &runtimes(&[]));
+
+        assert!(reasons.is_empty());
+        let app = target.apps.get(&Uuid::from("my-app-uuid")).unwrap();
+        assert_eq!(app.releases.len(), 1);
+        assert_eq!(app.rejected_release, None);
+    }
+
+    #[cfg(feature = "balenahup")]
+    #[test]
+    fn a_host_release_asking_for_an_unregistered_runtime_is_rejected_as_an_app() {
+        let mut target: DeviceTarget = serde_json::from_value(json!({
+            "host": {
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let device = Device::new(
+            Uuid::from("device-uuid"),
+            Some(serde_json::from_value(json!({"name": "balenaOS", "version": "5.7.3"})).unwrap()),
+        );
+
+        let reasons = target.reject_unsupported_releases(&device, &runtimes(&["runc"]));
+
+        assert_eq!(reasons.len(), 1);
+        assert!(target.host.as_ref().unwrap().releases.is_empty());
+        let app = target.apps.get(&Uuid::from("hostapp-uuid")).unwrap();
+        assert!(app.releases.is_empty());
+        assert_eq!(app.rejected_release, Some(Uuid::from("target-release")));
     }
 
     /// Target of a single app with one release, mounting `my-vol` from `my-service`.
