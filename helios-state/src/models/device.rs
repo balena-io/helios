@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use mahler::state::{List, Map, State};
 
 use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid};
-use crate::oci::{BindPropagation, Mount};
+use crate::oci::{self, BindPropagation, Mount};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 
 use super::app::App;
@@ -74,13 +74,17 @@ impl DeviceTarget {
     ///
     /// Runs before planning: a target with no runtime for it is bad input.
     /// Contract checks belong here once service targets carry a runtime.
-    pub fn test_runtime_support(&mut self, device: &Device) -> Vec<String> {
+    pub fn test_runtime_support(
+        &mut self,
+        device: &Device,
+        runtimes: &[oci::Runtime],
+    ) -> Vec<String> {
         #[cfg(feature = "balenahup")]
-        if let (Some(host_tgt), Some(host)) = (self.host.as_mut(), device.host.as_ref()) {
-            return crate::balenahup::reject_unsupported_releases(host_tgt, host);
+        if let (Some(host_tgt), Some(_)) = (self.host.as_mut(), device.host.as_ref()) {
+            return crate::balenahup::reject_unsupported_releases(host_tgt, runtimes);
         }
         #[cfg(not(feature = "balenahup"))]
-        let _ = device;
+        let _ = (device, runtimes);
         Vec::new()
     }
 

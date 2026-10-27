@@ -44,6 +44,14 @@ pub struct Runtime {
     pub(crate) resources: Resources,
     /// State reader
     pub(crate) reader: Reader,
+    /// OCI engine context
+    pub(crate) oci: OciContext,
+}
+
+/// Oci engine information
+pub(crate) struct OciContext {
+    /// The list of runtimes supported by the engine
+    pub(crate) runtimes: Vec<oci::Runtime>,
 }
 
 #[derive(Debug, Error)]
@@ -85,7 +93,10 @@ pub async fn prepare(
          }| RegistryAuth::new(api_endpoint, api_key),
     );
 
-    // TODO: read OCI context here too, it should replace Host::engine_runtimes
+    // read OCI context only once
+    let oci = OciContext {
+        runtimes: docker.runtimes().await?,
+    };
 
     // initialize state reader
     let reader = Reader {
@@ -105,6 +116,7 @@ pub async fn prepare(
             local_store,
         },
         reader,
+        oci,
     };
 
     Ok((runtime, initial_state))

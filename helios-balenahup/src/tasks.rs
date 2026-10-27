@@ -391,7 +391,7 @@ fn requested_runtimes(tgt: &HostReleaseTarget) -> Vec<&str> {
 
 /// An overlay the target brings asks for a runtime this engine does not
 /// register, so the release cannot be deployed on this host at all.
-fn overlay_runtime_unavailable(registered: &[String], tgt: &HostReleaseTarget) -> bool {
+fn overlay_runtime_unavailable(registered: &[oci::Runtime], tgt: &HostReleaseTarget) -> bool {
     requested_runtimes(tgt)
         .iter()
         .any(|wanted| !registered.iter().any(|name| name == wanted))
@@ -412,10 +412,10 @@ fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
 ///
 /// The release the device runs is kept: `release_still_accounted_for` declines
 /// to forget one the target no longer names.
-pub fn reject_unsupported_releases(tgt: &mut HostTarget, host: &Host) -> Vec<String> {
+pub fn reject_unsupported_releases(tgt: &mut HostTarget, runtimes: &[oci::Runtime]) -> Vec<String> {
     let mut reasons = Vec::new();
     tgt.releases.retain(|_, rel| {
-        if overlay_runtime_unavailable(&host.engine_runtimes, rel) {
+        if overlay_runtime_unavailable(runtimes, rel) {
             reasons.push(unavailable_runtime_reason(rel));
             return false;
         }
@@ -629,26 +629,13 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
 mod tests {
     use super::*;
 
-    use crate::common_types::{ImageUri, OperatingSystem};
+    use crate::common_types::ImageUri;
     use crate::models::{HostAppTarget, OverlayTarget};
     use mahler::state::Map;
 
-    /// A host whose engine registers the given runtimes.
-    fn host(engine_runtimes: &[&str]) -> Host {
-        let mut host = Host::new(OperatingSystem {
-            name: "balenaOS".to_string(),
-            version: Some("6.5.0".to_string()),
-            build: None,
-        });
-        host.engine_runtimes = engine_runtimes.iter().map(|r| r.to_string()).collect();
-        host
-    }
-
-    /// A device whose engine registers the given runtimes.
-    fn device(engine_runtimes: &[&str]) -> Device {
-        Device {
-            host: Some(host(engine_runtimes)),
-        }
+    /// The runtimes an engine registers.
+    fn runtimes(names: &[&str]) -> Vec<oci::Runtime> {
+        names.iter().map(|r| r.to_string()).collect()
     }
 
     /// A target release carrying one overlay per entry, each asking for the
@@ -681,9 +668,7 @@ mod tests {
     }
 
     fn unavailable(engine: &[&str], overlays: &[(&str, &str)]) -> bool {
-        let d = device(engine);
-        let registered = &d.host.as_ref().unwrap().engine_runtimes;
-        overlay_runtime_unavailable(registered, &target(overlays))
+        overlay_runtime_unavailable(&runtimes(engine), &target(overlays))
     }
 
     #[test]
@@ -724,7 +709,7 @@ mod tests {
     #[test]
     fn a_release_the_engine_can_run_is_kept() {
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        let reasons = reject_unsupported_releases(&mut tgt, &host(&["runc", "extension"]));
+        let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&["runc", "extension"]));
         assert!(reasons.is_empty());
         assert_eq!(tgt.releases.len(), 1);
     }
@@ -733,7 +718,7 @@ mod tests {
     fn a_release_naming_an_unregistered_runtime_is_dropped() {
         // X-04: a profile activated on a pre-extension OS.
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        let reasons = reject_unsupported_releases(&mut tgt, &host(&[]));
+        let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(tgt.releases.is_empty());
         assert_eq!(
             reasons,
@@ -748,7 +733,7 @@ mod tests {
     fn pruning_leaves_the_reboot_request_alone() {
         // The pending_reboot diff schedules a reboot already due.
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        reject_unsupported_releases(&mut tgt, &host(&[]));
+        reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(!tgt.pending_reboot);
     }
 
