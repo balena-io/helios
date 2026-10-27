@@ -68,18 +68,15 @@ async fn get_or_create_app<'a>(
     Ok(apps.get_mut(app_uuid).expect("app was just inserted"))
 }
 
-/// What [`read`] needs to rebuild the device state from the engine and the
-/// store, bundled so callers can re-read without threading the arguments
-/// through.
-#[derive(Clone)]
-pub(crate) struct StateReader {
+/// Resources to read the system state through [`Reader::read`]
+pub(crate) struct Reader {
     pub docker: Docker,
     pub local_store: DocumentStore,
     pub uuid: Uuid,
     pub os: Option<OperatingSystem>,
 }
 
-impl StateReader {
+impl Reader {
     pub(crate) async fn read(&self) -> Result<Device, Error> {
         read(
             &self.docker,
@@ -93,7 +90,7 @@ impl StateReader {
 
 /// Read the state of system
 #[instrument(name = "read_state", level = "trace", skip_all, err)]
-pub async fn read(
+async fn read(
     docker: &Docker,
     local_store: &DocumentStore,
     uuid: Uuid,

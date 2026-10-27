@@ -1,9 +1,7 @@
 use mahler::worker::{Uninitialized, Worker};
 
-use helios_store::DocumentStore;
-
 use crate::common_types::HostRuntimeDir;
-use crate::oci::{Client as Docker, RegistryAuth};
+use crate::runtime;
 use crate::util::locking::{ForceAcquireLocks, LockSet};
 
 use super::models::Device;
@@ -47,21 +45,16 @@ fn worker() -> Worker<Device, Uninitialized> {
 pub type LocalWorker = Worker<Device, Uninitialized>;
 
 /// Create worker with necessary resources
-pub fn create(
-    docker: Docker,
-    local_store: DocumentStore,
-    host_runtime_dir: HostRuntimeDir,
-    registry_auth_client: Option<RegistryAuth>,
-) -> LocalWorker {
+pub fn create(host_runtime_dir: HostRuntimeDir, resources: runtime::Resources) -> LocalWorker {
     // Create the worker and set-up resources
-    let mut worker = worker().resource(docker);
+    let mut worker = worker().resource(resources.docker);
 
-    if let Some(auth_client) = registry_auth_client {
+    if let Some(auth_client) = resources.registry_auth_client {
         worker.use_resource(auth_client);
     }
 
     worker.use_resource(host_runtime_dir);
-    worker.use_resource(local_store);
+    worker.use_resource(resources.local_store);
     worker.use_resource(LockSet::new());
     worker.use_resource(ForceAcquireLocks::from(false));
     worker
