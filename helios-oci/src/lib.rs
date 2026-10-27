@@ -35,6 +35,9 @@ pub use volume::{LocalVolume, Volume, VolumeConfig, VolumeDriver};
 
 use helios_util as util;
 
+/// Convenience alias to describe an OCI runtime
+pub type Runtime = String;
+
 #[derive(Debug, Clone)]
 pub struct Client(Docker);
 
@@ -83,16 +86,14 @@ impl Client {
     }
 
     /// The OCI runtimes the daemon has configured.
-    pub async fn runtimes(&self) -> Result<Runtimes> {
+    pub async fn runtimes(&self) -> Result<Vec<Runtime>> {
         let info = self
             .0
             .info()
             .await
             .map_err(Error::with_context("failed to get daemon info"))?;
 
-        Ok(Runtimes {
-            names: info.runtimes.unwrap_or_default().into_keys().collect(),
-        })
+        Ok(info.runtimes.unwrap_or_default().into_keys().collect())
     }
 
     /// Exposes methods to work with images.
@@ -124,13 +125,6 @@ impl Client {
     pub fn volume(&self) -> Volume<'_, LocalNamespace> {
         Volume::new(self)
     }
-}
-
-/// The OCI runtimes a daemon offers.
-#[derive(Debug, Clone, Default)]
-pub struct Runtimes {
-    /// Every runtime the daemon registers, by name.
-    pub names: Vec<String>,
 }
 
 /// Version information about the connected daemon.

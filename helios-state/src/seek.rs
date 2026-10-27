@@ -367,6 +367,7 @@ pub async fn start_seek(
     let mut update_status = UpdateStatus::default();
 
     let Runtime {
+        oci,
         retry_interval,
         resources,
         host_runtime_dir,
@@ -482,6 +483,7 @@ pub async fn start_seek(
                     let prev_seek_state = prev_seek_state.clone();
                     let legacy_config = legacy_config.clone();
                     let host_runtime_dir = host_runtime_dir.clone();
+                    let runtimes = &oci.runtimes;
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
@@ -519,7 +521,8 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            let refused = device_target.test_runtime_support(current_state);
+                            let refused =
+                                device_target.test_runtime_support(current_state, runtimes);
                             for reason in &refused {
                                 error!("{reason}");
                             }
