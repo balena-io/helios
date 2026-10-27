@@ -26,11 +26,10 @@ use helios_util::types::Uuid;
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::DaemonArgs;
 use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
-use crate::oci::RegistryAuth;
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
-use crate::state::StateConfig;
+use crate::state::HostConfig;
 use crate::util::config::StoredConfig;
 use crate::util::dirs::config_dir;
 
@@ -101,7 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (uuid, remote_config) = maybe_provision(&cli, &config_store).await?;
 
-    let state_config = StateConfig {
+    let host_config = HostConfig {
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
     };
@@ -110,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     start_supervisor(
         uuid,
-        state_config,
+        host_config,
         api_config,
         remote_config,
         legacy_config,
@@ -123,7 +122,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn start_supervisor(
     uuid: Uuid,
-    state_config: StateConfig,
+    host_config: HostConfig,
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
@@ -137,17 +136,18 @@ async fn start_supervisor(
         "using config:"
     );
 
-    // Create a registry auth client using the remote credentials
-    let registry_auth = remote_config.clone().map(
-        |RemoteConfig {
-             api_endpoint,
-             api_key,
-             ..
-         }| RegistryAuth::new(api_endpoint, api_key),
-    );
+    let state_remote_config = remote_config.as_ref().map(|c| state::RemoteConfig {
+        api_endpoint: c.api_endpoint.clone(),
+        api_key: c.api_key.clone(),
+    });
 
-    let (state_runtime, initial_state) =
-        state::prepare(uuid.clone(), state_config, registry_auth).await?;
+    let (state_runtime, initial_state) = state::prepare(
+        uuid.clone(),
+        retry_interval,
+        host_config,
+        state_remote_config,
+    )
+    .await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());
@@ -233,7 +233,6 @@ async fn start_supervisor(
             legacy_config,
             seek_request_rx,
             local_state_tx,
-            retry_interval,
         ) => res.map_err(|err| err.into()),
 
         // Wait for sigterm
