@@ -391,7 +391,7 @@ fn requested_runtimes(tgt: &HostReleaseTarget) -> Vec<&str> {
 
 /// An overlay the target brings asks for a runtime this engine does not
 /// register, so the release cannot be deployed on this host at all.
-fn overlay_runtime_unavailable(registered: &[String], tgt: &HostReleaseTarget) -> bool {
+fn overlay_runtime_unavailable(registered: &[oci::Runtime], tgt: &HostReleaseTarget) -> bool {
     requested_runtimes(tgt)
         .iter()
         .any(|wanted| !registered.iter().any(|name| name == wanted))
@@ -403,25 +403,43 @@ fn overlay_runtime_unavailable(registered: &[String], tgt: &HostReleaseTarget) -
 /// missing one.
 fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
     format!(
-        "host OS engine does not register a runtime the overlays ask for ('{}'), update the OS first",
-        requested_runtimes(tgt).join("', '")
+        "OS update needed. One or more required OCI runtimes are missing: {}",
+        requested_runtimes(tgt).join(", ")
     )
+}
+
+/// A target release refused because this host cannot run it
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnsupportedRelease {
+    /// The host app the release belongs to
+    pub app: Uuid,
+    /// The refused release
+    pub release: Uuid,
+    /// Why the release was refused
+    pub reason: String,
 }
 
 /// Drop the target releases this host cannot run, and say why for each.
 ///
 /// The release the device runs is kept: `release_still_accounted_for` declines
 /// to forget one the target no longer names.
-pub fn reject_unsupported_releases(tgt: &mut HostTarget, host: &Host) -> Vec<String> {
-    let mut reasons = Vec::new();
-    tgt.releases.retain(|_, rel| {
-        if overlay_runtime_unavailable(&host.engine_runtimes, rel) {
-            reasons.push(unavailable_runtime_reason(rel));
+pub fn reject_unsupported_releases(
+    tgt: &mut HostTarget,
+    runtimes: &[oci::Runtime],
+) -> Vec<UnsupportedRelease> {
+    let mut rejected = Vec::new();
+    tgt.releases.retain(|rel_uuid, rel| {
+        if overlay_runtime_unavailable(runtimes, rel) {
+            rejected.push(UnsupportedRelease {
+                app: rel.app.clone(),
+                release: rel_uuid.clone(),
+                reason: unavailable_runtime_reason(rel),
+            });
             return false;
         }
         true
     });
-    reasons
+    rejected
 }
 
 /// True while some overlay the target dropped is still present and the planner
@@ -629,26 +647,13 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
 mod tests {
     use super::*;
 
-    use crate::common_types::{ImageUri, OperatingSystem};
+    use crate::common_types::ImageUri;
     use crate::models::{HostAppTarget, OverlayTarget};
     use mahler::state::Map;
 
-    /// A host whose engine registers the given runtimes.
-    fn host(engine_runtimes: &[&str]) -> Host {
-        let mut host = Host::new(OperatingSystem {
-            name: "balenaOS".to_string(),
-            version: Some("6.5.0".to_string()),
-            build: None,
-        });
-        host.engine_runtimes = engine_runtimes.iter().map(|r| r.to_string()).collect();
-        host
-    }
-
-    /// A device whose engine registers the given runtimes.
-    fn device(engine_runtimes: &[&str]) -> Device {
-        Device {
-            host: Some(host(engine_runtimes)),
-        }
+    /// The runtimes an engine registers.
+    fn runtimes(names: &[&str]) -> Vec<oci::Runtime> {
+        names.iter().map(|r| r.to_string()).collect()
     }
 
     /// A target release carrying one overlay per entry, each asking for the
@@ -681,9 +686,7 @@ mod tests {
     }
 
     fn unavailable(engine: &[&str], overlays: &[(&str, &str)]) -> bool {
-        let d = device(engine);
-        let registered = &d.host.as_ref().unwrap().engine_runtimes;
-        overlay_runtime_unavailable(registered, &target(overlays))
+        overlay_runtime_unavailable(&runtimes(engine), &target(overlays))
     }
 
     #[test]
@@ -724,8 +727,8 @@ mod tests {
     #[test]
     fn a_release_the_engine_can_run_is_kept() {
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        let reasons = reject_unsupported_releases(&mut tgt, &host(&["runc", "extension"]));
-        assert!(reasons.is_empty());
+        let rejected = reject_unsupported_releases(&mut tgt, &runtimes(&["runc", "extension"]));
+        assert!(rejected.is_empty());
         assert_eq!(tgt.releases.len(), 1);
     }
 
@@ -733,14 +736,17 @@ mod tests {
     fn a_release_naming_an_unregistered_runtime_is_dropped() {
         // X-04: a profile activated on a pre-extension OS.
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        let reasons = reject_unsupported_releases(&mut tgt, &host(&[]));
+        let rejected = reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(tgt.releases.is_empty());
         assert_eq!(
-            reasons,
-            vec![
-                "host OS engine does not register a runtime the overlays ask for ('extension'), update the OS first"
-                    .to_string()
-            ]
+            rejected,
+            vec![UnsupportedRelease {
+                app: Uuid::from("1b2c3d4e5f60718293a4b5c6d7e8f900"),
+                release: Uuid::from("target-release"),
+                reason:
+                    "OS update needed. One or more required OCI runtimes are missing: extension"
+                        .to_string()
+            }]
         );
     }
 
@@ -748,7 +754,7 @@ mod tests {
     fn pruning_leaves_the_reboot_request_alone() {
         // The pending_reboot diff schedules a reboot already due.
         let mut tgt = host_target(&[("ebpf", "extension")]);
-        reject_unsupported_releases(&mut tgt, &host(&[]));
+        reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(!tgt.pending_reboot);
     }
 
@@ -759,8 +765,7 @@ mod tests {
         let tgt = target(&[("ebpf", "extension"), ("tracing", "runc")]);
         assert_eq!(
             unavailable_runtime_reason(&tgt),
-            "host OS engine does not register a runtime the overlays ask for \
-             ('extension', 'runc'), update the OS first"
+            "OS update needed. One or more required OCI runtimes are missing: extension, runc"
         );
     }
 }

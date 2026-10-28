@@ -13,7 +13,7 @@ use crate::util::request::{self, Get, GetError};
 use crate::util::types::Uuid;
 
 use super::config::{RemoteConfig, RequestConfig};
-use super::model::{App as RemoteApp, Device as RemoteDeviceTarget};
+use super::model::{App as RemoteApp, Device as RemoteDeviceTarget, rejected_release_message};
 
 async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
@@ -253,9 +253,12 @@ async fn start_poll_with_reemit(
                                 for (uuid, app) in remote_target.apps.iter() {
                                     if let RemoteApp::Rejected(rej) = app {
                                         error!(
-                                            "invalid target release ({}) for app {uuid}: {}",
-                                            rej.release.chars().take(7).collect::<String>(),
-                                            rej.reason,
+                                            "{}",
+                                            rejected_release_message(
+                                                uuid,
+                                                &rej.release,
+                                                &rej.reason
+                                            )
                                         );
                                     }
                                 }

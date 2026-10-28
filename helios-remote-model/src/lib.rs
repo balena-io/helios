@@ -126,6 +126,14 @@ impl<'de> Deserialize<'de> for AppMap {
     }
 }
 
+/// Describe why the target release of an app was rejected
+pub fn rejected_release_message(app: &Uuid, release: &Uuid, reason: &str) -> String {
+    format!(
+        "invalid target release ({}) for app {app}: {reason}",
+        release.chars().take(7).collect::<String>(),
+    )
+}
+
 /// An app with an invalid target release
 #[derive(Debug)]
 pub struct RejectedApp {

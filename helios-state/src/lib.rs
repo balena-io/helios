@@ -1,12 +1,12 @@
-mod config;
 mod labels;
-mod read;
+mod reader;
+mod runtime;
 mod seek;
 mod tasks;
 mod worker;
 
 pub mod models;
-pub use config::{StateConfig, prepare};
+pub use runtime::{HostConfig, RemoteConfig, Runtime, prepare};
 pub use seek::{LocalState, SeekRequest, TargetState, UpdateOpts, UpdateStatus, start_seek};
 
 use helios_legacy as legacy;

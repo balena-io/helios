@@ -58,19 +58,26 @@ impl From<App> for AppTarget {
 
 pub type AppMap = Map<Uuid, App>;
 
+impl AppTarget {
+    /// An app target with no releases that rejects the given release
+    pub fn rejected(id: u32, name: Option<String>, release: Uuid) -> Self {
+        AppTarget {
+            id,
+            name,
+            locked: false,
+            releases: Map::new(),
+            rejected_release: Some(release),
+        }
+    }
+}
+
 impl From<RejectedApp> for AppTarget {
     fn from(app: RejectedApp) -> Self {
         let RejectedApp {
             id, name, release, ..
         } = app;
 
-        AppTarget {
-            id,
-            name: Some(name),
-            locked: false,
-            releases: Map::new(),
-            rejected_release: Some(release),
-        }
+        AppTarget::rejected(id, Some(name), release)
     }
 }
 
