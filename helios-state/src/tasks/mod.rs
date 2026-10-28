@@ -1,19 +1,19 @@
 #[cfg(feature = "userapps")]
-mod app;
-#[cfg(feature = "userapps")]
 mod helpers;
 #[cfg(feature = "userapps")]
 mod image;
+#[cfg(feature = "userapps")]
+mod release;
 
-mod app_entry;
+mod app;
 mod device;
 
 #[cfg(feature = "userapps")]
-pub use app::*;
-#[cfg(feature = "userapps")]
 pub use image::*;
+#[cfg(feature = "userapps")]
+pub use release::*;
 
-pub use app_entry::*;
+pub use app::*;
 pub use device::*;
 
 #[cfg(feature = "balenahup")]
