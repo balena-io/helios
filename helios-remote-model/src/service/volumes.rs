@@ -62,6 +62,17 @@ pub enum Mount {
     Tmpfs(TmpfsMount),
 }
 
+impl Mount {
+    /// Path inside the container where the mount is placed
+    pub(crate) fn target(&self) -> &str {
+        match self {
+            Mount::Volume(v) => &v.target,
+            Mount::Bind(b) => &b.target,
+            Mount::Tmpfs(t) => &t.target,
+        }
+    }
+}
+
 /// Host paths that are permitted as bind-mount sources, these are the
 /// same bind mounts allowed from labels
 const BIND_SOURCE_ALLOWLIST: &[&str] = &[
@@ -76,7 +87,7 @@ const BIND_SOURCE_ALLOWLIST: &[&str] = &[
     "/etc/machine-id",
 ];
 
-fn is_allowed_bind_source(source: &str) -> bool {
+pub(crate) fn is_allowed_bind_source(source: &str) -> bool {
     BIND_SOURCE_ALLOWLIST.contains(&source) || std::path::PathBuf::from(source).starts_with("/tmp")
 }
 
@@ -95,6 +106,10 @@ impl VolumesConfig {
 
     pub fn iter(&self) -> std::slice::Iter<'_, Mount> {
         self.0.iter()
+    }
+
+    pub(crate) fn push(&mut self, mount: Mount) {
+        self.0.push(mount);
     }
 }
 
