@@ -204,6 +204,64 @@ fn fetch_apps_images(
         .collect()
 }
 
+/// The update lock of each running service of the apps, with the services
+/// sharing it.
+fn service_lock_paths<'a>(
+    apps: impl IntoIterator<Item = &'a App>,
+    host_runtime_dir: &Path,
+) -> HashMap<PathBuf, Vec<String>> {
+    apps.into_iter()
+        .flat_map(|app| app.releases.values())
+        .flat_map(|rel| rel.services.iter())
+        .filter(|(_, svc)| svc.oci.is_some())
+        .filter_map(|(svc_name, svc)| {
+            let bind_source = svc.config.volumes.iter().find_map(|mount| match mount {
+                Mount::Bind { source, target, .. } if target == "/tmp/balena" => Some(source),
+                _ => None,
+            })?;
+            let suffix = Path::new(bind_source).strip_prefix(host_runtime_dir).ok()?;
+            Some((
+                runtime_dir()
+                    .join(suffix)
+                    .join(helios_util::locking::UPDATE_LOCK_FILENAME),
+                svc_name.clone(),
+            ))
+        })
+        .fold(HashMap::new(), |mut acc, (path, svc_name)| {
+            acc.entry(path).or_default().push(svc_name);
+            acc
+        })
+}
+
+/// Take every lock or none.
+///
+/// This is a sync operation so use [`run_async`] if running in an async context
+fn acquire_locks(
+    locks: &LockSet,
+    service_locks: HashMap<PathBuf, Vec<String>>,
+    force: bool,
+) -> io::Result<Vec<PathBuf>> {
+    if force && !service_locks.is_empty() {
+        warn!("taking locks by force per-user request");
+    }
+
+    let mut acquired: Vec<PathBuf> = Vec::with_capacity(service_locks.len());
+    for (lock_path, svc_names) in service_locks {
+        if let Err(e) = locks.try_lock(lock_path.clone(), force) {
+            let _ = locks.unlock_many(acquired);
+            return match e {
+                locking::Error::WouldBlock => Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!("services locked: {}", svc_names.join(", ")),
+                )),
+                locking::Error::IO(e) => Err(e),
+            };
+        }
+        acquired.push(lock_path);
+    }
+    Ok(acquired)
+}
+
 /// Take locks for the running app once all target services have been installed
 fn take_locks(
     mut app: View<App>,
@@ -221,57 +279,10 @@ fn take_locks(
             .expect("force_acquire_locks should be available")
             .enabled();
 
-        // resolve a lock file for each running service whose /tmp/balena bind
-        // mount lives under the host runtime directory, grouping the services
-        // that share each lock path so each lock is taken at most once.
-        let service_locks: HashMap<PathBuf, Vec<String>> = app
-            .releases
-            .values()
-            .flat_map(|rel| rel.services.iter())
-            .filter(|(_, svc)| svc.oci.is_some())
-            .filter_map(|(svc_name, svc)| {
-                let bind_source = svc.config.volumes.iter().find_map(|mount| match mount {
-                    Mount::Bind { source, target, .. } if target == "/tmp/balena" => Some(source),
-                    _ => None,
-                })?;
-                let suffix = Path::new(bind_source)
-                    .strip_prefix(host_runtime_dir.as_path())
-                    .ok()?;
-                Some((
-                    runtime_dir()
-                        .join(suffix)
-                        .join(helios_util::locking::UPDATE_LOCK_FILENAME),
-                    svc_name.clone(),
-                ))
-            })
-            .fold(HashMap::new(), |mut acc, (path, svc_name)| {
-                acc.entry(path).or_default().push(svc_name);
-                acc
-            });
-
-        if force_acquire_locks && !service_locks.is_empty() {
-            warn!("taking locks by force per-user request");
-        }
-
+        let service_locks = service_lock_paths([&*app], host_runtime_dir.as_path());
         let acquired = run_async(move || {
             let locks = locks.as_ref().expect("locks resource should be available");
-            let mut acquired: Vec<PathBuf> = Vec::with_capacity(service_locks.len());
-            for (lock_path, svc_names) in service_locks {
-                if let Err(e) = locks.try_lock(lock_path.clone(), force_acquire_locks) {
-                    for p in acquired {
-                        let _ = locks.unlock(p);
-                    }
-                    return match e {
-                        locking::Error::WouldBlock => Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            format!("services locked: {}", svc_names.join(", ")),
-                        )),
-                        locking::Error::IO(e) => Err(e),
-                    };
-                }
-                acquired.push(lock_path);
-            }
-            Ok(acquired)
+            acquire_locks(locks, service_locks, force_acquire_locks)
         })
         .await?;
 
@@ -306,10 +317,7 @@ fn release_locks(
         let to_release = std::mem::take(&mut app.lockfiles);
         run_async(move || {
             let locks = locks.as_ref().expect("locks resource should be available");
-            for path in to_release {
-                locks.unlock(path)?;
-            }
-            Ok(())
+            Ok(locks.unlock_many(to_release)?)
         })
         .await?;
 
