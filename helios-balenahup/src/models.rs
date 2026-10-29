@@ -25,17 +25,16 @@ const RUNTIME_LABEL: &str = "io.balena.private.runtime";
 /// ships.
 const KERNEL_ABI_ID_LABEL: &str = "io.balena.image.kernel-abi-id";
 
-/// breadcrumb marking that an overlay was removed and the root overlay
-/// composition is stale until a reboot. Written by `remove_overlay`, read
-/// into `Host::pending_reboot`, cleared by the tmpfs on boot.
-pub(crate) const OVERLAY_REBOOT_BREADCRUMB: &str = "overlay-reboot-breadcrumb";
-
 /// Alternative Device definition to avoid cicular dependencies
 /// DO NOT use this outside the `System` extractor
 #[derive(State, Debug, Clone)]
 pub(crate) struct Device {
     /// The "hostapp" configuration
     pub host: Option<Host>,
+
+    /// Whether a change only applies after a reboot
+    #[mahler(internal, default)]
+    pub needs_reboot: bool,
 }
 
 #[derive(State, Debug, Clone)]
@@ -57,10 +56,6 @@ pub struct Host {
     /// perform.
     pub releases: Map<Uuid, HostRelease>,
 
-    /// True while an overlay removal awaits the reboot that applies it.
-    #[mahler(default)]
-    pub pending_reboot: bool,
-
     /// Whether the host is still validating what this boot brought up
     #[mahler(default)]
     pub host_validating: bool,
@@ -76,10 +71,21 @@ impl Host {
             meta,
             app: None,
             releases: Map::new(),
-            pending_reboot: false,
             host_validating: false,
             rejected_release: None,
         }
+    }
+
+    /// Whether something staged on the host only activates on a reboot: an
+    /// installed hostapp or a deployed overlay.
+    pub fn awaits_reboot(&self) -> bool {
+        self.releases.values().any(|rel| {
+            rel.status == HostReleaseStatus::Installed
+                || rel
+                    .overlays
+                    .values()
+                    .any(|overlay| overlay.status == OverlayStatus::Deployed)
+        })
     }
 }
 
@@ -89,10 +95,7 @@ impl From<Host> for HostTarget {
         HostTarget {
             app,
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
-            // A target never asks for a reboot; the diff against a derived
-            // `true` is what schedules one.
-            pending_reboot: false,
-            // Nor for a validation in flight
+            // A target never asks for a validation in flight
             host_validating: false,
             rejected_release: None,
         }
@@ -104,7 +107,6 @@ impl From<(Uuid, RejectedApp)> for HostTarget {
         HostTarget {
             app: Some(app_uuid),
             releases: Map::new(),
-            pending_reboot: false,
             host_validating: false,
             rejected_release: Some(app.release),
         }
@@ -152,10 +154,7 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
         HostTarget {
             app: Some(app_uuid),
             releases,
-            // A remote target never asks for a reboot; the diff against a
-            // derived `true` is what schedules one.
-            pending_reboot: false,
-            // Nor for a validation in flight
+            // A remote target never asks for a validation in flight
             host_validating: false,
             rejected_release: None,
         }
@@ -748,5 +747,65 @@ mod tests {
         let mut labels = labels("extension");
         labels.insert(RUNTIME_LABEL.to_string(), String::new());
         assert_eq!(requested_runtime(&labels), None);
+    }
+
+    /// A host with one release in the given status, carrying overlays in the
+    /// given statuses.
+    fn host(status: HostReleaseStatus, overlays: &[OverlayStatus]) -> Host {
+        let mut host = Host::new(OperatingSystem {
+            name: "balenaOS".to_string(),
+            version: None,
+            build: None,
+        });
+        host.releases.insert(
+            Uuid::from("release"),
+            HostRelease {
+                hostapp: HostApp {
+                    image: ImageUri::from_static("registry2.balena-cloud.com/v2/hostapp:latest"),
+                    build: "abc1234".to_string(),
+                    updater: ImageUri::from_static("registry2.balena-cloud.com/v2/updater:latest"),
+                    install_attempts: 0,
+                },
+                status,
+                overlays: overlays
+                    .iter()
+                    .enumerate()
+                    .map(|(i, status)| {
+                        (
+                            format!("overlay-{i}"),
+                            Overlay {
+                                image: ImageUri::from_static(
+                                    "registry2.balena-cloud.com/v2/overlay:latest",
+                                ),
+                                status: status.clone(),
+                                runtime: "extension".to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+        );
+        host
+    }
+
+    #[test]
+    fn an_installed_hostapp_awaits_a_reboot() {
+        assert!(host(HostReleaseStatus::Installed, &[]).awaits_reboot());
+    }
+
+    #[test]
+    fn a_deployed_overlay_awaits_a_reboot() {
+        assert!(
+            host(
+                HostReleaseStatus::Running,
+                &[OverlayStatus::Active, OverlayStatus::Deployed]
+            )
+            .awaits_reboot()
+        );
+    }
+
+    #[test]
+    fn a_running_host_with_active_overlays_awaits_no_reboot() {
+        assert!(!host(HostReleaseStatus::Running, &[OverlayStatus::Active]).awaits_reboot());
     }
 }
