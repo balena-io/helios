@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use mahler::extract::{Res, System, SystemTarget, Target, View};
 use mahler::job;
@@ -213,6 +214,17 @@ enum RebootError {
     IO(#[from] io::Error),
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    #[error("the device did not reboot within {}s", REBOOT_TIMEOUT.as_secs())]
+    Timeout,
+}
+
+/// How long to wait for the reboot to take the process down.
+const REBOOT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Wait for a requested reboot to land. Returning at all means it did not.
+async fn wait_for_reboot() -> RebootError {
+    tokio::time::sleep(REBOOT_TIMEOUT).await;
+    RebootError::Timeout
 }
 
 /// The update lock of every app service.
@@ -235,7 +247,8 @@ fn lock_scope(_: &Device, _: &HostRuntimeDir) -> LockScope {
 }
 
 /// Take every app's update lock, then reboot. The locks are released if the
-/// reboot cannot be issued.
+/// reboot cannot be requested, and kept if it does not land in time: a slow
+/// shutdown must not let an app enter a critical section just before it.
 #[cfg(feature = "userapps")]
 async fn guarded_reboot(
     service_locks: LockScope,
@@ -268,7 +281,7 @@ async fn guarded_reboot(
         .await?;
         return Err(e.into());
     }
-    Ok(())
+    Err(wait_for_reboot().await)
 }
 
 /// Reboot unless a user update lock forbids it. A forced update skips the scan.
@@ -295,7 +308,7 @@ async fn guarded_reboot(
     }
 
     systemd::reboot().await?;
-    Ok(())
+    Err(wait_for_reboot().await)
 }
 
 /// Reboot once every app is installed. Reads the whole device, so it never runs

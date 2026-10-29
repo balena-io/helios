@@ -354,6 +354,10 @@ fn activate(rel: &mut HostRelease) {
 /// request that reboot, so a release awaiting activation with no reboot pending
 /// has been through it.
 ///
+/// In practice this only exists to let the planner find a workflow, but reboot
+/// will always happen before this step, which will read the state as active on
+/// the next boot.
+///
 /// Handles `update(/host/releases/<commit>)`
 fn activate_release(
     mut rel: View<HostRelease>,
