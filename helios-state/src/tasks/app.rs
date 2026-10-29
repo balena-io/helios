@@ -1070,21 +1070,24 @@ fn start_service_when_requirements_are_met(
 ///
 /// Used as a planning exception to abort in this scenario instead of failing to find a plan
 fn start_is_blocked_by_a_failed_dependency(
-    Target(started): Target<bool>,
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> bool {
-    // only a start is gated on dependencies
-    if !started {
-        return false;
-    }
-
     target_release_services(&t_device, &app_uuid, &rel_uuid)
         .and_then(|svcs| svcs.get(&svc_name))
-        .is_some_and(|tgt_svc| {
-            any_dependency_failed(&device, &app_uuid, &rel_uuid, &tgt_svc.depends_on)
-        })
+        .is_some_and(|tgt_svc| service_start_blocked(&device, &app_uuid, &rel_uuid, tgt_svc))
+}
+
+/// Whether the target starts the service and one of its dependencies can no
+/// longer meet its condition.
+fn service_start_blocked(
+    device: &Device,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+    tgt_svc: &ServiceTarget,
+) -> bool {
+    tgt_svc.started && any_dependency_failed(device, app_uuid, rel_uuid, &tgt_svc.depends_on)
 }
 
 /// Start the service if it is not running yet
