@@ -162,6 +162,9 @@ pub enum OverlayStatus {
     Stale,
     /// Carried by the running kernel
     Active,
+    /// Removed, but the running root pins its layer, so the container stays
+    /// until the OS removes it on boot.
+    Withdrawn,
 }
 
 impl State for OverlayStatus {
@@ -235,8 +238,7 @@ fn deployed_boot_id(labels: &HashMap<String, String>) -> Option<&str> {
 /// was staged in, the running boot, the kernel ABI the overlay claims and the
 /// one the running kernel was published under.
 ///
-/// Returns `None` for a container the engine flagged `Dead`, and for one it
-/// left in `Created` with no start behind it.
+/// Returns `None` for a container left in `Created` with no start behind it.
 fn derive_overlay_status(
     state: &ContainerState,
     staged_boot_id: Option<&str>,
@@ -246,7 +248,7 @@ fn derive_overlay_status(
 ) -> Option<OverlayStatus> {
     match state.status {
         // A Dead container is a removal that has done everything it can.
-        ContainerStatus::Dead => return None,
+        ContainerStatus::Dead => return Some(OverlayStatus::Withdrawn),
         // 126/127: the runtime could not exec the command.
         ContainerStatus::Failed(126 | 127) => return Some(OverlayStatus::Failed),
         // Any other start failure is engine-side and retryable.
@@ -500,16 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn reports_no_status_for_a_container_the_removal_left_dead() {
+    fn a_container_the_removal_left_dead_is_withdrawn() {
         // The engine flags Dead when it cannot release a layer the running root
         // pins, which is what a removal of a mounted extension gets. Reading it
-        // as present would re-plan the removal on every seek until the reboot,
-        // and reading it as Failed would freeze a release that re-enables the
-        // same overlay.
+        // as Failed would freeze a release that re-enables the same overlay.
         let st = state(ContainerStatus::Dead);
         assert_eq!(
             derive_overlay_status(&st, Some(OTHER_BOOT), THIS_BOOT, None, None),
-            None
+            Some(OverlayStatus::Withdrawn)
         );
     }
 
