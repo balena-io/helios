@@ -1,54 +1,25 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use mahler::extract::{Args, Res, System, SystemTarget, Target, View};
 use mahler::task::prelude::*;
 
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
-use crate::util::locking::{self, ForceAcquireLocks, LockSet, find_update_locks};
+use crate::util::locking::{ForceAcquireLocks, LockSet};
 use crate::util::systemd;
 
 use super::models::{Device, HostRelease, HostReleaseStatus, OverlayStatus};
 use super::overlays::overlays_ready;
 use super::tasks::{host_is_validating, overlay_removal_pending};
 
-/// Returns the path of a user-held update lock that forbids disrupting its
-/// service, or `None` if every lock under `runtime_dir` is free.
-///
-/// The scan is read-only: a free lock is taken only to prove it was free and
-/// released again, and a lock helios already holds is left untouched, since
-/// helios takes an app lock precisely to earn the right to disrupt that app.
-///
-/// TODO: this is a point-in-time answer. A service that takes its update lock
-/// after the scan and before the reboot lands has its critical section
-/// violated. Closing that needs the reboot rework (public id 4536): a top level
-/// task that takes and holds every app lock across the reboot.
-fn find_blocking_lock(locks: &LockSet, runtime_dir: &Path) -> io::Result<Option<PathBuf>> {
-    for path in find_update_locks(runtime_dir)? {
-        // Already held by helios, which is what authorizes disrupting
-        // that app, so it cannot forbid the reboot.
-        if locks.contains(&path) {
-            continue;
-        }
-        match locks.try_lock(path.clone(), false) {
-            // Free (a stale helios lockfile): we only took it to probe, so
-            // release the transient lock immediately.
-            Ok(()) => {
-                let _ = locks.unlock(path);
-            }
-            // Held by another party (a user service).
-            Err(locking::Error::WouldBlock) => return Ok(Some(path)),
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(None)
-}
-
 /// Issue the coordinated host-OS reboot, honoring user update locks.
 ///
 /// A forced update overrides those locks, so the gate is skipped entirely
 /// rather than consulted and ignored.
+///
+/// TODO: the lock scan is point-in-time. Holding every app lock across the
+/// reboot closes that.
 async fn guarded_reboot(
     locks: Res<LockSet>,
     force_acquire_locks: Res<ForceAcquireLocks>,
@@ -63,7 +34,7 @@ async fn guarded_reboot(
         let runtime_dir = runtime_dir();
         let held = run_async(move || {
             let locks = locks.as_ref().expect("locks resource should be available");
-            find_blocking_lock(locks, &runtime_dir)
+            locks.find_blocking(&runtime_dir)
         })
         .await?;
         if let Some(path) = held {
@@ -167,46 +138,4 @@ pub(crate) enum RebootError {
     IO(#[from] io::Error),
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn reports_a_user_lock_and_leaves_it_intact() {
-        // An external (user) lock: a plain file with no helios tag. The scan
-        // must report it and leave it on disk, since destroying it would defeat
-        // the lock for the service that took it.
-        let dir = tempdir().unwrap();
-        let svc = dir.path().join("app-uuid").join("svc");
-        std::fs::create_dir_all(&svc).unwrap();
-        let path = svc.join("updates.lock");
-        std::fs::write(&path, b"user-held").unwrap();
-
-        let locks = LockSet::new();
-        let held = find_blocking_lock(&locks, dir.path()).unwrap();
-        assert_eq!(held, Some(path.clone()));
-        assert!(path.exists());
-        assert_eq!(std::fs::read(&path).unwrap(), b"user-held");
-    }
-
-    #[test]
-    fn skips_a_lock_helios_already_holds() {
-        // A lock `take_locks` took to disrupt its own app. Helios holding it
-        // is what permits the reboot, so it must not be reported as blocking,
-        // and the scan must leave the handle and the file alive.
-        let dir = tempdir().unwrap();
-        let svc = dir.path().join("app-uuid").join("svc");
-        std::fs::create_dir_all(&svc).unwrap();
-        let path = svc.join("updates.lock");
-
-        let locks = LockSet::new();
-        locks.try_lock(path.clone(), false).unwrap();
-
-        assert_eq!(find_blocking_lock(&locks, dir.path()).unwrap(), None);
-        assert!(path.exists());
-        assert!(locks.contains(&path));
-    }
 }
