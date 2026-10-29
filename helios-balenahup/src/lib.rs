@@ -8,7 +8,8 @@ pub use models::{
     Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget, Overlay, OverlayStatus,
 };
 pub use tasks::{
-    HostCleanupError, cleanup_hostapp, reject_unsupported_releases, with_hostapp_tasks,
+    HostCleanupError, cleanup_hostapp, reject_unsupported_releases, release_settled,
+    with_hostapp_tasks,
 };
 
 use helios_oci as oci;

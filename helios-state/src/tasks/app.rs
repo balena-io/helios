@@ -15,7 +15,8 @@ use tracing::{trace, warn};
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
-    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
+    DeviceTarget, Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget,
+    Volume,
 };
 use crate::oci::{
     Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
@@ -206,7 +207,7 @@ fn fetch_apps_images(
 
 /// The update lock of each running service of the apps, with the services
 /// sharing it.
-fn service_lock_paths<'a>(
+pub(crate) fn service_lock_paths<'a>(
     apps: impl IntoIterator<Item = &'a App>,
     host_runtime_dir: &Path,
 ) -> HashMap<PathBuf, Vec<String>> {
@@ -236,7 +237,7 @@ fn service_lock_paths<'a>(
 /// Take every lock or none.
 ///
 /// This is a sync operation so use [`run_async`] if running in an async context
-fn acquire_locks(
+pub(crate) fn acquire_locks(
     locks: &LockSet,
     service_locks: HashMap<PathBuf, Vec<String>>,
     force: bool,
@@ -1088,6 +1089,21 @@ fn service_start_blocked(
     tgt_svc: &ServiceTarget,
 ) -> bool {
     tgt_svc.started && any_dependency_failed(device, app_uuid, rel_uuid, &tgt_svc.depends_on)
+}
+
+/// Whether the target release of the app is installed, or blocked by a failed
+/// dependency.
+pub(crate) fn target_release_settled(
+    device: &Device,
+    t_device: &DeviceTarget,
+    app_uuid: &Uuid,
+    rel_uuid: &Uuid,
+) -> bool {
+    release_already_installed(device, app_uuid, rel_uuid)
+        || target_release_services(t_device, app_uuid, rel_uuid).is_some_and(|svcs| {
+            svcs.values()
+                .any(|tgt_svc| service_start_blocked(device, app_uuid, rel_uuid, tgt_svc))
+        })
 }
 
 /// Start the service if it is not running yet
