@@ -6,16 +6,14 @@ use crate::oci::{
     self, Client as Docker, ContainerConfig, ContainerStatus, LocalNamespace, Namespace,
     NetworkMode, RegistryAuth, WithContext,
 };
-use crate::reboot::mark_pending_reboot;
-use crate::util::breadcrumb;
 use crate::util::fs::run_async;
 use crate::util::proc;
+use crate::util::reboot;
 
 use super::models::{
-    Device, HostRelease, HostReleaseTarget, OVERLAY_REBOOT_BREADCRUMB, Overlay, OverlayStatus,
-    overlay_labels,
+    Device, HostRelease, HostReleaseTarget, Overlay, OverlayStatus, overlay_labels,
 };
-use super::tasks::host_is_validating;
+use super::tasks::{host_is_validating, request_reboot, with_reboot};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OverlayError {
@@ -109,6 +107,11 @@ pub(crate) fn deploy_overlay(
     })
 }
 
+/// Deploy an overlay and request the reboot that activates it.
+pub(crate) fn deploy_overlay_and_mark_reboot(System(device): System<Device>) -> Vec<Task> {
+    with_reboot(deploy_overlay.into_task(), &device)
+}
+
 /// Withdraw an overlay extension: remove its container.
 ///
 /// The removal is the whole withdrawal. The container's `Dead` flag is the
@@ -150,6 +153,7 @@ async fn withdraw_overlay(
 ///
 /// The breadcrumb precedes the withdrawal: written after, a failed write would
 /// leave the container gone with no record left to reboot from.
+/// `mark_reboot_required` writes it too, but runs concurrently.
 pub(crate) fn remove_overlay(
     overlay: View<Overlay>,
     Args((release_uuid, name)): Args<(String, String)>,
@@ -164,7 +168,7 @@ pub(crate) fn remove_overlay(
             .expect("docker resource should be available");
 
         if was_active {
-            breadcrumb::set(OVERLAY_REBOOT_BREADCRUMB).await?;
+            reboot::record().await?;
         }
         withdraw_overlay(docker, &release_uuid, &name).await?;
 
@@ -187,7 +191,7 @@ pub(crate) fn remove_overlay_and_mark_reboot(
 
     let mut tasks = vec![remove_overlay.into_task()];
     if overlay.status == OverlayStatus::Active {
-        tasks.push(mark_pending_reboot.into_task());
+        tasks.extend(request_reboot(&device));
     }
     tasks
 }

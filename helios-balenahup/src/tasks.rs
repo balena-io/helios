@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 
-use mahler::extract::{Args, Res, System, Target, View};
+use mahler::extract::{Args, Res, System, SystemTarget, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
@@ -13,19 +13,19 @@ use crate::store::{self as store, DocumentStore};
 use crate::util::breadcrumb;
 use crate::util::dirs::runtime_dir;
 use crate::util::fs::run_async;
+use crate::util::reboot::mark_reboot_required;
 use crate::util::systemd;
 use crate::util::tar;
 
 use crate::overlays::{
-    deploy_overlay, overlays_ready, redeploy_overlay, remove_overlay,
-    remove_overlay_and_mark_reboot,
+    deploy_overlay, deploy_overlay_and_mark_reboot, overlays_ready, redeploy_overlay,
+    remove_overlay, remove_overlay_and_mark_reboot,
 };
-use crate::reboot::{mark_pending_reboot, reboot_to_activate, reboot_to_apply_overlays};
 
 use super::BALENAHUP;
 use super::models::{
-    Device, DeviceTarget, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget,
-    HostTarget, OverlayStatus,
+    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget,
+    OverlayStatus,
 };
 
 /// Whether the host is still validating this boot.
@@ -37,6 +37,21 @@ pub(crate) fn host_is_validating(device: &Device) -> bool {
         .host
         .as_ref()
         .is_some_and(|host| host.host_validating)
+}
+
+/// The task marking a reboot as required, unless one already is: the mark
+/// refuses to run then, failing the whole method.
+pub(crate) fn request_reboot(device: &Device) -> Option<Task> {
+    (!device.needs_reboot).then(|| mark_reboot_required.into_task())
+}
+
+/// The task followed by a request for the reboot that activates its change.
+///
+/// Two tasks because a task may only write its own subtree.
+pub(crate) fn with_reboot(task: Task, device: &Device) -> Vec<Task> {
+    let mut tasks = vec![task];
+    tasks.extend(request_reboot(device));
+    tasks
 }
 
 /// Wait for the host validation to finish before doing host work.
@@ -266,6 +281,13 @@ fn install_hostapp_release(
     })
 }
 
+/// Install the hostapp release and request the reboot that activates it.
+///
+/// Handles `update(/host/releases/<commit>)`
+fn install_and_mark_reboot(System(device): System<Device>) -> Vec<Task> {
+    with_reboot(install_hostapp_release.into_task(), &device)
+}
+
 /// update the local storage metadata about the hostapp if the
 /// release is already the current release.
 ///
@@ -301,6 +323,59 @@ fn update_script_uri(
     })
 }
 
+/// Whether the release has changes only a reboot activates: an installed
+/// hostapp, or staged overlays the target keeps on the running release.
+///
+/// Waits for every target overlay, so one reboot activates them all.
+fn awaits_activation(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    overlays_ready(rel, tgt)
+        && match rel.status {
+            HostReleaseStatus::Installed => true,
+            HostReleaseStatus::Running => rel.overlays.iter().any(|(name, overlay)| {
+                overlay.status == OverlayStatus::Deployed && tgt.overlays.contains_key(name)
+            }),
+            HostReleaseStatus::Created => false,
+        }
+}
+
+/// Bring up the installed hostapp and the staged overlays.
+fn activate(rel: &mut HostRelease) {
+    rel.status = HostReleaseStatus::Running;
+    for overlay in rel.overlays.values_mut() {
+        if overlay.status == OverlayStatus::Deployed {
+            overlay.status = OverlayStatus::Active;
+        }
+    }
+}
+
+/// Activate the release once the reboot that brings it up has landed.
+///
+/// Pure state: the reboot is what activates it. The install and the deploys
+/// request that reboot, so a release awaiting activation with no reboot pending
+/// has been through it.
+///
+/// Handles `update(/host/releases/<commit>)`
+fn activate_release(
+    mut rel: View<HostRelease>,
+    Target(tgt): Target<HostRelease>,
+    System(device): System<Device>,
+) -> Option<View<HostRelease>> {
+    if device.needs_reboot || host_is_validating(&device) || !awaits_activation(&rel, &tgt) {
+        return None;
+    }
+    activate(&mut rel);
+    Some(rel)
+}
+
+/// Whether the release is settled, or will be once a reboot activates it.
+pub fn release_settled_on_reboot(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    let mut rel = rel.clone();
+    if awaits_activation(&rel, tgt) {
+        activate(&mut rel);
+    }
+    release_settled(&rel, tgt)
+}
+
 /// Forget a release: remove the artifacts it owns, then its metadata.
 ///
 /// Applies to `delete(/host/releases/<commit>)`.
@@ -322,7 +397,7 @@ fn remove_release(rel: View<HostRelease>, System(device): System<Device>) -> Vec
         .values()
         .any(|overlay| overlay.status == OverlayStatus::Active)
     {
-        tasks.push(mark_pending_reboot.into_task());
+        tasks.extend(request_reboot(&device));
     }
 
     tasks.push(remove_old_metadata.into_task());
@@ -352,24 +427,30 @@ fn remove_old_metadata(
 
 /// Whether this release's record is still the device's account of what it is
 /// running.
-fn release_still_accounted_for(rel: View<HostRelease>) -> bool {
-    release_is_accounted_for(&rel)
-}
-
-/// Booted on it: the update has not been activated yet, or has rolled back.
-pub(crate) fn release_is_accounted_for(rel: &HostRelease) -> bool {
+///
+/// Booted on it, and no target release runs the same build: the update has not
+/// been activated yet, or has rolled back.
+fn release_still_accounted_for(
+    rel: View<HostRelease>,
+    SystemTarget(target): SystemTarget<Device>,
+) -> bool {
     rel.status == HostReleaseStatus::Running
+        && !target.host.as_ref().is_some_and(|host| {
+            host.releases
+                .values()
+                .any(|tgt| tgt.hostapp.build == rel.hostapp.build)
+        })
 }
 
 /// The release exceeded its install budget and is left alone until an
 /// operator looks at the device.
-pub(crate) fn too_many_failed_installs(rel: &HostRelease) -> bool {
+fn too_many_failed_installs(rel: &HostRelease) -> bool {
     rel.status == HostReleaseStatus::Created && rel.hostapp.install_attempts >= 3
 }
 
 /// An overlay failed to activate at the image the target still asks for, so
 /// the release is left alone rather than retried.
-pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
     tgt.overlays.iter().any(|(name, tgt_overlay)| {
         rel.overlays
             .get(name)
@@ -380,8 +461,9 @@ pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarg
 /// Whether the target release is installed, or frozen by an exception on
 /// `/host/releases/{release_uuid}`. Keep the two in step.
 ///
-/// Installed means running with exactly the target overlays active.
-pub fn release_settled(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+/// Installed means running with exactly the target overlays active. A release
+/// awaiting its reboot gets there through `activate_release`.
+fn release_settled(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
     let installed = rel.status == HostReleaseStatus::Running
         && rel.overlays.len() == tgt.overlays.len()
         && tgt.overlays.iter().all(|(name, tgt_overlay)| {
@@ -439,35 +521,6 @@ pub fn reject_unsupported_releases(tgt: &mut HostTarget, runtimes: &[oci::Runtim
         true
     });
     reasons
-}
-
-/// True while some overlay the target dropped is still present and the planner
-/// is free to remove it.
-///
-/// This mirrors the exceptions on `/host/releases/{release_uuid}` below. A
-/// removal they hold back must not hold back the reboot. Keep the two in step.
-pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) -> bool {
-    let Some(host) = device.host.as_ref() else {
-        return false;
-    };
-    let target_releases = target.host.as_ref().map(|h| &h.releases);
-    host.releases.iter().any(|(uuid, rel)| {
-        match target_releases.and_then(|releases| releases.get(uuid)) {
-            // The target keeps the release: its dropped overlays are removed one
-            // by one, unless the release is frozen.
-            Some(tgt) => {
-                !too_many_failed_installs(rel)
-                    && !overlay_activation_failed(rel, tgt)
-                    && rel
-                        .overlays
-                        .keys()
-                        .any(|name| !tgt.overlays.contains_key(name))
-            }
-            // The target forgets the release: its overlays go with it, once the
-            // device no longer depends on it.
-            None => !release_is_accounted_for(rel) && !rel.overlays.is_empty(),
-        }
-    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -540,14 +593,16 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("initialize host OS release '{release_uuid}'")
                     },
                 ),
-                job::update(install_hostapp_release).with_description(
+                job::update(install_and_mark_reboot),
+                // Reachable only through `install_and_mark_reboot`
+                job::none(install_hostapp_release).with_description(
                     |Args(release_uuid): Args<String>| {
                         format!("install host OS release '{release_uuid}'")
                     },
                 ),
-                job::update(reboot_to_activate).with_description(
+                job::update(activate_release).with_description(
                     |Args(release_uuid): Args<String>| {
-                        format!("reboot to activate host OS release '{release_uuid}'")
+                        format!("activate host OS release '{release_uuid}'")
                     },
                 ),
                 job::update(update_script_uri).with_description(
@@ -570,7 +625,9 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
         .jobs(
             "/host/releases/{release_uuid}/overlays/{name}",
             [
-                job::create(deploy_overlay).with_description(
+                job::create(deploy_overlay_and_mark_reboot),
+                // Reachable only through `deploy_overlay_and_mark_reboot`
+                job::none(deploy_overlay).with_description(
                     |Args((release_uuid, name)): Args<(String, String)>| {
                         format!("deploy overlay '{name}' for host OS release '{release_uuid}'")
                     },
@@ -584,17 +641,6 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                         format!("remove overlay '{name}' for host OS release '{release_uuid}'")
                     },
                 ),
-            ],
-        )
-        .jobs(
-            "/host/pending_reboot",
-            [
-                job::update(reboot_to_apply_overlays)
-                    .with_description(|| "reboot to apply overlay changes"),
-                // The target never asks for the flag, so this is only ever
-                // reached by expansion from the overlay removal method.
-                job::none(mark_pending_reboot)
-                    .with_description(|| "mark overlay change as awaiting a reboot"),
             ],
         )
         .job(
@@ -718,7 +764,6 @@ mod tests {
         releases.insert(Uuid::from("target-release"), target(overlays));
         HostTarget {
             releases,
-            pending_reboot: false,
             host_validating: false,
         }
     }
@@ -744,14 +789,6 @@ mod tests {
                     .to_string()
             ]
         );
-    }
-
-    #[test]
-    fn pruning_leaves_the_reboot_request_alone() {
-        // The pending_reboot diff schedules a reboot already due.
-        let mut tgt = host_target(&[("ebpf", "extension")]);
-        reject_unsupported_releases(&mut tgt, &runtimes(&[]));
-        assert!(!tgt.pending_reboot);
     }
 
     #[test]

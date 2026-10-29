@@ -13,8 +13,7 @@ use crate::util::systemd;
 
 use super::BALENAHUP;
 use super::models::{
-    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, OVERLAY_REBOOT_BREADCRUMB,
-    overlay_from_container,
+    CLASS_LABEL, CLASS_OVERLAY, Host, HostRelease, HostReleaseStatus, overlay_from_container,
 };
 
 /// The systemd unit running the OS rollback validation after a HUP. Skipped on
@@ -148,8 +147,6 @@ pub async fn derive_host(
     // concurrent redeploy would race, so host work defers while either unit
     // runs. The condition is device-global, so it lives on the host.
     host.host_validating = host_validating().await;
-
-    host.pending_reboot = breadcrumb::exists(OVERLAY_REBOOT_BREADCRUMB).await?;
 
     Ok(())
 }

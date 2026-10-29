@@ -108,6 +108,10 @@ async fn read(
     #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
         crate::balenahup::read::derive_host(host, docker, local_store).await?;
+
+        // What the host staged only applies on a reboot. Removals leave no
+        // trace on the host, so those are only known from the breadcrumb.
+        device.needs_reboot |= host.awaits_reboot();
     }
 
     // Read the state of images
