@@ -377,6 +377,23 @@ pub(crate) fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarg
     })
 }
 
+/// Whether the target release is installed, or frozen by an exception on
+/// `/host/releases/{release_uuid}`. Keep the two in step.
+///
+/// Installed means running with exactly the target overlays active.
+pub fn release_settled(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    let installed = rel.status == HostReleaseStatus::Running
+        && rel.overlays.len() == tgt.overlays.len()
+        && tgt.overlays.iter().all(|(name, tgt_overlay)| {
+            rel.overlays.get(name).is_some_and(|o| {
+                o.status == OverlayStatus::Active
+                    && o.image == tgt_overlay.image
+                    && o.runtime == tgt_overlay.runtime
+            })
+        });
+    installed || too_many_failed_installs(rel) || overlay_activation_failed(rel, tgt)
+}
+
 /// The runtimes the target's overlays ask for, deduplicated.
 fn requested_runtimes(tgt: &HostReleaseTarget) -> Vec<&str> {
     let mut wanted: Vec<&str> = tgt
