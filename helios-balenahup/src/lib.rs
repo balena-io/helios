@@ -1,14 +1,13 @@
 mod models;
 mod overlays;
 pub mod read;
-mod reboot;
 mod tasks;
 
 pub use models::{
     Host, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget, Overlay, OverlayStatus,
 };
 pub use tasks::{
-    HostCleanupError, cleanup_hostapp, reject_unsupported_releases, release_settled,
+    HostCleanupError, cleanup_hostapp, reject_unsupported_releases, release_settled_on_reboot,
     with_hostapp_tasks,
 };
 

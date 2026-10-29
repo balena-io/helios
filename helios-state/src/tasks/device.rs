@@ -185,6 +185,7 @@ fn userapps_settled(_: &Device, _: &DeviceTarget) -> bool {
     true
 }
 
+/// A host release counts if a reboot is all it waits for.
 #[cfg(feature = "balenahup")]
 fn host_settled(device: &Device, target: &DeviceTarget) -> bool {
     target.host.as_ref().is_none_or(|t_host| {
@@ -193,7 +194,7 @@ fn host_settled(device: &Device, target: &DeviceTarget) -> bool {
                 .host
                 .as_ref()
                 .and_then(|host| host.releases.get(rel_uuid))
-                .is_some_and(|rel| crate::balenahup::release_settled(rel, t_rel))
+                .is_some_and(|rel| crate::balenahup::release_settled_on_reboot(rel, t_rel))
         })
     })
 }
