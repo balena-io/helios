@@ -1,9 +1,22 @@
-use mahler::extract::{Res, Target, View};
+#[cfg(feature = "userapps")]
+use std::collections::HashMap;
+use std::io;
+use std::path::PathBuf;
+
+use mahler::extract::{Res, System, SystemTarget, Target, View};
 use mahler::job;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 
+use crate::common_types::HostRuntimeDir;
+use crate::models::{Device, DeviceTarget};
 use crate::store::{self, DocumentStore};
+#[cfg(not(feature = "userapps"))]
+use crate::util::dirs::runtime_dir;
+use crate::util::fs::run_async;
+use crate::util::locking::{ForceAcquireLocks, LockSet};
+use crate::util::reboot::mark_reboot_required;
+use crate::util::systemd;
 
 /// Clean up the device state after the target has been reached
 ///
@@ -135,6 +148,183 @@ mod cleanup {
     }
 }
 
+/// Whether the host is validating this boot; a reboot would roll it back.
+#[cfg(feature = "balenahup")]
+fn host_is_validating(device: &Device) -> bool {
+    device
+        .host
+        .as_ref()
+        .is_some_and(|host| host.host_validating)
+}
+
+#[cfg(not(feature = "balenahup"))]
+fn host_is_validating(_: &Device) -> bool {
+    false
+}
+
+/// Whether every target release is installed, or frozen by a planner exception.
+///
+/// Frozen releases count, or a pending reboot would make the whole target
+/// unreachable.
+fn apps_settled(device: &Device, target: &DeviceTarget) -> bool {
+    userapps_settled(device, target) && host_settled(device, target)
+}
+
+#[cfg(feature = "userapps")]
+fn userapps_settled(device: &Device, target: &DeviceTarget) -> bool {
+    target.apps.iter().all(|(app_uuid, t_app)| {
+        t_app
+            .releases
+            .keys()
+            .all(|rel_uuid| super::app::target_release_settled(device, target, app_uuid, rel_uuid))
+    })
+}
+
+#[cfg(not(feature = "userapps"))]
+fn userapps_settled(_: &Device, _: &DeviceTarget) -> bool {
+    true
+}
+
+#[cfg(feature = "balenahup")]
+fn host_settled(device: &Device, target: &DeviceTarget) -> bool {
+    target.host.as_ref().is_none_or(|t_host| {
+        t_host.releases.iter().all(|(rel_uuid, t_rel)| {
+            device
+                .host
+                .as_ref()
+                .and_then(|host| host.releases.get(rel_uuid))
+                .is_some_and(|rel| crate::balenahup::release_settled(rel, t_rel))
+        })
+    })
+}
+
+#[cfg(not(feature = "balenahup"))]
+fn host_settled(_: &Device, _: &DeviceTarget) -> bool {
+    true
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RebootError {
+    #[cfg(not(feature = "userapps"))]
+    #[error("a user update-lock forbids rebooting: {}", .0.display())]
+    Locked(PathBuf),
+    #[error(transparent)]
+    IO(#[from] io::Error),
+    #[error(transparent)]
+    Systemd(#[from] systemd::Error),
+}
+
+/// The update lock of every app service.
+#[cfg(feature = "userapps")]
+type LockScope = HashMap<PathBuf, Vec<String>>;
+
+#[cfg(feature = "userapps")]
+fn lock_scope(device: &Device, host_runtime_dir: &HostRuntimeDir) -> LockScope {
+    super::app::service_lock_paths(device.apps.values(), host_runtime_dir)
+}
+
+/// Without app support, every update lock under the runtime dir.
+#[cfg(not(feature = "userapps"))]
+type LockScope = PathBuf;
+
+/// Scan the container-visible runtime dir, not the host-side path
+#[cfg(not(feature = "userapps"))]
+fn lock_scope(_: &Device, _: &HostRuntimeDir) -> LockScope {
+    runtime_dir()
+}
+
+/// Take every app's update lock, then reboot. The locks are released if the
+/// reboot cannot be issued.
+#[cfg(feature = "userapps")]
+async fn guarded_reboot(
+    service_locks: LockScope,
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> Result<(), RebootError> {
+    let force = force_acquire_locks
+        .as_ref()
+        .expect("force_acquire_locks should be available")
+        .enabled();
+
+    // return the lock set for the rollback, as a `Res` cannot be cloned
+    let (locks, acquired) = run_async(move || {
+        let acquired = super::app::acquire_locks(
+            locks.as_ref().expect("locks resource should be available"),
+            service_locks,
+            force,
+        );
+        Ok((locks, acquired))
+    })
+    .await?;
+    let acquired = acquired?;
+
+    if let Err(e) = systemd::reboot().await {
+        run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            let _ = locks.unlock_many(acquired);
+            Ok(())
+        })
+        .await?;
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Reboot unless a user update lock forbids it. A forced update skips the scan.
+#[cfg(not(feature = "userapps"))]
+async fn guarded_reboot(
+    runtime_dir: LockScope,
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+) -> Result<(), RebootError> {
+    let force = force_acquire_locks
+        .as_ref()
+        .expect("force_acquire_locks should be available")
+        .enabled();
+
+    if !force {
+        let held = run_async(move || {
+            let locks = locks.as_ref().expect("locks resource should be available");
+            locks.find_blocking(&runtime_dir)
+        })
+        .await?;
+        if let Some(path) = held {
+            return Err(RebootError::Locked(path));
+        }
+    }
+
+    systemd::reboot().await?;
+    Ok(())
+}
+
+/// Reboot once every app is installed. Reads the whole device, so it never runs
+/// concurrently with another change.
+fn reboot(
+    mut needs_reboot: View<bool>,
+    System(device): System<Device>,
+    SystemTarget(target): SystemTarget<Device>,
+    locks: Res<LockSet>,
+    force_acquire_locks: Res<ForceAcquireLocks>,
+    host_runtime_dir: Res<HostRuntimeDir>,
+) -> IO<bool, RebootError> {
+    enforce!(*needs_reboot, "no reboot required");
+    enforce!(!host_is_validating(&device), "host validation in progress");
+    enforce!(
+        apps_settled(&device, &target),
+        "apps are still being installed"
+    );
+    *needs_reboot = false;
+
+    with_io(needs_reboot, async move |needs_reboot| {
+        let host_runtime_dir = host_runtime_dir
+            .as_ref()
+            .expect("host runtime dir should be available");
+        let lock_scope = lock_scope(&device, host_runtime_dir);
+        guarded_reboot(lock_scope, locks, force_acquire_locks).await?;
+        Ok(needs_reboot)
+    })
+}
+
 /// Update the device name
 fn set_device_name(
     mut name: View<Option<String>>,
@@ -164,6 +354,15 @@ pub fn with_device_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unini
             job::none(cleanup_userapps).with_description(|| "clean-up app metadata and images"),
         )
     }
+
+    worker = worker.jobs(
+        "/needs_reboot",
+        [
+            // Only reached by expansion from changes that need a reboot
+            job::none(mark_reboot_required).with_description(|| "mark reboot as required"),
+            job::update(reboot).with_description(|| "reboot the device"),
+        ],
+    );
 
     worker = worker.hook(perform_cleanup);
     worker

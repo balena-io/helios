@@ -55,6 +55,11 @@ pub struct Device {
     /// List of unsupervised volumes on the device
     #[serde(default)]
     pub volumes: List<LocalVolume>,
+
+    /// Whether a change only applies after a reboot. Always false in a target,
+    /// so a derived `true` schedules the reboot.
+    #[serde(default)]
+    pub needs_reboot: bool,
 }
 
 /// The target state of a device
@@ -72,6 +77,11 @@ pub struct DeviceTarget {
     #[cfg(feature = "balenahup")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: <Option<Host> as State>::Target,
+
+    /// Whether a change only applies after a reboot. Always false in a target,
+    /// so a derived `true` schedules the reboot.
+    #[serde(default)]
+    pub needs_reboot: bool,
 }
 
 impl State for Device {
@@ -85,6 +95,7 @@ impl Default for DeviceTarget {
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
             host: None,
+            needs_reboot: false,
         }
     }
 }
@@ -102,6 +113,7 @@ impl Device {
             #[cfg(feature = "balenahup")]
             host: os.map(Host::new),
             volumes: List::new(),
+            needs_reboot: false,
         }
     }
 }
@@ -356,6 +368,7 @@ impl From<Device> for DeviceTarget {
                 .collect(),
             #[cfg(feature = "balenahup")]
             host: host.map(|r| r.into()),
+            needs_reboot: false,
         }
     }
 }
@@ -405,6 +418,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
             // Get only the first hostapp if any
             #[cfg(feature = "balenahup")]
             host: hostapps.pop(),
+            needs_reboot: false,
         }
     }
 }
