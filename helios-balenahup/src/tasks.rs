@@ -24,7 +24,7 @@ use crate::overlays::{
 
 use super::BALENAHUP;
 use super::models::{
-    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget,
+    Device, Host, HostApp, HostRelease, HostReleaseStatus, HostReleaseTarget, HostTarget, Overlay,
     OverlayStatus,
 };
 
@@ -458,6 +458,16 @@ fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool
     })
 }
 
+/// The target asks again for a withdrawn overlay. Its container keeps the name
+/// until the OS removes it on boot, so the deploy waits for the reboot.
+fn overlay_awaits_reboot(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
+    tgt.overlays.keys().any(|name| {
+        rel.overlays
+            .get(name)
+            .is_some_and(|ov| ov.status == OverlayStatus::Withdrawn)
+    })
+}
+
 /// Whether the target release is installed, or frozen by an exception on
 /// `/host/releases/{release_uuid}`. Keep the two in step.
 ///
@@ -465,7 +475,12 @@ fn overlay_activation_failed(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool
 /// awaiting its reboot gets there through `activate_release`.
 fn release_settled(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
     let installed = rel.status == HostReleaseStatus::Running
-        && rel.overlays.len() == tgt.overlays.len()
+        && rel
+            .overlays
+            .values()
+            .filter(|o| o.status != OverlayStatus::Withdrawn)
+            .count()
+            == tgt.overlays.len()
         && tgt.overlays.iter().all(|(name, tgt_overlay)| {
             rel.overlays.get(name).is_some_and(|o| {
                 o.status == OverlayStatus::Active
@@ -473,7 +488,10 @@ fn release_settled(rel: &HostRelease, tgt: &HostReleaseTarget) -> bool {
                     && o.runtime == tgt_overlay.runtime
             })
         });
-    installed || too_many_failed_installs(rel) || overlay_activation_failed(rel, tgt)
+    installed
+        || too_many_failed_installs(rel)
+        || overlay_activation_failed(rel, tgt)
+        || overlay_awaits_reboot(rel, tgt)
 }
 
 /// The runtimes the target's overlays ask for, deduplicated.
@@ -675,6 +693,26 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     "overlay activation failed for host OS release '{release_uuid}', check device"
                 )
             }),
+        )
+        // redeploy a withdrawn overlay after the reboot
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::update(|rel: View<HostRelease>, Target(tgt): Target<HostRelease>| {
+                overlay_awaits_reboot(&rel, &tgt)
+            })
+            .with_description(|Args(release_uuid): Args<String>| {
+                format!("host OS release '{release_uuid}' is waiting for a reboot")
+            }),
+        )
+        // a withdrawn overlay is already removed
+        .exception(
+            "/host/releases/{release_uuid}/overlays/{name}",
+            exception::delete(|ov: View<Overlay>| ov.status == OverlayStatus::Withdrawn)
+                .with_description(|Args((release_uuid, name)): Args<(String, String)>| {
+                    format!(
+                        "overlay '{name}' of host OS release '{release_uuid}' is waiting for a reboot"
+                    )
+                }),
         )
         // keep the record of the release the device is running; forgetting it
         // strands that release's overlay containers

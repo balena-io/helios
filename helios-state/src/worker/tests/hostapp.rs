@@ -784,11 +784,8 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
     // Dead and reports a failure it cannot avoid, and the container stays
     // registered until a boot unpins it.
     //
-    // `derive_overlay_status` reads that container as no overlay at all, which
-    // is what makes the removal converge: were it still derived as present, the
-    // target would go on asking for its removal and the planner would re-plan
-    // one on every seek until the reboot. The release keeps its other overlay,
-    // so the only work left is the reboot the removal recorded.
+    // The container is read as withdrawn, and its removal is skipped rather
+    // than re-planned on every seek. The only work left is the reboot.
     init_tracing();
     assert_workflow(
         json!({
@@ -815,6 +812,11 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                             "extra-modules": {
                                 "image": "registry2.balena-cloud.com/v2/extramodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
                                 "status": "active",
+                                "runtime": "extension",
+                            },
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "withdrawn",
                                 "runtime": "extension",
                             }
                         }
@@ -851,20 +853,13 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
 }
 
 #[test]
-fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
+fn it_waits_for_the_reboot_to_redeploy_a_withdrawn_overlay() {
     // The other direction of the same read. A withdrawal the engine could not
     // finish, and then the target asks for the same overlay at the same image
     // again, which is what re-enabling a fleet profile produces.
     //
-    // Derived as Failed, the Dead container would match
-    // `overlay_activation_failed` and wedge the release until an operator
-    // intervened. That guard is for an activation that ran and lost, and a
-    // removal the engine could not finish is not an activation verdict, so the
-    // planner deploys instead. The deploy fails while the dead container still
-    // reserves the name, and no budget bounds those retries.
-    //
-    // FIXME: the reboot that unpins the layer waits for this deploy, so the
-    // deploy keeps failing until something else reboots the device.
+    // The withdrawn container keeps the name until the OS removes it on boot,
+    // so the release waits for the reboot, and the deploy follows it.
     init_tracing();
     assert_workflow(
         json!({
@@ -887,7 +882,13 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                             "install_attempts": 0,
                         },
                         "status": "running",
-                        "overlays": {}
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "withdrawn",
+                                "runtime": "extension",
+                            }
+                        }
                     }
                 }
             },
@@ -916,11 +917,7 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                 }
             },
         }),
-        seq!(
-            "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot the device",
-            "activate host OS release 'target-release'",
-        ),
+        seq!("reboot the device"),
     );
 }
 
