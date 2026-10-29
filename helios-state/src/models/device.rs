@@ -43,6 +43,11 @@ pub struct Device {
     /// List of unsupervised volumes on the device
     #[mahler(internal, default)]
     pub volumes: List<LocalVolume>,
+
+    /// Whether a change only applies after a reboot. Always false in a target,
+    /// so a derived `true` schedules the reboot.
+    #[mahler(default)]
+    pub needs_reboot: bool,
 }
 
 impl Default for DeviceTarget {
@@ -52,6 +57,7 @@ impl Default for DeviceTarget {
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
             host: None,
+            needs_reboot: false,
         }
     }
 }
@@ -68,6 +74,7 @@ impl Device {
             #[cfg(feature = "balenahup")]
             host: os.map(Host::new),
             volumes: List::new(),
+            needs_reboot: false,
         }
     }
 }
@@ -304,6 +311,7 @@ impl From<Device> for DeviceTarget {
                 .collect(),
             #[cfg(feature = "balenahup")]
             host: host.map(|r| r.into()),
+            needs_reboot: false,
         }
     }
 }
@@ -353,6 +361,7 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
             // Get only the first hostapp if any
             #[cfg(feature = "balenahup")]
             host: hostapps.pop(),
+            needs_reboot: false,
         }
     }
 }
