@@ -1,4 +1,28 @@
 - commits:
+    - subject: Read OCI runtimes as part of state Runtime
+      hash: eccc248e2cc1b692b76afd38436016fa6f3e750c
+      body: |
+        Use the runtimes in state runtime validation
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Refactor helios-state config and resources into single Runtime type
+      hash: 9eda28cbcd4936bd700e00d60ed5e16d11cb0b81
+      body: |
+        The runtime is built via the `prepare` function and resources are
+        redistributed to callers by `start_seek`, reducing the number of
+        arguments passed to the function.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.10
+  title: ""
+  date: 2026-10-30T01:35:08.029Z
+- commits:
     - subject: Create bind mounts from balena feature labels
       hash: 4bbbaf5a3b8f47a2c4f44e906256b3455512f428
       body: |
