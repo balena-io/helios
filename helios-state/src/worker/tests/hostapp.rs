@@ -16,7 +16,6 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -61,7 +60,6 @@ fn it_deploys_and_activates_overlays_without_install_when_already_running_the_ta
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -109,7 +107,6 @@ fn it_deploys_overlays_before_installing_the_hostapp() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -158,7 +155,6 @@ fn it_deploys_multiple_overlays_before_installing() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -221,7 +217,6 @@ fn it_deploys_a_missing_target_overlay_before_the_reboot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -302,7 +297,6 @@ fn it_removes_an_overlay_dropped_from_the_target() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -365,7 +359,6 @@ fn it_removes_a_staged_overlay_dropped_from_the_target() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -425,7 +418,6 @@ fn it_withdraws_a_dropped_overlay_before_activating_the_staged_ones() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -498,7 +490,6 @@ fn it_removes_two_overlays_dropped_from_the_target() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -569,7 +560,6 @@ fn it_removes_a_stale_overlay_without_scheduling_a_reboot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -626,7 +616,6 @@ fn it_removes_a_failed_overlay_without_scheduling_a_reboot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -682,7 +671,6 @@ fn it_removes_a_second_overlay_while_the_first_removals_reboot_is_pending() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -746,7 +734,6 @@ fn it_reboots_to_apply_a_pending_overlay_removal() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -807,7 +794,6 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -882,7 +868,6 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -947,7 +932,6 @@ fn it_defers_the_overlay_reboot_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "pending_reboot": true,
                 "releases": {
@@ -1010,7 +994,6 @@ fn it_defers_an_overlay_removal_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "target-release": {
@@ -1074,7 +1057,6 @@ fn it_aborts_when_an_overlay_activation_failed() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1140,7 +1122,6 @@ fn it_redeploys_an_overlay_whose_activation_failed_at_a_new_image() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1210,7 +1191,6 @@ fn it_redeploys_an_overlay_whose_target_image_changed() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1278,7 +1258,6 @@ fn it_redeploys_an_overlay_created_against_another_runtime() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1350,7 +1329,6 @@ fn it_redeploys_an_overlay_whose_kernel_did_not_boot() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1417,7 +1395,6 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1474,7 +1451,6 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1538,7 +1514,6 @@ fn it_skips_a_hostapp_install_after_too_many_install_failures() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1599,7 +1574,6 @@ fn it_waits_while_the_os_release_is_being_validated() {
                     "version": "5.7.3",
                     "build": "abcd1234"
                 },
-                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "target-release": {
@@ -1659,7 +1633,6 @@ fn it_defers_installing_a_new_target_release_while_validation_runs() {
                     "version": "5.7.3",
                     "build": "abcd1234"
                 },
-                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {}
             }
@@ -1703,7 +1676,6 @@ fn it_ignores_a_target_that_deletes_the_hostapp() {
                     "version": "5.7.3",
                     "build": "abcd1234",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -1743,7 +1715,6 @@ fn it_adopts_a_running_release_with_no_recorded_state() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {}
             },
         }),
@@ -1782,7 +1753,6 @@ fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -1858,7 +1828,6 @@ fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -1927,7 +1896,6 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -1991,7 +1959,6 @@ fn it_removes_a_superseded_releases_overlays_when_it_forgets_the_release() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -2064,7 +2031,6 @@ fn it_keeps_the_running_releases_overlays_while_its_replacement_installs() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -2123,7 +2089,6 @@ fn it_keeps_a_superseded_release_while_the_new_one_is_validating() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": ["extension"],
                 "host_validating": true,
                 "releases": {
                     "old-release": {
@@ -2198,7 +2163,6 @@ fn it_removes_a_dropped_overlay_while_forgetting_a_superseded_release() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": ["extension"],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",
@@ -2280,7 +2244,6 @@ fn it_reboots_for_a_removal_while_a_frozen_release_holds_a_dropped_overlay() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -2348,7 +2311,6 @@ fn it_reboots_for_a_removal_while_the_running_release_awaits_its_replacement() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
-                "engine_runtimes": ["extension"],
                 "pending_reboot": true,
                 "releases": {
                     "old-release": {
@@ -2416,7 +2378,6 @@ fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() 
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
-                "engine_runtimes": ["extension"],
             },
         }),
         json!({
@@ -2465,7 +2426,6 @@ fn it_installs_a_release_without_overlays_on_a_pre_extension_host() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
-                "engine_runtimes": [],
             },
         }),
         json!({
@@ -2503,7 +2463,6 @@ fn it_reboots_for_a_removal_while_a_pre_extension_host_holds_a_declined_release(
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
-                "engine_runtimes": [],
                 "pending_reboot": true,
                 "releases": {
                     "target-release": {
@@ -2547,7 +2506,6 @@ fn it_withdraws_the_last_overlay_on_a_pre_extension_host() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": [],
                 "releases": {
                     "target-release": {
                         "app": "hostapp-uuid",
@@ -2602,7 +2560,6 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
             "uuid": "my-device-uuid",
             "host": {
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "engine_runtimes": [],
                 "releases": {
                     "old-release": {
                         "app": "hostapp-uuid",

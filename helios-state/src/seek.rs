@@ -13,15 +13,15 @@ use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::common_types::Uuid;
-use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError};
+use crate::legacy::{self, LegacyConfig, ProxyState, StateUpdateError as LegacyUpdateError};
 use crate::util::interrupt::Interrupt;
 use crate::util::locking::ForceAcquireLocks;
 use crate::util::logs;
 
-use super::config::Resources;
 use super::models::{Device, DeviceTarget};
-use super::read::{self, StateReader};
-use super::worker::{LocalWorker, create};
+use super::read::{self, Reader};
+use super::runtime::Runtime;
+use super::worker::{self, LocalWorker};
 
 /// Represents the service update status according to
 /// https://docs.balena.io/learn/manage/device-statuses/#update-statuses
@@ -137,7 +137,7 @@ pub enum SeekError {
     SeekTargetState(#[from] mahler::error::Error),
 
     #[error("failed to update state on legacy Supervisor: {0}")]
-    LegacyUpdate(#[from] StateUpdateError),
+    LegacyUpdate(#[from] LegacyUpdateError),
 }
 
 #[derive(Debug, Clone)]
@@ -236,7 +236,7 @@ async fn seek_target(
     interrupt: &Interrupt,
     state_tx: &Sender<LocalState>,
     retry_interval: Duration,
-    state_reader: &StateReader,
+    state_reader: &Reader,
 ) -> Result<UpdateStatus, SeekError> {
     info!("applying target state");
 
@@ -330,6 +330,7 @@ async fn seek_target(
                             // A failed task reports no state back, but it may have
                             // changed the engine before failing.
                             *current_state = state_reader.read().await?;
+                            // TODO: we need to report the state here
 
                             // break-the inner loop after the back-off
                             break;
@@ -347,46 +348,34 @@ async fn seek_target(
 
 #[instrument(name = "seek", skip_all, err)]
 pub async fn start_seek(
-    runtime: Resources,
+    // runtime resources and configuration for the state loop
+    runtime: Runtime,
+    // initial state for the loop
     initial_state: Device,
+    // configure the state of legacy proxy, it should be removed at some point
     proxy_state: Option<ProxyState>,
+    // credentials for the legacy API
     legacy_config: Option<LegacyConfig>,
+    // channel to receive target state requests
     mut seek_rx: Receiver<SeekRequest>,
+    // channel to report state changes
     state_tx: Sender<LocalState>,
-    retry_interval: Duration,
 ) -> Result<(), SeekError> {
     info!("waiting for target");
 
-    // Keep track of the current state and update status
-    let uuid = initial_state.uuid.clone();
-    #[cfg(feature = "balenahup")]
-    let os = initial_state.host.as_ref().map(|host| host.meta.clone());
-    #[cfg(not(feature = "balenahup"))]
-    let os: Option<crate::common_types::OperatingSystem> = None;
-    let mut current_state = initial_state.clone();
+    let mut current_state = initial_state;
     let mut update_status = UpdateStatus::default();
 
-    let Resources {
-        docker,
-        local_store,
-        registry_auth_client,
+    let Runtime {
+        oci,
+        retry_interval,
+        resources,
         host_runtime_dir,
+        reader: state_reader,
     } = runtime;
 
-    let state_reader = StateReader {
-        docker: docker.clone(),
-        local_store: local_store.clone(),
-        uuid: uuid.clone(),
-        os: os.clone(),
-    };
-
     // Create an uninitialized local worker
-    let worker = create(
-        docker.clone(),
-        local_store.clone(),
-        host_runtime_dir.clone(),
-        registry_auth_client.clone(),
-    );
+    let worker = worker::create(host_runtime_dir.clone(), resources.clone());
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
@@ -494,6 +483,7 @@ pub async fn start_seek(
                     let prev_seek_state = prev_seek_state.clone();
                     let legacy_config = legacy_config.clone();
                     let host_runtime_dir = host_runtime_dir.clone();
+                    let runtimes = &oci.runtimes;
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
@@ -531,7 +521,8 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            let refused = device_target.test_runtime_support(current_state);
+                            let refused =
+                                device_target.test_runtime_support(current_state, runtimes);
                             for reason in &refused {
                                 error!("{reason}");
                             }
@@ -577,7 +568,7 @@ pub async fn start_seek(
                             {
                                 // Tell the caller that they need to reset the worker
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Legacy),
+                                Err(LegacyUpdateError::Interrupted) => Ok(SeekState::Legacy),
                                 Err(e) => return Err(e)?,
                             };
                         }
@@ -596,7 +587,7 @@ pub async fn start_seek(
                             .await
                             {
                                 Ok(_) => Ok(SeekState::Reset),
-                                Err(StateUpdateError::Interrupted) => Ok(SeekState::Legacy),
+                                Err(LegacyUpdateError::Interrupted) => Ok(SeekState::Legacy),
                                 Err(e) => Err(e)?,
                             };
                         }
