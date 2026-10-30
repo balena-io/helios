@@ -590,7 +590,8 @@ impl<'de> Deserialize<'de> for Release {
                 }
             }
 
-            features::add_feature_mounts(svc_name, svc).map_err(serde::de::Error::custom)?;
+            features::add_feature_mounts(svc_name, svc, &mut raw.volumes)
+                .map_err(serde::de::Error::custom)?;
 
             // Verify each volume-type mount references a volume declared at the release level.
             for mount in svc.composition.volumes.iter() {
