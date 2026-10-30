@@ -151,8 +151,8 @@ fn report_host_app(
                 download_progress: None,
             },
         ))
-        .chain(release.overlays.iter().map(|(name, overlay)| {
-            (
+        .chain(release.overlays.iter().filter_map(|(name, overlay)| {
+            Some((
                 name.clone(),
                 ServiceReport {
                     image: overlay.image.repo(),
@@ -167,10 +167,12 @@ fn report_host_app(
                         // the activation container did not exit cleanly: a
                         // terminal failure, not work still in progress
                         OverlayStatus::Failed => ServiceStatus::Dead,
+                        // already removed
+                        OverlayStatus::Withdrawn => return None,
                     },
                     download_progress: None,
                 },
-            )
+            ))
         }))
         .collect();
 

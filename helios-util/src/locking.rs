@@ -272,6 +272,45 @@ impl LockSet {
         Ok(())
     }
 
+    /// Release every given lock, even if one fails, returning the first error.
+    ///
+    /// This is a sync operation so use [`crate::fs::run_async`] if running in an async
+    /// context
+    pub fn unlock_many(&self, paths: impl IntoIterator<Item = PathBuf>) -> Result<(), Error> {
+        let mut res = Ok(());
+        for path in paths {
+            res = res.and(self.unlock(path));
+        }
+        res
+    }
+
+    /// Returns the first update lock under `dir` held outside this set, or
+    /// `None` if there is none.
+    ///
+    /// Free locks are only probed and locks in the set are skipped. The answer
+    /// is point-in-time: a lock taken after the scan is not seen.
+    ///
+    /// This is a sync operation so use [`crate::fs::run_async`] if running in an async
+    /// context
+    pub fn find_blocking(&self, dir: &Path) -> io::Result<Option<PathBuf>> {
+        for path in find_update_locks(dir)? {
+            // Held by helios, which authorizes the disruption
+            if self.contains(&path) {
+                continue;
+            }
+            match self.try_lock(path.clone(), false) {
+                // Free: release the probe
+                Ok(()) => {
+                    let _ = self.unlock(path);
+                }
+                // Held by another party (a user service).
+                Err(Error::WouldBlock) => return Ok(Some(path)),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(None)
+    }
+
     pub fn contains(&self, path: &Path) -> bool {
         let locks = self.locks.lock().unwrap_or_else(|p| p.into_inner());
         locks.contains_key(path)
@@ -594,5 +633,36 @@ mod tests {
         fs::remove_file(&path).unwrap();
 
         set.unlock(path.clone()).unwrap();
+    }
+
+    #[test]
+    fn find_blocking_reports_a_user_lock_and_leaves_it_intact() {
+        // A user lock is reported and left on disk.
+        let dir = tempdir().unwrap();
+        let svc = dir.path().join("app-uuid").join("svc");
+        fs::create_dir_all(&svc).unwrap();
+        let path = svc.join(UPDATE_LOCK_FILENAME);
+        fs::write(&path, b"user-held").unwrap();
+
+        let set = LockSet::new();
+        assert_eq!(set.find_blocking(dir.path()).unwrap(), Some(path.clone()));
+        assert!(path.exists());
+        assert_eq!(fs::read(&path).unwrap(), b"user-held");
+    }
+
+    #[test]
+    fn find_blocking_skips_a_lock_helios_already_holds() {
+        // A lock helios holds is not blocking, and stays held.
+        let dir = tempdir().unwrap();
+        let svc = dir.path().join("app-uuid").join("svc");
+        fs::create_dir_all(&svc).unwrap();
+        let path = svc.join(UPDATE_LOCK_FILENAME);
+
+        let set = LockSet::new();
+        set.try_lock(path.clone(), false).unwrap();
+
+        assert_eq!(set.find_blocking(dir.path()).unwrap(), None);
+        assert!(path.exists());
+        assert!(set.contains(&path));
     }
 }
