@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use mahler::state::{List, Map, State};
+use tracing::warn;
 
-use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid};
+use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid, Value as EnvValue};
 use crate::oci::{self, BindPropagation, Mount};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
+use crate::runtime::RemoteConfig;
 
 use super::app::App;
 use super::image::Image;
@@ -94,7 +96,12 @@ impl DeviceTarget {
     /// helios restart), they will also cause a service restart
     ///
     /// This information will also show on the state returned by helios API
-    pub fn add_runtime_context(&mut self, device: &Device, host_runtime_dir: &HostRuntimeDir) {
+    pub fn add_runtime_context(
+        &mut self,
+        device: &Device,
+        host_runtime_dir: &HostRuntimeDir,
+        remote_config: &Option<RemoteConfig>,
+    ) {
         #[cfg(feature = "balenahup")]
         let (os_version, os_build) = if let Some(host) = &device.host {
             (Some(host.meta.to_string()), host.meta.build.clone())
@@ -130,6 +137,32 @@ impl DeviceTarget {
                         propagation: BindPropagation::Rprivate,
                         create_host_path: true,
                     });
+
+                    // Insert the remote endpoint credentials if the `balena-api`
+                    // feature is requested
+                    if let Some("1" | "true") = svc
+                        .config
+                        .labels
+                        .remove("io.balena.features.balena-api")
+                        .as_deref()
+                    {
+                        if let Some(remote) = remote_config.as_ref() {
+                            svc.config.environment.insert(
+                                "BALENA_API_KEY".to_string(),
+                                Some(EnvValue::String(remote.api_key.to_string())),
+                            );
+                            svc.config.environment.insert(
+                                "BALENA_API_URL".to_string(),
+                                Some(EnvValue::String(remote.api_endpoint.to_string())),
+                            );
+                        } else {
+                            // FIXME: a service requesting API credentials on an unmanaged device
+                            // should be rejected. That will be added later to test_runtime_support
+                            warn!(
+                                "no remote credentials are available to satisfy the feature `io.balena.features.balena-api`"
+                            );
+                        }
+                    }
 
                     #[cfg(feature = "balenahup")]
                     if let Some(host_os_version) = &os_version {
@@ -285,6 +318,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::common_types::ApiKey;
+    use crate::models::ServiceTarget;
+    use crate::util::http::Uri;
 
     #[test]
     fn device_state_should_be_serializable_into_target() {
@@ -467,7 +503,7 @@ mod tests {
             {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
 
         let volumes = &release_of(&target).volumes;
         assert!(!volumes.contains_key("my-vol"));
@@ -486,7 +522,7 @@ mod tests {
             {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
 
         let volumes = &release_of(&target).volumes;
         assert!(volumes.contains_key("my-vol"));
@@ -501,10 +537,131 @@ mod tests {
             {"oci_name": "4321_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()));
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
 
         let volumes = &release_of(&target).volumes;
         assert!(volumes.contains_key("my-vol"));
         assert_eq!(mount_sources(&target), vec!["my-vol".to_string()]);
+    }
+
+    /// Target of a single app with one release, with `my-service` carrying `labels`.
+    fn target_with_labels(labels: serde_json::Value) -> DeviceTarget {
+        serde_json::from_value(json!({
+            "apps": {
+                "my-app-uuid": {
+                    "id": 1234,
+                    "name": "my-app",
+                    "releases": {
+                        "my-release-uuid": {
+                            "installed": true,
+                            "services": {
+                                "my-service": {
+                                    "id": 1,
+                                    "image": "alpine:latest",
+                                    "config": {"labels": labels},
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn remote_config() -> Option<RemoteConfig> {
+        Some(RemoteConfig {
+            api_endpoint: Uri::from_static("https://api.balena-cloud.com"),
+            api_key: ApiKey::from("my-api-key".to_string()),
+        })
+    }
+
+    fn service_of(target: &DeviceTarget) -> &ServiceTarget {
+        release_of(target).services.get("my-service").unwrap()
+    }
+
+    #[test]
+    fn balena_api_feature_injects_remote_credentials() {
+        for value in ["1", "true"] {
+            let mut target = target_with_labels(json!({"io.balena.features.balena-api": value}));
+            let device = device_with_volumes(json!([]));
+
+            target.add_runtime_context(
+                &device,
+                &HostRuntimeDir("/run/helios".into()),
+                &remote_config(),
+            );
+
+            let svc = service_of(&target);
+            assert_eq!(
+                svc.config.environment.get("BALENA_API_KEY"),
+                Some(&Some(EnvValue::String("my-api-key".to_string())))
+            );
+            assert_eq!(
+                svc.config.environment.get("BALENA_API_URL"),
+                Some(&Some(EnvValue::String(
+                    "https://api.balena-cloud.com".to_string()
+                )))
+            );
+            assert!(
+                !svc.config
+                    .labels
+                    .contains_key("io.balena.features.balena-api")
+            );
+        }
+    }
+
+    #[test]
+    fn balena_api_feature_not_enabled_does_not_inject_credentials() {
+        let mut target = target_with_labels(json!({"io.balena.features.balena-api": "0"}));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            &remote_config(),
+        );
+
+        let svc = service_of(&target);
+        assert!(!svc.config.environment.contains_key("BALENA_API_KEY"));
+        assert!(!svc.config.environment.contains_key("BALENA_API_URL"));
+        assert!(
+            !svc.config
+                .labels
+                .contains_key("io.balena.features.balena-api")
+        );
+    }
+
+    #[test]
+    fn missing_balena_api_label_does_not_inject_credentials() {
+        let mut target = target_with_labels(json!({}));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            &remote_config(),
+        );
+
+        let svc = service_of(&target);
+        assert!(!svc.config.environment.contains_key("BALENA_API_KEY"));
+        assert!(!svc.config.environment.contains_key("BALENA_API_URL"));
+    }
+
+    #[test]
+    fn balena_api_feature_without_remote_config_does_not_inject_credentials() {
+        let mut target = target_with_labels(json!({"io.balena.features.balena-api": "1"}));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
+
+        let svc = service_of(&target);
+        assert!(!svc.config.environment.contains_key("BALENA_API_KEY"));
+        assert!(!svc.config.environment.contains_key("BALENA_API_URL"));
+        assert!(
+            !svc.config
+                .labels
+                .contains_key("io.balena.features.balena-api")
+        );
     }
 }
