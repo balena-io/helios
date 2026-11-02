@@ -46,6 +46,8 @@ pub struct Runtime {
     pub(crate) reader: Reader,
     /// OCI engine context
     pub(crate) oci: OciContext,
+    /// Remote credentials
+    pub(crate) remote_config: Option<RemoteConfig>,
 }
 
 /// Oci engine information
@@ -85,12 +87,12 @@ pub async fn prepare(
     } = host_config;
 
     // Create a registry auth client using the remote credentials
-    let registry_auth_client = remote_config.map(
+    let registry_auth_client = remote_config.as_ref().map(
         |RemoteConfig {
              api_endpoint,
              api_key,
              ..
-         }| RegistryAuth::new(api_endpoint, api_key),
+         }| RegistryAuth::new(api_endpoint.clone(), api_key.clone()),
     );
 
     // read OCI context only once
@@ -117,6 +119,7 @@ pub async fn prepare(
         },
         reader,
         oci,
+        remote_config,
     };
 
     Ok((runtime, initial_state))

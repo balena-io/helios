@@ -372,6 +372,7 @@ pub async fn start_seek(
         resources,
         host_runtime_dir,
         reader: state_reader,
+        remote_config,
     } = runtime;
 
     // Create an uninitialized local worker
@@ -482,8 +483,9 @@ pub async fn start_seek(
                     let proxy_state = &proxy_state;
                     let prev_seek_state = prev_seek_state.clone();
                     let legacy_config = legacy_config.clone();
-                    let host_runtime_dir = host_runtime_dir.clone();
+                    let host_runtime_dir = &host_runtime_dir;
                     let runtimes = &oci.runtimes;
+                    let remote_config = &remote_config;
 
                     // Allow reporting from inside the future
                     let state_tx = &state_tx;
@@ -527,7 +529,11 @@ pub async fn start_seek(
                                 error!("{reason}");
                             }
 
-                            device_target.add_runtime_context(current_state, &host_runtime_dir);
+                            device_target.add_runtime_context(
+                                current_state,
+                                host_runtime_dir,
+                                remote_config,
+                            );
 
                             // Look for a plan to the target
                             update_status = seek_target(

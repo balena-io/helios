@@ -77,6 +77,13 @@ mod uri {
 
     impl Display for Uri {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // an absolute URI with an empty path is normalized to "/" by the parser
+            if let (Some(scheme), Some(authority)) = (self.0.scheme(), self.0.authority())
+                && self.0.path() == "/"
+                && self.0.query().is_none()
+            {
+                return write!(f, "{scheme}://{authority}");
+            }
             self.0.fmt(f)
         }
     }
@@ -125,6 +132,45 @@ mod uri {
         {
             let s = String::deserialize(deserializer)?;
             s.parse().map_err(serde::de::Error::custom)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn display_omits_root_path_of_absolute_uri() {
+            for src in [
+                "https://api.balena-cloud.com",
+                "https://api.balena-cloud.com/",
+            ] {
+                let uri: Uri = src.parse().unwrap();
+                assert_eq!(uri.to_string(), "https://api.balena-cloud.com");
+            }
+            let uri: Uri = "http://localhost:48484".parse().unwrap();
+            assert_eq!(uri.to_string(), "http://localhost:48484");
+        }
+
+        #[test]
+        fn display_keeps_non_root_paths_and_queries() {
+            for src in [
+                "https://api.balena-cloud.com/v6/",
+                "https://api.balena-cloud.com/v6",
+                "https://api.balena-cloud.com/?foo=bar",
+                "/tmp/helios/api.sock",
+            ] {
+                let uri: Uri = src.parse().unwrap();
+                assert_eq!(uri.to_string(), src);
+            }
+        }
+
+        #[test]
+        fn serialized_uri_deserializes_to_an_equal_uri() {
+            let uri: Uri = "https://api.balena-cloud.com/".parse().unwrap();
+            let json = serde_json::to_string(&uri).unwrap();
+            assert_eq!(json, "\"https://api.balena-cloud.com\"");
+            assert_eq!(serde_json::from_str::<Uri>(&json).unwrap(), uri);
         }
     }
 }
