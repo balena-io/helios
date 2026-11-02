@@ -1,4 +1,37 @@
 - commits:
+    - subject: Add support for `io.balena.features.balena-api`
+      hash: 8e73ad71858230c2cfd4620aa3e1e3339ffc79ea
+      body: |
+        The feature adds `BALENA_API_KEY` and `BALENA_API_URL` from the service
+        remote configuration (if any). An unmanaged device ignores the label for
+        now although a future fix will need to reject the target in that
+        scenario.
+
+        This does not maintain backwards compatibility with `RESIN_` variables
+        as the supervisor did.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Normalize Uri display to remove trailing slashes
+      hash: 2fcbb93af05c33ee95cffca8fd96381e7ab6ba99
+      body: >
+        A uri with and empty path or a path that equals to `/` now removes the
+
+        trailing slash (that was added by the upstream `from_static`)
+
+        implementation. This ensures that use of URI is consistent accross the
+        code.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.11
+  title: ""
+  date: 2026-11-02T23:29:58.857Z
+- commits:
     - subject: Read OCI runtimes as part of state Runtime
       hash: eccc248e2cc1b692b76afd38436016fa6f3e750c
       body: |
