@@ -371,6 +371,7 @@ pub async fn start_seek(
         retry_interval,
         resources,
         host_runtime_dir,
+        host_docker_sock,
         reader: state_reader,
         remote_config,
     } = runtime;
@@ -484,6 +485,7 @@ pub async fn start_seek(
                     let prev_seek_state = prev_seek_state.clone();
                     let legacy_config = legacy_config.clone();
                     let host_runtime_dir = &host_runtime_dir;
+                    let host_docker_sock = host_docker_sock.as_ref();
                     let runtimes = &oci.runtimes;
                     let remote_config = &remote_config;
 
@@ -532,6 +534,7 @@ pub async fn start_seek(
                             device_target.add_runtime_context(
                                 current_state,
                                 host_runtime_dir,
+                                host_docker_sock,
                                 remote_config,
                             );
 

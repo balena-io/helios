@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use mahler::state::{List, Map, State};
 use tracing::warn;
@@ -71,6 +72,11 @@ impl Device {
     }
 }
 
+/// The target for the docker socket on the container. We don't use
+/// the default `/var/run/docker.sock` to avoid clashing with a docker-in-docker
+/// set-up.
+const CONTAINER_DOCKER_SOCK: &str = "/host/run/balena-engine.sock";
+
 impl DeviceTarget {
     /// Refuse the parts of the target this device cannot run, and say why.
     ///
@@ -100,6 +106,7 @@ impl DeviceTarget {
         &mut self,
         device: &Device,
         host_runtime_dir: &HostRuntimeDir,
+        host_docker_sock: &Path,
         remote_config: &Option<RemoteConfig>,
     ) {
         #[cfg(feature = "balenahup")]
@@ -162,6 +169,39 @@ impl DeviceTarget {
                                 "no remote credentials are available to satisfy the feature `io.balena.features.balena-api`"
                             );
                         }
+                    }
+
+                    // Mount the host socket and set the BALENA_DOCKER_HOST env var in containers
+                    // that define the `io.balena.features.balena-socket`. DOCKER_HOST is also set
+                    // unless already defined by the service
+                    if let Some("1" | "true") = svc
+                        .config
+                        .labels
+                        .remove("io.balena.features.balena-socket")
+                        .as_deref()
+                    {
+                        svc.config
+                            .volumes
+                            .retain(|m| m.target() != CONTAINER_DOCKER_SOCK);
+                        svc.config.volumes.insert(Mount::Bind {
+                            target: CONTAINER_DOCKER_SOCK.to_string(),
+                            source: host_docker_sock.to_string_lossy().to_string(),
+                            read_only: false,
+                            propagation: BindPropagation::Rprivate,
+                            // we don't want docker creating a directory for the bind
+                            create_host_path: false,
+                        });
+                        let docker_host =
+                            Some(EnvValue::String(format!("unix://{CONTAINER_DOCKER_SOCK}")));
+
+                        // only add the env var if not defined
+                        svc.config
+                            .environment
+                            .entry("DOCKER_HOST".to_string())
+                            .or_insert(docker_host.clone());
+                        svc.config
+                            .environment
+                            .insert("BALENA_DOCKER_HOST".to_string(), docker_host);
                     }
 
                     #[cfg(feature = "balenahup")]
@@ -321,6 +361,8 @@ mod tests {
     use crate::common_types::ApiKey;
     use crate::models::ServiceTarget;
     use crate::util::http::Uri;
+
+    const DEFAULT_HOST_DOCKER_SOCK: &str = "/var/run/docker.sock";
 
     #[test]
     fn device_state_should_be_serializable_into_target() {
@@ -503,7 +545,12 @@ mod tests {
             {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
 
         let volumes = &release_of(&target).volumes;
         assert!(!volumes.contains_key("my-vol"));
@@ -522,7 +569,12 @@ mod tests {
             {"oci_name": "1234_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
 
         let volumes = &release_of(&target).volumes;
         assert!(volumes.contains_key("my-vol"));
@@ -537,7 +589,12 @@ mod tests {
             {"oci_name": "4321_my-vol", "config": {"driver": "local"}}
         ]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
 
         let volumes = &release_of(&target).volumes;
         assert!(volumes.contains_key("my-vol"));
@@ -546,6 +603,11 @@ mod tests {
 
     /// Target of a single app with one release, with `my-service` carrying `labels`.
     fn target_with_labels(labels: serde_json::Value) -> DeviceTarget {
+        target_with_config(json!({"labels": labels}))
+    }
+
+    /// Target of a single app with one release, with `my-service` using `config`.
+    fn target_with_config(config: serde_json::Value) -> DeviceTarget {
         serde_json::from_value(json!({
             "apps": {
                 "my-app-uuid": {
@@ -558,7 +620,7 @@ mod tests {
                                 "my-service": {
                                     "id": 1,
                                     "image": "alpine:latest",
-                                    "config": {"labels": labels},
+                                    "config": config,
                                 },
                             },
                         }
@@ -589,6 +651,7 @@ mod tests {
             target.add_runtime_context(
                 &device,
                 &HostRuntimeDir("/run/helios".into()),
+                Path::new(DEFAULT_HOST_DOCKER_SOCK),
                 &remote_config(),
             );
 
@@ -619,6 +682,7 @@ mod tests {
         target.add_runtime_context(
             &device,
             &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
             &remote_config(),
         );
 
@@ -640,6 +704,7 @@ mod tests {
         target.add_runtime_context(
             &device,
             &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
             &remote_config(),
         );
 
@@ -653,7 +718,12 @@ mod tests {
         let mut target = target_with_labels(json!({"io.balena.features.balena-api": "1"}));
         let device = device_with_volumes(json!([]));
 
-        target.add_runtime_context(&device, &HostRuntimeDir("/run/helios".into()), &None);
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
 
         let svc = service_of(&target);
         assert!(!svc.config.environment.contains_key("BALENA_API_KEY"));
@@ -663,5 +733,160 @@ mod tests {
                 .labels
                 .contains_key("io.balena.features.balena-api")
         );
+    }
+
+    /// Mounts of `my-service` targeting the engine socket path.
+    fn socket_mounts(target: &DeviceTarget) -> Vec<&Mount> {
+        service_of(target)
+            .config
+            .volumes
+            .iter()
+            .filter(|m| m.target() == "/host/run/balena-engine.sock")
+            .collect()
+    }
+
+    #[test]
+    fn balena_socket_feature_mounts_engine_socket() {
+        for value in ["1", "true"] {
+            let mut target = target_with_labels(json!({"io.balena.features.balena-socket": value}));
+            let device = device_with_volumes(json!([]));
+
+            target.add_runtime_context(
+                &device,
+                &HostRuntimeDir("/run/helios".into()),
+                Path::new("/run/balena-engine.sock"),
+                &None,
+            );
+
+            assert_eq!(
+                socket_mounts(&target),
+                vec![&Mount::Bind {
+                    target: "/host/run/balena-engine.sock".to_string(),
+                    source: "/run/balena-engine.sock".to_string(),
+                    read_only: false,
+                    propagation: BindPropagation::Rprivate,
+                    create_host_path: false,
+                }]
+            );
+            let svc = service_of(&target);
+            let docker_host = Some(EnvValue::String(
+                "unix:///host/run/balena-engine.sock".to_string(),
+            ));
+            assert_eq!(
+                svc.config.environment.get("DOCKER_HOST"),
+                Some(&docker_host)
+            );
+            assert_eq!(
+                svc.config.environment.get("BALENA_DOCKER_HOST"),
+                Some(&docker_host)
+            );
+            assert!(
+                !svc.config
+                    .labels
+                    .contains_key("io.balena.features.balena-socket")
+            );
+        }
+    }
+
+    #[test]
+    fn balena_socket_feature_overrides_user_mount_at_socket_path() {
+        let mut target = target_with_config(json!({
+            "labels": {"io.balena.features.balena-socket": "1"},
+            "volumes": [
+                {
+                    "type": "bind",
+                    "source": "/some/other.sock",
+                    "target": "/host/run/balena-engine.sock"
+                }
+            ]
+        }));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+
+        let mounts = socket_mounts(&target);
+        assert_eq!(mounts.len(), 1);
+        assert!(matches!(
+            mounts[0],
+            Mount::Bind { source, .. } if source == DEFAULT_HOST_DOCKER_SOCK
+        ));
+    }
+
+    #[test]
+    fn balena_socket_feature_keeps_user_docker_host_but_overrides_balena_docker_host() {
+        let mut target = target_with_config(json!({
+            "labels": {"io.balena.features.balena-socket": "1"},
+            "environment": {
+                "DOCKER_HOST": "tcp://other:2375",
+                "BALENA_DOCKER_HOST": "tcp://other:2375"
+            }
+        }));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+
+        let svc = service_of(&target);
+        assert_eq!(socket_mounts(&target).len(), 1);
+        assert_eq!(
+            svc.config.environment.get("DOCKER_HOST"),
+            Some(&Some(EnvValue::String("tcp://other:2375".to_string())))
+        );
+        assert_eq!(
+            svc.config.environment.get("BALENA_DOCKER_HOST"),
+            Some(&Some(EnvValue::String(
+                "unix:///host/run/balena-engine.sock".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn balena_socket_feature_not_enabled_does_not_mount_engine_socket() {
+        let mut target = target_with_labels(json!({"io.balena.features.balena-socket": "0"}));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+
+        let svc = service_of(&target);
+        assert!(socket_mounts(&target).is_empty());
+        assert!(!svc.config.environment.contains_key("DOCKER_HOST"));
+        assert!(!svc.config.environment.contains_key("BALENA_DOCKER_HOST"));
+        assert!(
+            !svc.config
+                .labels
+                .contains_key("io.balena.features.balena-socket")
+        );
+    }
+
+    #[test]
+    fn missing_balena_socket_label_does_not_mount_engine_socket() {
+        let mut target = target_with_labels(json!({}));
+        let device = device_with_volumes(json!([]));
+
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+
+        let svc = service_of(&target);
+        assert!(socket_mounts(&target).is_empty());
+        assert!(!svc.config.environment.contains_key("DOCKER_HOST"));
+        assert!(!svc.config.environment.contains_key("BALENA_DOCKER_HOST"));
     }
 }

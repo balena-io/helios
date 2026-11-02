@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let host_config = HostConfig {
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
+        host_docker_sock: cli.host_docker_sock,
     };
 
     let retry_interval = cli.local_retry_interval.unwrap_or(Duration::from_secs(30));

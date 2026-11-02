@@ -56,6 +56,14 @@ if [ -n "${BALENA_HOST_RUNTIME_DIR}" ]; then
   export HELIOS_HOST_RUNTIME_DIR
 fi
 
+# Do not allow the host socket to be configurable
+unset HELIOS_HOST_DOCKER_SOCK
+if [ -n "${BALENA_HOST_DOCKER_SOCK}" ]; then
+  HELIOS_HOST_DOCKER_SOCK="${BALENA_HOST_DOCKER_SOCK}"
+  unset BALENA_HOST_DOCKER_SOCK
+  export HELIOS_HOST_DOCKER_SOCK
+fi
+
 # Run in unmanaged mode if the legacy Supervisor is unmanaged
 if [ -n "${BALENA_API_URL}" ] && [ -n "${BALENA_API_KEY}" ]; then
   HELIOS_REMOTE_API_ENDPOINT="${BALENA_API_URL}"

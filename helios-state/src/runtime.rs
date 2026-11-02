@@ -10,10 +10,10 @@ use crate::read::{self, Reader};
 use crate::store::DocumentStore;
 use crate::util::dirs;
 use crate::util::http::Uri;
-
 pub struct HostConfig {
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
+    pub host_docker_sock: PathBuf,
 }
 
 /// Remote API configuration
@@ -40,6 +40,8 @@ pub struct Runtime {
     pub(crate) retry_interval: Duration,
     /// The host path for runtime files
     pub(crate) host_runtime_dir: HostRuntimeDir,
+    /// The host path for the docker API compatible engine socket
+    pub(crate) host_docker_sock: PathBuf,
     /// Runtime resources
     pub(crate) resources: Resources,
     /// State reader
@@ -84,6 +86,7 @@ pub async fn prepare(
     let HostConfig {
         host_os,
         host_runtime_dir,
+        host_docker_sock,
     } = host_config;
 
     // Create a registry auth client using the remote credentials
@@ -112,6 +115,7 @@ pub async fn prepare(
     let runtime = Runtime {
         retry_interval,
         host_runtime_dir: HostRuntimeDir(host_runtime_dir),
+        host_docker_sock,
         resources: Resources {
             docker,
             registry_auth_client,
