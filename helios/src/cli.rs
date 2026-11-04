@@ -57,6 +57,15 @@ pub struct DaemonArgs {
     )]
     pub host_runtime_dir: Option<PathBuf>,
 
+    /// Host OS path for the docker API compatible engine socket
+    #[arg(
+        env = "HELIOS_HOST_DOCKER_SOCK",
+        long = "host-docker-sock",
+        value_name = "path",
+        default_value = "/var/run/docker.sock"
+    )]
+    pub host_docker_sock: PathBuf,
+
     /// Local API listen address
     #[arg(
         env = "HELIOS_LOCAL_API_ADDRESS",
