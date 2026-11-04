@@ -1,10 +1,10 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 
 use super::labels::Labels;
 
 /// Target volume as defined by the remote backend
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Volume {
     #[serde(default)]
     pub driver: Option<String>,
@@ -12,6 +12,19 @@ pub struct Volume {
     pub driver_opts: HashMap<String, String>,
     #[serde(default)]
     pub labels: Labels,
+    /// The volume exists outside the app lifecycle. External volumes
+    /// are not allowed as input from the remote, but are created by feature labels.
+    #[serde(default, deserialize_with = "reject_external")]
+    pub external: bool,
+}
+
+fn reject_external<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    if bool::deserialize(deserializer)? {
+        return Err(serde::de::Error::custom(
+            "external volumes are not supported",
+        ));
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -25,6 +38,19 @@ mod tests {
         assert_eq!(vol.driver, None);
         assert!(vol.driver_opts.is_empty());
         assert!(vol.labels.is_empty());
+        assert!(!vol.external);
+    }
+
+    #[test]
+    fn test_volume_rejects_external_input() {
+        let err = serde_json::from_value::<Volume>(json!({ "external": true })).unwrap_err();
+        assert_eq!(err.to_string(), "external volumes are not supported");
+    }
+
+    #[test]
+    fn test_volume_accepts_non_external_input() {
+        let vol: Volume = serde_json::from_value(json!({ "external": false })).unwrap();
+        assert!(!vol.external);
     }
 
     #[test]
