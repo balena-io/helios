@@ -1,4 +1,29 @@
 - commits:
+    - subject: Add support for `io.balena.features.balena-socket`
+      hash: 7e8855cf7553c448a06f8cf040d4100d11b772e9
+      body: >
+        The feature sets the DOCKER_HOST env var (if unset) and mounts the host
+        socket, defined via HELIOS_HOST_DOCKER_SOCK for the binary, and
+        BALENA_HOST_DOCKER_DOCK for the helios image. When set, the feature also
+        configures `BALENA_DOCKER_HOST` on the container environment.
+
+
+        The docker socket is assumed to live on /var/run/docker.sock if not
+        provided.
+
+
+        This implementation does not add backwards compatible code as supervisor
+        did, e.g. mounting legacy paths like /var/run/docker.sock,
+        /var/run/balena.sock on the container.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.12
+  title: ""
+  date: 2026-11-04T21:18:13.214Z
+- commits:
     - subject: Add support for `io.balena.features.balena-api`
       hash: 8e73ad71858230c2cfd4620aa3e1e3339ffc79ea
       body: |
