@@ -10,6 +10,7 @@ use crate::labels::{
 };
 use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
+use crate::util::reboot;
 
 use super::models::{
     App, Device, LocalVolume, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
@@ -101,10 +102,16 @@ async fn read(
     // read the device name from the local store
     device.name = local_store.get("device_name").await?;
 
+    device.needs_reboot = reboot::is_required().await?;
+
     // Read the hostapp information from the local store and the engine
     #[cfg(feature = "balenahup")]
     if let Some(host) = &mut device.host {
         crate::balenahup::read::derive_host(host, docker, local_store).await?;
+
+        // What the host staged only applies on a reboot. Removals leave no
+        // trace on the host, so those are only known from the breadcrumb.
+        device.needs_reboot |= host.awaits_reboot();
     }
 
     // Read the state of images
