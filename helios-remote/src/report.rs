@@ -109,6 +109,14 @@ fn report_host_app(
 ) {
     use crate::state::models::OverlayStatus;
 
+    // the device does not know the host app yet, or has no access to it
+    let Some(app_uuid) = host_state
+        .app
+        .filter(|app_uuid| authorized_apps.contains(app_uuid))
+    else {
+        return;
+    };
+
     let release_uuid = host_state
         .releases
         .iter()
@@ -116,11 +124,6 @@ fn report_host_app(
         .map(|(uuid, _)| uuid.clone());
 
     for (rel_uuid, release) in host_state.releases {
-        // do not report on apps to which the device has no access
-        if !authorized_apps.contains(&release.app) {
-            continue;
-        }
-
         let (update_status, service_status, app_release) =
             if Some(&rel_uuid) == release_uuid.as_ref() {
                 (
@@ -136,7 +139,7 @@ fn report_host_app(
                 )
             };
 
-        let app = apps.entry(release.app).or_insert(AppReport {
+        let app = apps.entry(app_uuid.clone()).or_insert(AppReport {
             release_uuid: app_release,
             releases: HashMap::new(),
         });

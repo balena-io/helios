@@ -45,6 +45,13 @@ pub struct Host {
     #[mahler(internal)]
     pub meta: OperatingSystem,
 
+    /// The host app uuid
+    ///
+    /// There can only be one hostOS app runnning at a time, but the uuid
+    /// may change when moving between compatible device types or between
+    /// non-esr and esr. It is `None` until the device learns it from a target.
+    pub app: Option<Uuid>,
+
     /// The hostapp releases. While only one release is expected on the target state, the
     /// device may be in-between releases, in which case there may still be clean-up steps to
     /// perform.
@@ -63,6 +70,7 @@ impl Host {
     pub fn new(meta: OperatingSystem) -> Self {
         Host {
             meta,
+            app: None,
             releases: Map::new(),
             pending_reboot: false,
             host_validating: false,
@@ -72,8 +80,9 @@ impl Host {
 
 impl From<Host> for HostTarget {
     fn from(app: Host) -> Self {
-        let Host { releases, .. } = app;
+        let Host { app, releases, .. } = app;
         HostTarget {
+            app,
             releases: releases.into_iter().map(|(u, r)| (u, r.into())).collect(),
             // A target never asks for a reboot; the diff against a derived
             // `true` is what schedules one.
@@ -111,7 +120,6 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
         releases.insert(
             release_uuid,
             HostReleaseTarget {
-                app: app_uuid,
                 hostapp: HostAppTarget {
                     image: hostapp.image,
                     build: hostapp.board_rev,
@@ -124,6 +132,7 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
         );
 
         HostTarget {
+            app: Some(app_uuid),
             releases,
             // A remote target never asks for a reboot; the diff against a
             // derived `true` is what schedules one.
@@ -355,13 +364,6 @@ impl From<HostApp> for HostAppTarget {
 #[derive(State, Debug, Clone)]
 #[mahler(derive(PartialEq, Eq))]
 pub struct HostRelease {
-    /// The host app uuid
-    ///
-    /// There can only be one hostOS app runnning at a time, but the uuid
-    /// may change when moving between compatible device types or between
-    /// non-esr and esr
-    pub app: Uuid,
-
     /// The rootfs component of the release
     pub hostapp: HostApp,
 
@@ -374,14 +376,12 @@ pub struct HostRelease {
 impl From<HostRelease> for HostReleaseTarget {
     fn from(rel: HostRelease) -> Self {
         let HostRelease {
-            app,
             hostapp,
             status,
             overlays,
             ..
         } = rel;
         HostReleaseTarget {
-            app,
             hostapp: hostapp.into(),
             status,
             overlays: overlays.into_iter().map(|(k, v)| (k, v.into())).collect(),

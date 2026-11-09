@@ -219,7 +219,7 @@ fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) 
             let host_keys: Vec<_> = target_state
                 .host
                 .iter()
-                .flat_map(|host| host.releases.values().map(|r| &r.app))
+                .filter_map(|host| host.app.as_ref())
                 .collect();
             #[cfg(not(feature = "balenahup"))]
             let host_keys: Vec<&Uuid> = Vec::new();
