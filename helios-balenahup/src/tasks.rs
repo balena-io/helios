@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 
-use mahler::extract::{Args, Res, System, Target, View};
+use mahler::extract::{Args, Res, System, SystemTarget, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
@@ -99,6 +99,20 @@ fn store_host_app(
         }
         Ok(app)
     })
+}
+
+/// Set or clear the rejected release flag.
+///
+/// The field is in-memory only, it tracks the target's rejection state so the
+/// planner can preserve the current releases via an exception.
+///
+/// Applies to `any(/host/rejected_release)`
+fn set_rejected_release(
+    mut current: View<Option<Uuid>>,
+    Target(target): Target<Option<Uuid>>,
+) -> View<Option<Uuid>> {
+    *current = target;
+    current
 }
 
 /// Initialize the release
@@ -460,6 +474,14 @@ pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) ->
     let Some(host) = device.host.as_ref() else {
         return false;
     };
+    // The exception on a rejected target holds every removal back.
+    if target
+        .host
+        .as_ref()
+        .is_some_and(|h| h.rejected_release.is_some())
+    {
+        return false;
+    }
     let target_releases = target.host.as_ref().map(|h| &h.releases);
     host.releases.iter().any(|(uuid, rel)| {
         match target_releases.and_then(|releases| releases.get(uuid)) {
@@ -612,6 +634,17 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             job::any(store_host_app).with_description(|| "store the host app uuid"),
         )
         .job(
+            "/host/rejected_release",
+            job::any(set_rejected_release).with_description(
+                |Target(release): Target<Option<Uuid>>| {
+                    format!(
+                        "set rejected target release for host OS to {}",
+                        release.as_ref().map(|r| r.as_str()).unwrap_or("none")
+                    )
+                },
+            ),
+        )
+        .job(
             "/host/host_validating",
             job::update(await_host_validation)
                 .with_description(|| "wait for the host validation to finish"),
@@ -643,6 +676,16 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                     "overlay activation failed for host OS release '{release_uuid}', check device"
                 )
             }),
+        )
+        // keep the current releases if the target release was rejected
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::delete(|SystemTarget(device): SystemTarget<Device>| {
+                device
+                    .host
+                    .is_some_and(|host| host.rejected_release.is_some())
+            })
+            .with_description(|| "host OS has an invalid target release"),
         )
         // keep the record of the release the device is running; forgetting it
         // strands that release's overlay containers
@@ -734,6 +777,7 @@ mod tests {
             releases,
             pending_reboot: false,
             host_validating: false,
+            rejected_release: None,
         }
     }
 

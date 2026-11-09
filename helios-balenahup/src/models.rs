@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common_types::{ImageUri, OperatingSystem, Uuid};
 use crate::oci::{ContainerState, ContainerStatus, LocalContainer};
-use crate::remote_model::HostRelease as RemoteHostReleaseTarget;
+use crate::remote_model::{HostRelease as RemoteHostReleaseTarget, RejectedApp};
 
 /// `io.balena.image.class` — marks an overlay service.
 pub(crate) const CLASS_LABEL: &str = "io.balena.image.class";
@@ -64,6 +64,10 @@ pub struct Host {
     /// Whether the host is still validating what this boot brought up
     #[mahler(default)]
     pub host_validating: bool,
+
+    /// A rejected release uuid on the target state. This tells the planner
+    /// to leave the current host releases as they are.
+    pub rejected_release: Option<Uuid>,
 }
 
 impl Host {
@@ -74,6 +78,7 @@ impl Host {
             releases: Map::new(),
             pending_reboot: false,
             host_validating: false,
+            rejected_release: None,
         }
     }
 }
@@ -89,6 +94,19 @@ impl From<Host> for HostTarget {
             pending_reboot: false,
             // Nor for a validation in flight
             host_validating: false,
+            rejected_release: None,
+        }
+    }
+}
+
+impl From<(Uuid, RejectedApp)> for HostTarget {
+    fn from((app_uuid, app): (Uuid, RejectedApp)) -> Self {
+        HostTarget {
+            app: Some(app_uuid),
+            releases: Map::new(),
+            pending_reboot: false,
+            host_validating: false,
+            rejected_release: Some(app.release),
         }
     }
 }
@@ -139,6 +157,7 @@ impl From<(Uuid, RemoteHostReleaseTarget)> for HostTarget {
             pending_reboot: false,
             // Nor for a validation in flight
             host_validating: false,
+            rejected_release: None,
         }
     }
 }

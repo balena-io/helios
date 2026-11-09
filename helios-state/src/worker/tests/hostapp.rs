@@ -2619,3 +2619,120 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
         ),
     );
 }
+
+#[test]
+fn it_keeps_the_current_release_when_the_target_release_is_rejected() {
+    init_tracing();
+    assert_aborted(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
+                "rejected_release": "bad-release",
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                    },
+                    "staged-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "ef01234",
+                            "install_attempts": 0,
+                        },
+                        "status": "created",
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {},
+                "rejected_release": "bad-release",
+            },
+        }),
+        "host OS has an invalid target release",
+    );
+}
+
+#[test]
+fn it_sets_the_rejected_release_on_the_host() {
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {},
+                "rejected_release": "bad-release",
+            },
+        }),
+        seq!("set rejected target release for host OS to bad-release"),
+    );
+}
+
+#[test]
+fn it_reboots_for_a_removal_while_the_target_release_is_rejected() {
+    // The exception holds the removal back, so it must not hold the reboot back.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
+                "pending_reboot": true,
+                "rejected_release": "bad-release",
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "ef01234",
+                            "install_attempts": 0,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "stale": {
+                                "image": "registry2.balena-cloud.com/v2/stale@sha256:e555555555555555555555555555555555555555555555555555555555555555",
+                                "status": "deployed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {},
+                "rejected_release": "bad-release",
+            },
+        }),
+        seq!("reboot to apply overlay changes"),
+    );
+}

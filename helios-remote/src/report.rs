@@ -123,6 +123,8 @@ fn report_host_app(
         .find(|(_, rel)| host_state.meta.build.as_ref() == Some(&rel.hostapp.build))
         .map(|(uuid, _)| uuid.clone());
 
+    let rejected_release = host_state.rejected_release;
+
     for (rel_uuid, release) in host_state.releases {
         let (update_status, service_status, app_release) =
             if Some(&rel_uuid) == release_uuid.as_ref() {
@@ -182,6 +184,22 @@ fn report_host_app(
             ReleaseReport {
                 update_status,
                 services,
+            },
+        );
+    }
+
+    // If the host has a `rejected_release`, add the release with
+    // `update_status: "rejected"`. This is independent of any still running releases.
+    if let Some(rejected) = rejected_release {
+        let app = apps.entry(app_uuid).or_insert(AppReport {
+            release_uuid: None,
+            releases: HashMap::new(),
+        });
+        app.releases.insert(
+            rejected,
+            ReleaseReport {
+                update_status: UpdateStatus::Rejected,
+                services: HashMap::new(),
             },
         );
     }
@@ -705,6 +723,58 @@ mod tests {
         assert!(current.services.contains_key("svc-a"));
 
         // Rejected release reported alongside.
+        let rejected = app
+            .releases
+            .get(&Uuid::from("bad-release"))
+            .expect("rejected release entry should be emitted");
+        assert_eq!(rejected.update_status, UpdateStatus::Rejected);
+        assert!(rejected.services.is_empty());
+    }
+
+    #[cfg(feature = "balenahup")]
+    #[test]
+    fn it_reports_rejected_host_release_alongside_current() {
+        let device = serde_json::from_value::<Device>(json!({
+            "uuid": "device-123",
+            "host": {
+                "app": "host-app",
+                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "rejected_release": "bad-release",
+                "releases": {
+                    "current-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let report = Report::from(LocalState {
+            authorized_apps: vec![Uuid::from("host-app")],
+            status: crate::state::UpdateStatus::Done,
+            device,
+        });
+
+        let app = report
+            .0
+            .get("device-123")
+            .and_then(|d| d.apps.as_ref())
+            .and_then(|apps| apps.get(&Uuid::from("host-app")))
+            .expect("host app should be in the report");
+
+        assert_eq!(app.release_uuid, Some(Uuid::from("current-release")));
+        let current = app
+            .releases
+            .get(&Uuid::from("current-release"))
+            .expect("current release should be reported");
+        assert_eq!(current.update_status, UpdateStatus::Done);
+
         let rejected = app
             .releases
             .get(&Uuid::from("bad-release"))

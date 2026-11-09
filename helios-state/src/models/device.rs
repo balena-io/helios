@@ -325,6 +325,10 @@ impl From<RemoteDeviceTarget> for DeviceTarget {
                 }
                 #[cfg(not(feature = "balenahup"))]
                 RemoteAppTarget::Host(_) => {}
+                #[cfg(feature = "balenahup")]
+                RemoteAppTarget::Rejected(app) if app.is_host => {
+                    hostapps.push((app_uuid, app).into());
+                }
                 // Read the userapp info if it exists and the feature is enabled
                 #[cfg(feature = "userapps")]
                 RemoteAppTarget::User(userapp) => {
@@ -437,9 +441,10 @@ mod tests {
 
     #[cfg(all(feature = "userapps", feature = "balenahup"))]
     #[test]
-    fn rejected_host_app_is_dropped_from_target() {
-        // Rejected host apps are filtered out — the device keeps running
-        // its current host release and there is nothing to report against.
+    fn rejected_host_app_is_included_in_target_with_rejected_release_set() {
+        // Rejected host apps produce a host target with no releases and
+        // `rejected_release` set — the device keeps running its current host
+        // release.
         let remote: crate::remote_model::Device = serde_json::from_value(json!({
             "name": "test-device",
             "apps": {
@@ -466,7 +471,10 @@ mod tests {
 
         let target: DeviceTarget = remote.into();
         assert!(target.apps.is_empty());
-        assert!(target.host.is_none());
+        let host = target.host.expect("rejected host should be in the target");
+        assert!(host.releases.is_empty());
+        assert_eq!(host.app, Some(Uuid::from("bad-host")));
+        assert_eq!(host.rejected_release, Some(Uuid::from("bad-release")));
     }
 
     /// Target of a single app with one release, mounting `my-vol` from `my-service`.
