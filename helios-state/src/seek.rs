@@ -549,11 +549,6 @@ pub async fn start_seek(
                                 state_reader,
                             )
                             .await?;
-
-                            // Refusing part of the target is not success
-                            if !refused.is_empty() && matches!(update_status, UpdateStatus::Done) {
-                                update_status = UpdateStatus::Aborted;
-                            }
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

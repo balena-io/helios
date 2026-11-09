@@ -449,19 +449,27 @@ fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
     )
 }
 
-/// Drop the target releases this host cannot run, and say why for each.
+/// Drop the target releases this host cannot run, flag the target as having a
+/// `rejected_release`, and say why for each.
 ///
-/// The release the device runs is kept: `release_still_accounted_for` declines
-/// to forget one the target no longer names.
+/// The releases the device has are kept: the exception on a rejected target
+/// declines to forget them.
 pub fn reject_unsupported_releases(tgt: &mut HostTarget, runtimes: &[oci::Runtime]) -> Vec<String> {
     let mut reasons = Vec::new();
-    tgt.releases.retain(|_, rel| {
+
+    // there is always one release on the target
+    if let Some(entry) = tgt.releases.first_entry() {
+        let rel = entry.get();
+
+        // if any runtimes requested by overlays are not available, then
+        // remove the runtime and reject the target release
         if overlay_runtime_unavailable(runtimes, rel) {
             reasons.push(unavailable_runtime_reason(rel));
-            return false;
+            tgt.rejected_release = Some(entry.key().clone());
+            entry.remove();
         }
-        true
-    });
+    }
+
     reasons
 }
 
@@ -787,14 +795,16 @@ mod tests {
         let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&["runc", "extension"]));
         assert!(reasons.is_empty());
         assert_eq!(tgt.releases.len(), 1);
+        assert_eq!(tgt.rejected_release, None);
     }
 
     #[test]
-    fn a_release_naming_an_unregistered_runtime_is_dropped() {
+    fn a_release_naming_an_unregistered_runtime_is_rejected() {
         // X-04: a profile activated on a pre-extension OS.
         let mut tgt = host_target(&[("ebpf", "extension")]);
         let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(tgt.releases.is_empty());
+        assert_eq!(tgt.rejected_release, Some(Uuid::from("target-release")));
         assert_eq!(
             reasons,
             vec![

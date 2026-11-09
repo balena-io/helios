@@ -2487,16 +2487,20 @@ fn it_reboots_for_a_removal_while_a_pre_extension_host_holds_a_declined_release(
                 }
             },
         }),
-        // seek prunes the release before the worker sees it.
+        // seek prunes the release and marks it rejected before the worker sees it.
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
             "host": {
                 "app": "hostapp-uuid",
-                "releases": {}
+                "releases": {},
+                "rejected_release": "target-release",
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!(
+            "reboot to apply overlay changes",
+            "set rejected target release for host OS to target-release"
+        ),
     );
 }
 
