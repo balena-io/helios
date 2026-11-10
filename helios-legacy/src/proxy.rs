@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{field, trace};
 
+use crate::util::crypto::sha256_hex_digest;
 use crate::util::http::Uri;
 use crate::util::types::Uuid;
 
@@ -126,14 +127,21 @@ pub async fn proxy(
             // Try to serve from local cache
             let response = if let Some(target) = state.get().await {
                 trace!("returning cached target state");
-                // XXX:
                 let response_body =
                     serde_json::to_string(&target).map_err(ProxyError::from_upstream)?;
+                let etag = format!("\"{}\"", sha256_hex_digest(&response_body));
+                let etag = HeaderValue::from_str(&etag).expect("hex digest is a valid header");
+
+                if request.headers().get("if-none-match") == Some(&etag) {
+                    let mut headers = HeaderMap::new();
+                    headers.insert("etag", etag);
+                    return Ok((StatusCode::NOT_MODIFIED, headers).into_response());
+                }
 
                 let mut response = Response::new(Body::from(response_body));
-                response
-                    .headers_mut()
-                    .insert("content-type", HeaderValue::from_static("application/json"));
+                let headers = response.headers_mut();
+                headers.insert("content-type", HeaderValue::from_static("application/json"));
+                headers.insert("etag", etag);
 
                 Ok(response)
             } else {
@@ -417,6 +425,48 @@ mod tests {
             response.headers().get("content-type").unwrap(),
             "application/json"
         );
+    }
+
+    #[tokio::test]
+    async fn test_target_state_interception_not_modified() {
+        let remote_uri: Uri = "http://localhost:9998".parse().unwrap();
+        let legacy_uri: Uri = "http://localhost:9999".parse().unwrap();
+        let target_state = json!({"apps": {"test-app": {"status": "running"}}});
+        let (config, state) = create_test_state(legacy_uri, remote_uri, Some(target_state)).await;
+
+        let state_request = |etag: Option<&HeaderValue>| {
+            let mut request = create_test_request(
+                "/device/v3/test-device-uuid/state",
+                Some("Supervisor/1.0.0"),
+            );
+            if let Some(etag) = etag {
+                request.headers_mut().insert("if-none-match", etag.clone());
+            }
+            request
+        };
+
+        let response = proxy(config.clone(), state.clone(), state_request(None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers().get("etag").unwrap().clone();
+
+        // Same target state returns 304
+        let response = proxy(config.clone(), state.clone(), state_request(Some(&etag)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get("etag").unwrap(), &etag);
+
+        // Changed target state returns 200 with a new etag
+        state
+            .set(json!({"apps": {"test-app": {"status": "stopped"}}}))
+            .await;
+        let response = proxy(config, state, state_request(Some(&etag)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_ne!(response.headers().get("etag").unwrap(), &etag);
     }
 
     #[tokio::test]
