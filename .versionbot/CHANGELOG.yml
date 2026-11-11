@@ -1,4 +1,48 @@
 - commits:
+    - subject: Flag the host target as rejected when its runtime is unavailable
+      hash: 2cfeed50734865fb08ceb85945e226165ee5dd70
+      body: |
+        `reject_unsupported_releases` now sets the host target's
+        `rejected_release` to the dropped release instead of silently dropping
+        it, so the planner keeps the current releases through the rejected
+        release exception and the release is reported as rejected.
+
+        With this, there is no longer need to set the `Aborted` target on seek.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use `rejected_release` on the host model
+      hash: c5a04902c10a74d81780ec22e002fd3198642121
+      body: |
+        A rejected host app now produces a host target with no releases and
+        `rejected_release` set, mirroring apps. A `/host/rejected_release` task
+        records it, an exception keeps the current releases from being removed
+        while it is set, and the report surfaces the release as rejected.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Move the host app uuid from HostRelease to Host
+      hash: 7e6d85d69abb3654fc3b4a5ce1b9f7aad8134909
+      body: |
+        The host app is a single device-level value, not per-release. Store it
+        in its own `host/app` document, set through a new `/host/app` task, and
+        have the installer and the report read it from the host.
+
+        This is in preparation of using rejected releases for validating runtime
+        state.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.14
+  title: ""
+  date: 2026-11-11T22:42:59.436Z
+- commits:
     - subject: Support `If-None-Match` header in legacy proxy
       hash: 325464926b76730481cda18b7997e74c7d8bcf1b
       body: |
