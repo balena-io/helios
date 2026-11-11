@@ -219,7 +219,7 @@ fn report_authorized_apps(tx: &Sender<LocalState>, target_state: &DeviceTarget) 
             let host_keys: Vec<_> = target_state
                 .host
                 .iter()
-                .flat_map(|host| host.releases.values().map(|r| &r.app))
+                .filter_map(|host| host.app.as_ref())
                 .collect();
             #[cfg(not(feature = "balenahup"))]
             let host_keys: Vec<&Uuid> = Vec::new();
@@ -549,11 +549,6 @@ pub async fn start_seek(
                                 state_reader,
                             )
                             .await?;
-
-                            // Refusing part of the target is not success
-                            if !refused.is_empty() && matches!(update_status, UpdateStatus::Done) {
-                                update_status = UpdateStatus::Aborted;
-                            }
                         }
 
                         // If there is a legacy supervisor and the target state is coming from

@@ -69,6 +69,13 @@ pub async fn derive_host(
     docker: &Docker,
     local_store: &DocumentStore,
 ) -> Result<(), Error> {
+    // Read the host app uuid from the local store
+    host.app = match local_store.open("host/app").await {
+        Ok(doc) => Some(doc.into_value().await?),
+        Err(store::Error::NotFound { .. }) => None,
+        Err(e) => return Err(e)?,
+    };
+
     // Read the hostapp information from the local store
     let host_releases_view = local_store.as_view().at("host/releases")?;
     let host_releases: Vec<Uuid> = host_releases_view

@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 
-use mahler::extract::{Args, Res, System, Target, View};
+use mahler::extract::{Args, Res, System, SystemTarget, Target, View};
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
 use mahler::{exception, job};
@@ -77,6 +77,44 @@ enum HostUpdateError {
     HostValidating,
 }
 
+/// Set the host app uuid and store it in its own document
+///
+/// Applies to `any(/host/app)`
+fn store_host_app(
+    mut app: View<Option<Uuid>>,
+    Target(tgt): Target<Option<Uuid>>,
+    store: Res<DocumentStore>,
+) -> IO<Option<Uuid>, store::Error> {
+    *app = tgt;
+
+    with_io(app, async move |app| {
+        let local_store = store.as_ref().expect("store should be available");
+        match app.as_ref() {
+            Some(uuid) => {
+                local_store.put("host/app", uuid).await?;
+            }
+            None => {
+                local_store.delete("host/app").await?;
+            }
+        }
+        Ok(app)
+    })
+}
+
+/// Set or clear the rejected release flag.
+///
+/// The field is in-memory only, it tracks the target's rejection state so the
+/// planner can preserve the current releases via an exception.
+///
+/// Applies to `any(/host/rejected_release)`
+fn set_rejected_release(
+    mut current: View<Option<Uuid>>,
+    Target(target): Target<Option<Uuid>>,
+) -> View<Option<Uuid>> {
+    *current = target;
+    current
+}
+
 /// Initialize the release
 ///
 /// Applies to `create(/host/releases/<rel_uuid>)`
@@ -87,7 +125,7 @@ fn init_hostapp_release(
     System(device): System<Device>,
     store: Res<DocumentStore>,
 ) -> IO<HostRelease, store::Error> {
-    let HostReleaseTarget { app, hostapp, .. } = tgt;
+    let HostReleaseTarget { hostapp, .. } = tgt;
 
     // Get the running status by comparing to the current os build
     let is_running = device
@@ -103,7 +141,6 @@ fn init_hostapp_release(
 
     // Create a release using the target metadata
     let rel = HostRelease {
-        app,
         hostapp: HostApp {
             image: hostapp.image,
             build: hostapp.build,
@@ -151,6 +188,10 @@ fn install_hostapp_release(
         release.status == HostReleaseStatus::Created,
         "OS release already installed"
     );
+    // the updater needs the host app uuid
+    let Some(app) = device.host.and_then(|host| host.app) else {
+        return IO::abort("hostapp uuid is not known yet");
+    };
 
     // Stage every overlay before committing to the install. The reboot has its
     // own check, so this is not about ordering the activation; it is about not
@@ -240,7 +281,7 @@ fn install_hostapp_release(
         let hup_cmd = systemd::Command::new(hup_script)
             .args(&[
                 "--app-uuid",
-                release.app.as_str(),
+                app.as_str(),
                 "--release-commit",
                 release_uuid.as_str(),
                 "--target-image-uri",
@@ -408,19 +449,27 @@ fn unavailable_runtime_reason(tgt: &HostReleaseTarget) -> String {
     )
 }
 
-/// Drop the target releases this host cannot run, and say why for each.
+/// Drop the target releases this host cannot run, flag the target as having a
+/// `rejected_release`, and say why for each.
 ///
-/// The release the device runs is kept: `release_still_accounted_for` declines
-/// to forget one the target no longer names.
+/// The releases the device has are kept: the exception on a rejected target
+/// declines to forget them.
 pub fn reject_unsupported_releases(tgt: &mut HostTarget, runtimes: &[oci::Runtime]) -> Vec<String> {
     let mut reasons = Vec::new();
-    tgt.releases.retain(|_, rel| {
+
+    // there is always one release on the target
+    if let Some(entry) = tgt.releases.first_entry() {
+        let rel = entry.get();
+
+        // if any runtimes requested by overlays are not available, then
+        // remove the runtime and reject the target release
         if overlay_runtime_unavailable(runtimes, rel) {
             reasons.push(unavailable_runtime_reason(rel));
-            return false;
+            tgt.rejected_release = Some(entry.key().clone());
+            entry.remove();
         }
-        true
-    });
+    }
+
     reasons
 }
 
@@ -433,6 +482,14 @@ pub(crate) fn overlay_removal_pending(device: &Device, target: &DeviceTarget) ->
     let Some(host) = device.host.as_ref() else {
         return false;
     };
+    // The exception on a rejected target holds every removal back.
+    if target
+        .host
+        .as_ref()
+        .is_some_and(|h| h.rejected_release.is_some())
+    {
+        return false;
+    }
     let target_releases = target.host.as_ref().map(|h| &h.releases);
     host.releases.iter().any(|(uuid, rel)| {
         match target_releases.and_then(|releases| releases.get(uuid)) {
@@ -581,6 +638,21 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
             ],
         )
         .job(
+            "/host/app",
+            job::any(store_host_app).with_description(|| "store the host app uuid"),
+        )
+        .job(
+            "/host/rejected_release",
+            job::any(set_rejected_release).with_description(
+                |Target(release): Target<Option<Uuid>>| {
+                    format!(
+                        "set rejected target release for host OS to {}",
+                        release.as_ref().map(|r| r.as_str()).unwrap_or("none")
+                    )
+                },
+            ),
+        )
+        .job(
             "/host/host_validating",
             job::update(await_host_validation)
                 .with_description(|| "wait for the host validation to finish"),
@@ -613,6 +685,16 @@ pub fn with_hostapp_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Unin
                 )
             }),
         )
+        // keep the current releases if the target release was rejected
+        .exception(
+            "/host/releases/{release_uuid}",
+            exception::delete(|SystemTarget(device): SystemTarget<Device>| {
+                device
+                    .host
+                    .is_some_and(|host| host.rejected_release.is_some())
+            })
+            .with_description(|| "host OS has an invalid target release"),
+        )
         // keep the record of the release the device is running; forgetting it
         // strands that release's overlay containers
         .exception(
@@ -642,7 +724,6 @@ mod tests {
     /// runtime named beside it.
     fn target(overlays: &[(&str, &str)]) -> HostReleaseTarget {
         HostReleaseTarget {
-            app: Uuid::from("1b2c3d4e5f60718293a4b5c6d7e8f900"),
             hostapp: HostAppTarget {
                 image: ImageUri::from_static("registry2.balena-cloud.com/v2/hostapp:latest"),
                 build: "abc1234".to_string(),
@@ -700,9 +781,11 @@ mod tests {
         let mut releases = Map::new();
         releases.insert(Uuid::from("target-release"), target(overlays));
         HostTarget {
+            app: Some(Uuid::from("1b2c3d4e5f60718293a4b5c6d7e8f900")),
             releases,
             pending_reboot: false,
             host_validating: false,
+            rejected_release: None,
         }
     }
 
@@ -712,14 +795,16 @@ mod tests {
         let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&["runc", "extension"]));
         assert!(reasons.is_empty());
         assert_eq!(tgt.releases.len(), 1);
+        assert_eq!(tgt.rejected_release, None);
     }
 
     #[test]
-    fn a_release_naming_an_unregistered_runtime_is_dropped() {
+    fn a_release_naming_an_unregistered_runtime_is_rejected() {
         // X-04: a profile activated on a pre-extension OS.
         let mut tgt = host_target(&[("ebpf", "extension")]);
         let reasons = reject_unsupported_releases(&mut tgt, &runtimes(&[]));
         assert!(tgt.releases.is_empty());
+        assert_eq!(tgt.rejected_release, Some(Uuid::from("target-release")));
         assert_eq!(
             reasons,
             vec![
