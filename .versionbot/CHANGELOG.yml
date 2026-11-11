@@ -1,4 +1,24 @@
 - commits:
+    - subject: Support `If-None-Match` header in legacy proxy
+      hash: 325464926b76730481cda18b7997e74c7d8bcf1b
+      body: |
+        The legacy proxy now returns an `ETag` header calculated from a hash of
+        the target state. On a new request to `/device/v3/<uuid>/state`, if the
+        contents of the `If-None-Match` header match the hash of the current
+        target state, then the proxy returns a 304.
+
+        This is necessary to prevent a new target state poll coming from the
+        supervisor to cause a long download to be interrupted because of the 200
+        response status.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.29.13
+  title: ""
+  date: 2026-11-11T12:57:48.413Z
+- commits:
     - subject: Add support for `io.balena.features.balena-socket`
       hash: 7e8855cf7553c448a06f8cf040d4100d11b772e9
       body: >
