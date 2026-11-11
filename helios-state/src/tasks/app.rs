@@ -15,7 +15,8 @@ use tracing::{trace, warn};
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
-    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
+    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, UpdateStrategy,
+    Volume,
 };
 use crate::oci::{
     Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
@@ -34,7 +35,7 @@ use super::helpers::{
     find_installed_volume, release_services, service_matches_target, services_need_stopping,
     services_restarting_with, target_release_services,
 };
-use super::image::create_image;
+use super::image::{create_image, remove_unused_image};
 
 /// Maximum number of images to pull concurrently per planning cycle.
 const MAX_CONCURRENT_IMAGE_PULLS: usize = 3;
@@ -1572,7 +1573,20 @@ fn uninstall_service_when_requirements_are_met(
 
     // Fallback: stop the service if it is still running, then uninstall it
     // along with its `restart: true` dependents
-    vec![stop_service_when_requirements_are_met.with_target(StopTarget::Uninstalled)]
+    let mut tasks =
+        vec![stop_service_when_requirements_are_met.with_target(StopTarget::Uninstalled)];
+
+    // the old image goes before the new one is pulled, which waits for this
+    // service to be removed
+    let strategy = future
+        .map_or(&svc.config, |(_, t_svc)| &t_svc.config)
+        .update_strategy();
+    if strategy == UpdateStrategy::DeleteThenDownload
+        && let ImageRef::Uri(image) = &svc.image
+    {
+        tasks.push(remove_unused_image.with_arg("image_name", image.clone()));
+    }
+    tasks
 }
 
 /// Remove service from the current release state

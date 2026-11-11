@@ -1,7 +1,7 @@
 use tokio_stream::StreamExt;
 use tracing::trace;
 
-use mahler::extract::{Args, RawTarget, Res, System, View};
+use mahler::extract::{Args, RawTarget, Res, System, SystemTarget, View};
 use mahler::job;
 use mahler::task::prelude::*;
 use mahler::worker::{Uninitialized, Worker};
@@ -179,6 +179,34 @@ pub fn remove_image(
     })
 }
 
+/// Remove an image no current or target service uses
+pub fn remove_unused_image(
+    System(device): System<Device>,
+    SystemTarget(t_device): SystemTarget<Device>,
+    Args(image_name): Args<ImageUri>,
+) -> Vec<Task> {
+    if !device.images.contains_key(&image_name) {
+        return Vec::new();
+    }
+    let image = ImageRef::Uri(image_name);
+    let used_by_current = device.apps.values().any(|app| {
+        app.releases
+            .values()
+            .any(|rel| rel.services.values().any(|svc| svc.image == image))
+    });
+    let used_by_target = t_device.apps.values().any(|app| {
+        app.releases.values().any(|rel| {
+            rel.services
+                .values()
+                .any(|svc| svc.image.is_same_artifact(&image))
+        })
+    });
+    if used_by_current || used_by_target {
+        return Vec::new();
+    }
+    vec![remove_image.into_task()]
+}
+
 /// Update worker with image tasks
 pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninitialized> {
     worker.jobs(
@@ -190,6 +218,7 @@ pub fn with_image_tasks<O>(worker: Worker<O, Uninitialized>) -> Worker<O, Uninit
             job::none(remove_image).with_description(|Args(image_name): Args<String>| {
                 format!("delete image '{image_name}'")
             }),
+            job::none(remove_unused_image),
             job::none(tag_image).with_description(
                 |Args(image_name): Args<String>,
                  RawTarget((src_img_name, _)): RawTarget<(String, Image)>| {

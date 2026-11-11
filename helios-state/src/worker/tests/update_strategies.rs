@@ -78,6 +78,10 @@ fn pull(img: &str) -> &'static str {
     format!("pull image '{img}'").leak()
 }
 
+fn delete(img: &str) -> &'static str {
+    format!("delete image '{img}'").leak()
+}
+
 #[test]
 fn it_kills_the_old_service_before_downloading_with_kill_then_download() {
     init_tracing();
@@ -106,6 +110,112 @@ fn it_kills_the_old_service_before_downloading_with_kill_then_download() {
             FINISH_RELEASE,
             RELEASE_LOCKS,
         ),
+    );
+}
+
+#[test]
+fn it_deletes_the_old_image_before_downloading_with_delete_then_download() {
+    init_tracing();
+    assert_workflow(
+        device(
+            json!({
+                "service1": old_service(1, OLD_IMG_1, "delete-then-download", running_container("old-release_service1")),
+            }),
+            json!({ OLD_IMG_1: image("111") }),
+        ),
+        target(json!({
+            "service1": new_service(1, NEW_IMG_1, "delete-then-download"),
+        })),
+        seq!(
+            INIT_RELEASE,
+            "initialize service 'service1' for release 'new-release'",
+            TAKE_LOCKS,
+            "stop service 'service1' for release 'old-release'",
+            "uninstall service 'service1' for release 'old-release'",
+            delete(OLD_IMG_1),
+            pull(NEW_IMG_1),
+        ) + par!(
+            REMOVE_OLD_RELEASE,
+            "install service 'service1' for release 'new-release'"
+        ) + seq!(
+            "start service 'service1' for release 'new-release'",
+            FINISH_RELEASE,
+            RELEASE_LOCKS,
+        ),
+    );
+}
+
+#[test]
+fn it_keeps_an_image_another_service_uses_with_delete_then_download() {
+    init_tracing();
+    // service2 keeps running the old image of service1, so it is not deleted
+    assert_workflow(
+        device(
+            json!({
+                "service1": old_service(1, OLD_IMG_1, "delete-then-download", running_container("old-release_service1")),
+                "service2": old_service(2, OLD_IMG_1, "download-then-kill", running_container("old-release_service2")),
+            }),
+            json!({ OLD_IMG_1: image("111") }),
+        ),
+        target(json!({
+            "service1": new_service(1, NEW_IMG_1, "delete-then-download"),
+            "service2": new_service(2, OLD_IMG_1, "download-then-kill"),
+        })),
+        seq!(INIT_RELEASE)
+            + par!(
+                "initialize service 'service1' for release 'new-release'",
+                "initialize service 'service2' for release 'new-release'",
+            )
+            + seq!(
+                TAKE_LOCKS,
+                "stop service 'service1' for release 'old-release'",
+                "uninstall service 'service1' for release 'old-release'",
+                pull(NEW_IMG_1),
+            )
+            + dag!(
+                seq!("install service 'service1' for release 'new-release'"),
+                par!(
+                    "remove data for 'service2' for release 'old-release'",
+                    "migrate service 'service2' to release 'new-release'",
+                ),
+            )
+            + par!(
+                REMOVE_OLD_RELEASE,
+                "start service 'service1' for release 'new-release'"
+            )
+            + seq!(FINISH_RELEASE, RELEASE_LOCKS),
+    );
+}
+
+#[test]
+fn it_deletes_the_image_of_a_removed_service_with_delete_then_download() {
+    init_tracing();
+    assert_workflow(
+        device(
+            json!({
+                "service1": old_service(1, OLD_IMG_1, "delete-then-download", running_container("old-release_service1")),
+                "service2": old_service(2, OLD_IMG_2, "download-then-kill", running_container("old-release_service2")),
+            }),
+            json!({ OLD_IMG_1: image("111"), OLD_IMG_2: image("222") }),
+        ),
+        target(json!({
+            "service2": new_service(2, NEW_IMG_2, "download-then-kill"),
+        })),
+        seq!(
+            INIT_RELEASE,
+            "initialize service 'service2' for release 'new-release'",
+            pull(NEW_IMG_2),
+            "install service 'service2' for release 'new-release'",
+            TAKE_LOCKS,
+            "stop service 'service1' for release 'old-release'",
+            "uninstall service 'service1' for release 'old-release'",
+            delete(OLD_IMG_1),
+            "stop service 'service2' for release 'old-release'",
+            "uninstall service 'service2' for release 'old-release'",
+        ) + par!(
+            REMOVE_OLD_RELEASE,
+            "start service 'service2' for release 'new-release'"
+        ) + seq!(FINISH_RELEASE, RELEASE_LOCKS),
     );
 }
 
