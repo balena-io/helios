@@ -25,9 +25,11 @@ use super::image::ImageRef;
 
 mod config;
 mod depends_on;
+mod update_strategy;
 
 pub use config::*;
 pub use depends_on::*;
+pub use update_strategy::*;
 
 use config::LABEL_DEPENDS_ON;
 
