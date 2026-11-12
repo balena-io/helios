@@ -8,20 +8,27 @@ use tracing::warn;
 
 use crate::common_types::{OperatingSystem, Uuid};
 use crate::models::AppTarget;
+use crate::remote_model::ServiceContract as RemoteServiceContract;
 
 /// A service contract, wrapped to make it usable on a state model
+///
+/// An optional service that does not satisfy the contract is removed from the target instead
+/// of causing its release to be rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ServiceContract(Contract);
+pub struct ServiceContract {
+    #[serde(default)]
+    pub optional: bool,
+    pub contract: Contract,
+}
+
+impl From<RemoteServiceContract> for ServiceContract {
+    fn from(RemoteServiceContract { optional, contract }: RemoteServiceContract) -> Self {
+        Self { optional, contract }
+    }
+}
 
 impl State for ServiceContract {
     type Target = Self;
-}
-
-impl From<Contract> for ServiceContract {
-    fn from(contract: Contract) -> Self {
-        Self(contract)
-    }
 }
 
 /// Reject the app releases with services the device contract does not satisfy, and say why
@@ -30,8 +37,11 @@ impl From<Contract> for ServiceContract {
 ///
 /// A rejected app is left with no releases and a `rejected_release`, the same as an app whose
 /// target could not be parsed. A requirement on a type the device contract does not describe
-/// is not met. All service contracts are removed from the target, as they are not needed to
-/// plan.
+/// is not met. Optional services that do not meet the contract are removed from the release
+/// with a warning, and do not cause a rejection, unless another service of the release depends
+/// on them.
+///
+/// All service contracts are removed from the target, as they are not needed to plan.
 pub(crate) fn reject_unsatisfied_releases(
     apps: &mut Map<Uuid, AppTarget>,
     contract: &Universe,
@@ -42,20 +52,59 @@ pub(crate) fn reject_unsatisfied_releases(
         let mut rejected = None;
 
         for (rel_uuid, rel) in app.releases.iter_mut() {
+            let mut removed: Vec<(String, Vec<String>)> = Vec::new();
             for (svc_name, svc) in rel.services.iter_mut() {
-                let Some(ServiceContract(svc_contract)) = svc.contract.take() else {
+                let Some(ServiceContract {
+                    optional,
+                    contract: svc_contract,
+                }) = svc.contract.take()
+                else {
                     continue;
                 };
                 let unmet = contract.get_not_satisfied_child_requirements(&svc_contract, None);
-                if !unmet.is_empty() {
-                    reasons.extend(unmet.iter().map(|req| {
-                        format!(
-                            "unmet requirement for service {svc_name} of app {app_uuid}: {}",
-                            serde_json::to_string(req).unwrap_or_default()
-                        )
-                    }));
+                if unmet.is_empty() {
+                    continue;
+                }
+                let unmet = unmet.iter().map(|req| {
+                    format!(
+                        "unmet requirement for service {svc_name} of app {app_uuid}: {}",
+                        serde_json::to_string(req).unwrap_or_default()
+                    )
+                });
+                if optional {
+                    removed.push((svc_name.clone(), unmet.collect()));
+                } else {
+                    reasons.extend(unmet);
                     rejected.get_or_insert_with(|| rel_uuid.clone());
                 }
+            }
+
+            // a service that is removed too does not need what it depends on
+            for (svc_name, unmet) in &removed {
+                let dependants: Vec<_> = rel
+                    .services
+                    .iter()
+                    .filter(|(name, svc)| {
+                        svc.depends_on.contains_key(svc_name)
+                            && !removed.iter().any(|(r, _)| r == *name)
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                if dependants.is_empty() {
+                    for reason in unmet {
+                        warn!("removing optional service: {reason}");
+                    }
+                } else {
+                    reasons.extend(unmet.iter().cloned());
+                    reasons.push(format!(
+                        "optional service {svc_name} of app {app_uuid} has unmet requirements but is required by: {}",
+                        dependants.join(", ")
+                    ));
+                    rejected.get_or_insert_with(|| rel_uuid.clone());
+                }
+            }
+            for (svc_name, _) in removed {
+                rel.services.remove(&svc_name);
             }
         }
 
@@ -230,23 +279,35 @@ mod tests {
         assert!(!universe.satisfies_child_contract(&svc, Some(&["sw.os"])));
     }
 
-    fn target_with_contract(contract: Option<serde_json::Value>) -> crate::models::DeviceTarget {
-        let mut service = json!({ "id": 1, "image": "alpine:latest" });
-        if let Some(contract) = contract {
-            service["contract"] = contract;
-        }
+    fn target_with_services(services: serde_json::Value) -> crate::models::DeviceTarget {
         serde_json::from_value(json!({
             "apps": {
                 "my-app": {
                     "id": 1,
                     "name": "my-app",
                     "releases": {
-                        "my-release": { "installed": true, "services": { "main": service } }
+                        "my-release": { "installed": true, "services": services }
                     }
                 }
             }
         }))
         .unwrap()
+    }
+
+    fn target_with_contract(contract: Option<serde_json::Value>) -> crate::models::DeviceTarget {
+        let mut service = json!({ "id": 1, "image": "alpine:latest" });
+        if let Some(contract) = contract {
+            service["contract"] = json!({ "contract": contract });
+        }
+        target_with_services(json!({ "main": service }))
+    }
+
+    /// A contract that a `6.x` device does not satisfy
+    fn unmet_contract() -> serde_json::Value {
+        json!({
+            "type": "sw.container",
+            "requires": [{ "type": "sw.os", "slug": "balena-os", "version": ">=7" }]
+        })
     }
 
     fn reject(target: &mut crate::models::DeviceTarget, device_version: &str) -> Vec<String> {
@@ -341,29 +402,12 @@ mod tests {
 
     #[test]
     fn reports_every_service_that_does_not_satisfy_the_contract() {
-        let unmet = json!({
-            "type": "sw.container",
-            "requires": [{ "type": "sw.os", "slug": "balena-os", "version": ">=7" }]
-        });
-        let mut target: crate::models::DeviceTarget = serde_json::from_value(json!({
-            "apps": {
-                "my-app": {
-                    "id": 1,
-                    "name": "my-app",
-                    "releases": {
-                        "my-release": {
-                            "installed": true,
-                            "services": {
-                                "one": { "id": 1, "image": "alpine:latest", "contract": unmet },
-                                "two": { "id": 2, "image": "alpine:latest", "contract": unmet },
-                                "three": { "id": 3, "image": "alpine:latest" }
-                            }
-                        }
-                    }
-                }
-            }
-        }))
-        .unwrap();
+        let unmet = unmet_contract();
+        let mut target = target_with_services(json!({
+            "one": { "id": 1, "image": "alpine:latest", "contract": { "contract": unmet } },
+            "two": { "id": 2, "image": "alpine:latest", "contract": { "contract": unmet } },
+            "three": { "id": 3, "image": "alpine:latest" }
+        }));
 
         let reasons = reject(&mut target, "6.5.6");
 
@@ -375,5 +419,127 @@ mod tests {
             app(&target).rejected_release,
             Some(Uuid::from("my-release"))
         );
+    }
+
+    #[test]
+    fn removes_optional_services_that_do_not_satisfy_the_contract() {
+        let unmet = unmet_contract();
+        let mut target = target_with_services(json!({
+            "opt": {
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": { "optional": true, "contract": unmet }
+            },
+            "main": { "id": 2, "image": "alpine:latest" }
+        }));
+
+        let reasons = reject(&mut target, "6.5.6");
+
+        assert!(reasons.is_empty());
+        let rel = app(&target)
+            .releases
+            .get(&Uuid::from("my-release"))
+            .unwrap();
+        assert!(rel.services.get("opt").is_none());
+        assert!(rel.services.get("main").is_some());
+        assert_eq!(app(&target).rejected_release, None);
+    }
+
+    #[test]
+    fn rejects_the_release_if_a_required_service_is_unmet_next_to_an_optional_one() {
+        let unmet = unmet_contract();
+        let mut target = target_with_services(json!({
+            "opt": {
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": { "optional": true, "contract": unmet }
+            },
+            "req": {
+                "id": 2,
+                "image": "alpine:latest",
+                "contract": { "contract": unmet }
+            }
+        }));
+
+        let reasons = reject(&mut target, "6.5.6");
+
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].contains("service req "));
+        assert!(app(&target).releases.is_empty());
+    }
+
+    #[test]
+    fn rejects_the_release_if_a_service_depends_on_an_unmet_optional_one() {
+        let unmet = unmet_contract();
+        let mut target = target_with_services(json!({
+            "opt": {
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": { "optional": true, "contract": unmet }
+            },
+            "main": {
+                "id": 2,
+                "image": "alpine:latest",
+                "depends_on": { "opt": { "condition": "service_started", "restart": false, "required": true } }
+            }
+        }));
+
+        let reasons = reject(&mut target, "6.5.6");
+
+        assert!(reasons.iter().any(|r| r.contains("required by: main")));
+        assert!(app(&target).releases.is_empty());
+        assert_eq!(
+            app(&target).rejected_release,
+            Some(Uuid::from("my-release"))
+        );
+    }
+
+    #[test]
+    fn rejects_the_release_if_a_non_required_dependant_remains() {
+        let mut target = target_with_services(json!({
+            "opt": {
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": { "optional": true, "contract": unmet_contract() }
+            },
+            "main": {
+                "id": 2,
+                "image": "alpine:latest",
+                "depends_on": { "opt": { "condition": "service_started", "restart": false, "required": false } }
+            }
+        }));
+
+        let reasons = reject(&mut target, "6.5.6");
+
+        assert!(reasons.iter().any(|r| r.contains("required by: main")));
+        assert!(app(&target).releases.is_empty());
+    }
+
+    #[test]
+    fn removes_optional_services_that_depend_on_each_other() {
+        let dep = json!({ "opt-a": { "condition": "service_started", "restart": false, "required": true } });
+        let optional = |extra: serde_json::Value| {
+            let mut svc = json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": { "optional": true, "contract": unmet_contract() }
+            });
+            svc.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            svc
+        };
+        let mut target = target_with_services(json!({
+            "opt-a": optional(json!({})),
+            "opt-b": optional(json!({ "depends_on": dep })),
+            "main": { "id": 3, "image": "alpine:latest" }
+        }));
+
+        assert!(reject(&mut target, "6.5.6").is_empty());
+        let rel = app(&target)
+            .releases
+            .get(&Uuid::from("my-release"))
+            .unwrap();
+        assert_eq!(rel.services.len(), 1);
     }
 }

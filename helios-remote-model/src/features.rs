@@ -98,6 +98,17 @@ fn take_feature(svc: &mut Service, label: &str) -> bool {
     matches!(value.as_deref(), Some("1" | "true"))
 }
 
+/// Read and remove the `io.balena.features.optional` label, marking the service contract
+/// as optional if the feature is enabled
+///
+/// The label is always removed from the service.
+pub(crate) fn take_optional(svc: &mut Service) {
+    let optional = take_feature(svc, "io.balena.features.optional");
+    if let Some(contract) = svc.contract.as_mut() {
+        contract.optional = optional;
+    }
+}
+
 /// Add `mount` to the service, rejecting it if the service already has a mount
 /// or tmpfs with the same target
 fn add_mount(svc_name: &str, svc: &mut Service, label: &str, mount: Mount) -> Result<(), String> {
@@ -372,5 +383,36 @@ mod tests {
             svc.composition.labels.get("io.balena.features.foo"),
             Some(&"1".to_string())
         );
+    }
+
+    fn optional_release(label: &str, composition_label: &str) -> Release {
+        serde_json::from_value(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "alpine:latest",
+                    "labels": {"io.balena.features.optional": label},
+                    "composition": {"labels": {"io.balena.features.optional": composition_label}},
+                    "contract": {"type": "sw.container", "slug": "my-service"}
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn optional_label_marks_the_contract_optional_and_is_removed() {
+        for value in ["1", "true"] {
+            let release = optional_release(value, "0");
+            assert!(service(&release).contract.as_ref().unwrap().optional);
+            assert!(!has_label(&release, "io.balena.features.optional"));
+        }
+    }
+
+    #[test]
+    fn contract_is_not_optional_unless_the_label_is_set() {
+        let release = optional_release("0", "1");
+        assert!(!service(&release).contract.as_ref().unwrap().optional);
+        assert!(!has_label(&release, "io.balena.features.optional"));
     }
 }
