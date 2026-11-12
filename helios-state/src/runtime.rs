@@ -13,7 +13,9 @@ use crate::read::{self, Reader};
 use crate::store::DocumentStore;
 use crate::util::dirs;
 use crate::util::http::Uri;
+use crate::util::types::DeviceType;
 pub struct HostConfig {
+    pub device_type: Option<DeviceType>,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
@@ -93,6 +95,7 @@ pub async fn prepare(
         .map_err(RuntimePrepareError::StoreInit)?;
 
     let HostConfig {
+        device_type,
         host_os,
         host_runtime_dir,
         host_docker_sock,
@@ -116,6 +119,7 @@ pub async fn prepare(
     let reader = Reader {
         os: host_os,
         uuid,
+        device_type,
         docker: docker.clone(),
         local_store: local_store.clone(),
     };

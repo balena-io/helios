@@ -3,12 +3,14 @@ use std::path::Path;
 
 use contrato::Universe;
 use mahler::state::{List, Map, State};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid, Value as EnvValue};
 use crate::oci::{self, BindPropagation, Mount};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 use crate::runtime::RemoteConfig;
+use crate::util::types::DeviceType;
 
 use crate::contracts::reject_unsatisfied_releases;
 
@@ -22,30 +24,58 @@ use crate::balenahup::Host;
 
 /// The current state of a device that will be stored
 /// by the worker
-#[derive(State, Debug, Clone)]
-#[mahler(derive(PartialEq, Eq))]
+///
+/// `uuid`, `kind`, `images` and `volumes` are internal, so they are not part of the target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     /// The device UUID
-    #[mahler(internal)]
     pub uuid: Uuid,
 
+    /// The device type slug
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<DeviceType>,
+
     /// The device name on the remote
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
     /// List of docker images on the device
-    #[mahler(internal)]
+    #[serde(default)]
     pub images: Map<ImageUri, Image>,
 
     /// Apps on the device
+    #[serde(default)]
     pub apps: Map<Uuid, App>,
 
     /// The "hostapp" configuration
     #[cfg(feature = "balenahup")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<Host>,
 
     /// List of unsupervised volumes on the device
-    #[mahler(internal, default)]
+    #[serde(default)]
     pub volumes: List<LocalVolume>,
+}
+
+/// The target state of a device
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceTarget {
+    /// The device name on the remote
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: <Option<String> as State>::Target,
+
+    /// Apps on the device
+    #[serde(default)]
+    pub apps: <Map<Uuid, App> as State>::Target,
+
+    /// The "hostapp" configuration
+    #[cfg(feature = "balenahup")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: <Option<Host> as State>::Target,
+}
+
+impl State for Device {
+    type Target = DeviceTarget;
 }
 
 impl Default for DeviceTarget {
@@ -60,11 +90,12 @@ impl Default for DeviceTarget {
 }
 
 impl Device {
-    pub fn new(uuid: Uuid, os: Option<OperatingSystem>) -> Self {
+    pub fn new(uuid: Uuid, kind: Option<DeviceType>, os: Option<OperatingSystem>) -> Self {
         #[cfg(not(feature = "balenahup"))]
         let _ = os;
         Self {
             uuid,
+            kind,
             name: None,
             images: Map::new(),
             apps: Map::new(),
@@ -145,6 +176,13 @@ impl DeviceTarget {
                         "BALENA_DEVICE_UUID".to_string(),
                         Some(device.uuid.as_str().into()),
                     );
+
+                    if let Some(device_type) = &device.kind {
+                        svc.config.environment.insert(
+                            "BALENA_DEVICE_TYPE".to_string(),
+                            Some(device_type.as_str().into()),
+                        );
+                    }
 
                     // Mount the per-app runtime directory at /tmp/balena so
                     // services can place files (e.g. update locks) that
@@ -527,11 +565,13 @@ mod tests {
 
     /// Device carrying `volumes` as unsupervised volumes.
     fn device_with_volumes(volumes: serde_json::Value) -> Device {
-        serde_json::from_value(json!({
+        let mut device: Device = serde_json::from_value(json!({
             "uuid": "device-uuid",
             "volumes": volumes,
         }))
-        .unwrap()
+        .unwrap();
+        device.kind = Some("generic-aarch64".to_string());
+        device
     }
 
     fn release_of(target: &DeviceTarget) -> &ReleaseTarget {
@@ -758,6 +798,62 @@ mod tests {
     }
 
     /// Mounts of `my-service` targeting the engine socket path.
+    #[test]
+    fn device_kind_is_serialized_as_type() {
+        let device = device_with_volumes(json!([]));
+        let value = serde_json::to_value(&device).unwrap();
+        assert_eq!(value["type"], json!("generic-aarch64"));
+        assert!(value.get("kind").is_none());
+
+        let device: Device =
+            serde_json::from_value(json!({ "uuid": "device-uuid", "type": "raspberrypi4-64" }))
+                .unwrap();
+        assert_eq!(device.kind.as_deref(), Some("raspberrypi4-64"));
+    }
+
+    #[test]
+    fn device_type_is_not_part_of_the_target() {
+        let target = DeviceTarget::from(device_with_volumes(json!([])));
+        assert!(serde_json::to_value(&target).unwrap().get("type").is_none());
+    }
+
+    #[test]
+    fn device_type_is_not_set_without_a_device_type() {
+        let mut target = target_with_config(json!({}));
+        let mut device = device_with_volumes(json!([]));
+        device.kind = None;
+        target.add_runtime_context(
+            &device,
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+        assert!(
+            !service_of(&target)
+                .config
+                .environment
+                .contains_key("BALENA_DEVICE_TYPE")
+        );
+    }
+
+    #[test]
+    fn device_type_is_set_in_the_service_environment() {
+        let mut target = target_with_config(json!({}));
+        target.add_runtime_context(
+            &device_with_volumes(json!([])),
+            &HostRuntimeDir("/run/helios".into()),
+            Path::new(DEFAULT_HOST_DOCKER_SOCK),
+            &None,
+        );
+        assert_eq!(
+            service_of(&target)
+                .config
+                .environment
+                .get("BALENA_DEVICE_TYPE"),
+            Some(&Some(EnvValue::String("generic-aarch64".to_string())))
+        );
+    }
+
     fn socket_mounts(target: &DeviceTarget) -> Vec<&Mount> {
         service_of(target)
             .config
