@@ -54,8 +54,31 @@ pub struct Service {
     #[serde(default)]
     pub composition: ServiceComposition,
 
-    #[serde(default)]
-    pub contract: Option<Contract>,
+    #[serde(default, deserialize_with = "deserialize_contract")]
+    pub contract: Option<ServiceContract>,
+}
+
+/// The contract of a service
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceContract {
+    /// If set, the service is removed from the release instead of rejecting
+    /// the release when the contract is not satisfied
+    ///
+    /// Set from the `io.balena.features.optional` label
+    pub optional: bool,
+    pub contract: Contract,
+}
+
+fn deserialize_contract<'de, D>(deserializer: D) -> Result<Option<ServiceContract>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        Option::<Contract>::deserialize(deserializer)?.map(|contract| ServiceContract {
+            optional: false,
+            contract,
+        }),
+    )
 }
 
 // FIXME: add remaining fields
@@ -1325,7 +1348,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let contract = svc.contract.expect("contract is present");
+        let contract = svc.contract.expect("contract is present").contract;
         assert_eq!(contract.get_type(), "sw.container");
     }
 
@@ -1342,7 +1365,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let contract = svc.contract.expect("contract is present");
+        let contract = svc.contract.expect("contract is present").contract;
         assert_eq!(contract.get_type(), "sw.container");
         assert_eq!(contract.get_slug(), Some("my-service"));
         assert_eq!(contract.get_version().as_deref(), Some("1.2.3"));
