@@ -139,9 +139,15 @@ pub async fn prepare(
         initial_state.host.as_ref().map(|host| &host.meta),
         kernel.as_ref(),
         supervisor_version.as_deref(),
+        initial_state.kind.as_deref(),
     );
     #[cfg(not(feature = "balenahup"))]
-    let contract = device_contract(None, kernel.as_ref(), supervisor_version.as_deref());
+    let contract = device_contract(
+        None,
+        kernel.as_ref(),
+        supervisor_version.as_deref(),
+        initial_state.kind.as_deref(),
+    );
 
     let runtime = Runtime {
         retry_interval,
