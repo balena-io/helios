@@ -25,6 +25,7 @@ helios-store.workspace = true
 helios-util.workspace = true
 helios-remote-model.workspace = true
 
+contrato.workspace = true
 mahler.workspace = true
 serde.workspace = true
 serde_with.workspace = true

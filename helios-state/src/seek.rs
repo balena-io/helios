@@ -368,6 +368,7 @@ pub async fn start_seek(
 
     let Runtime {
         oci,
+        contract,
         retry_interval,
         resources,
         host_runtime_dir,
@@ -487,6 +488,7 @@ pub async fn start_seek(
                     let host_runtime_dir = &host_runtime_dir;
                     let host_docker_sock = host_docker_sock.as_ref();
                     let runtimes = &oci.runtimes;
+                    let contract = &contract;
                     let remote_config = &remote_config;
 
                     // Allow reporting from inside the future
@@ -525,8 +527,11 @@ pub async fn start_seek(
                                 proxy_state.clear().await;
                             }
 
-                            let refused =
-                                device_target.test_runtime_support(current_state, runtimes);
+                            let refused = device_target.test_runtime_support(
+                                current_state,
+                                runtimes,
+                                contract,
+                            );
                             for reason in &refused {
                                 error!("{reason}");
                             }

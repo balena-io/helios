@@ -4,6 +4,7 @@ use std::time::Duration;
 use mahler::state::State;
 use serde::{Deserialize, Serialize};
 
+use crate::contracts::ServiceContract;
 use crate::labels::LABEL_SERVICE_ID;
 
 pub use crate::oci::Health;
@@ -146,6 +147,12 @@ pub struct Service {
     /// Ordering dependencies on other services in the same release.
     #[mahler(default)]
     pub depends_on: DependsOn,
+
+    /// The contract the service requires of the device
+    ///
+    /// XXX: this only exists on the target and is removed on validation.
+    /// It should not take part on planning.
+    pub contract: Option<ServiceContract>,
 }
 
 impl From<Service> for ServiceTarget {
@@ -164,6 +171,7 @@ impl From<Service> for ServiceTarget {
             config,
             started,
             depends_on,
+            contract: None,
         }
     }
 }
@@ -176,6 +184,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             labels,
             environment,
             composition,
+            contract,
             ..
         } = service;
 
@@ -310,6 +319,7 @@ impl From<RemoteServiceTarget> for ServiceTarget {
             image: image.into(),
             started: true,
             depends_on,
+            contract: contract.map(ServiceContract::from),
             config: ServiceConfig(ContainerConfig {
                 annotations: composition.annotations.into(),
                 cgroup: composition.cgroup.map(|c| match c {
@@ -465,6 +475,7 @@ impl<N> From<LocalContainer<N>> for Service {
             started,
             config,
             depends_on,
+            contract: None,
         }
     }
 }
