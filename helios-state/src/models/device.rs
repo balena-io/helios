@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use contrato::Universe;
 use mahler::state::{List, Map, State};
 use tracing::warn;
 
@@ -8,6 +9,8 @@ use crate::common_types::{HostRuntimeDir, ImageUri, OperatingSystem, Uuid, Value
 use crate::oci::{self, BindPropagation, Mount};
 use crate::remote_model::{App as RemoteAppTarget, Device as RemoteDeviceTarget};
 use crate::runtime::RemoteConfig;
+
+use crate::contracts::reject_unsatisfied_releases;
 
 use super::app::App;
 use super::image::Image;
@@ -86,14 +89,25 @@ impl DeviceTarget {
         &mut self,
         device: &Device,
         runtimes: &[oci::Runtime],
+        contract: &Universe,
     ) -> Vec<String> {
+        // Validate the target app against the device contract
+        let reasons = reject_unsatisfied_releases(&mut self.apps, contract);
+
         #[cfg(feature = "balenahup")]
-        if let (Some(host_tgt), Some(_)) = (self.host.as_mut(), device.host.as_ref()) {
-            return crate::balenahup::reject_unsupported_releases(host_tgt, runtimes);
-        }
+        let reasons = match (self.host.as_mut(), device.host.as_ref()) {
+            (Some(host_tgt), Some(_)) => reasons
+                .into_iter()
+                .chain(crate::balenahup::reject_unsupported_releases(
+                    host_tgt, runtimes,
+                ))
+                .collect(),
+            _ => reasons,
+        };
         #[cfg(not(feature = "balenahup"))]
         let _ = (device, runtimes);
-        Vec::new()
+
+        reasons
     }
 
     /// Adds system runtime related context  to the target state

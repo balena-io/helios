@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use contrato::Universe;
 use thiserror::Error;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
+use crate::contracts::device_contract;
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
@@ -48,6 +50,8 @@ pub struct Runtime {
     pub(crate) reader: Reader,
     /// OCI engine context
     pub(crate) oci: OciContext,
+    /// The contract describing what the device provides to services
+    pub(crate) contract: Universe,
     /// Remote credentials
     pub(crate) remote_config: Option<RemoteConfig>,
 }
@@ -112,6 +116,12 @@ pub async fn prepare(
     };
 
     let initial_state = reader.read().await?;
+
+    #[cfg(feature = "balenahup")]
+    let contract = device_contract(initial_state.host.as_ref().map(|host| &host.meta));
+    #[cfg(not(feature = "balenahup"))]
+    let contract = device_contract(None);
+
     let runtime = Runtime {
         retry_interval,
         host_runtime_dir: HostRuntimeDir(host_runtime_dir),
@@ -123,6 +133,7 @@ pub async fn prepare(
         },
         reader,
         oci,
+        contract,
         remote_config,
     };
 

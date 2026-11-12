@@ -781,6 +781,7 @@ fn create_service(maybe_svc: View<Option<Service>>, Target(tgt): Target<Service>
         oci: None,
         config,
         depends_on,
+        contract: None,
     })
 }
 

@@ -1091,6 +1091,7 @@ dependencies = [
 name = "helios-state"
 version = "0.29.14"
 dependencies = [
+ "contrato",
  "helios-balenahup",
  "helios-legacy",
  "helios-oci",
