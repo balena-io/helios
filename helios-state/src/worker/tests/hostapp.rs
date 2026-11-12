@@ -39,7 +39,9 @@ fn it_finds_a_workflow_to_update_the_hostapp_on_a_fresh_device() {
             "store the host app uuid",
             "initialize host OS release 'target-release'",
             "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -91,7 +93,9 @@ fn it_deploys_and_activates_overlays_without_install_when_already_running_the_ta
         seq!(
             "initialize host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -139,8 +143,10 @@ fn it_deploys_overlays_before_installing_the_hostapp() {
         seq!(
             "initialize host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
+            "mark reboot as required",
             "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -190,16 +196,17 @@ fn it_deploys_multiple_overlays_before_installing() {
                 }
             },
         }),
-        // init -> (deploy both overlays, in some order) -> install -> reboot.
+        // init -> deploy both overlays -> install -> reboot -> activate.
         // Overlay map keys are sorted (Map derefs to BTreeMap).
+        // Serial: the validation guard unscopes the task.
         seq!(
             "initialize host OS release 'target-release'",
-            // Serial: the validation guard unscopes the task.
             "deploy overlay 'extra-modules' for host OS release 'target-release'",
-            "deploy overlay 'kernel-modules' for host OS release 'target-release'"
-        ) + seq!(
+            "mark reboot as required",
+            "deploy overlay 'kernel-modules' for host OS release 'target-release'",
             "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -273,7 +280,9 @@ fn it_deploys_a_missing_target_overlay_before_the_reboot() {
         }),
         seq!(
             "deploy overlay 'extra-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -284,12 +293,9 @@ fn it_removes_an_overlay_dropped_from_the_target() {
     // The overlay stays OS-compatible, so the stale-OS sweep would not reap it;
     // helios must plan the teardown itself.
     //
-    // The removal and its reboot land in one workflow. `mark_pending_reboot`
-    // raises the flag during planning, so the reboot is plannable from the
-    // simulated state rather than from the breadcrumb the removal writes at
-    // execution time, which the planner cannot see. The two method subtasks
-    // branch concurrently because their paths are disjoint; only the reboot,
-    // planned from the flag they raise, is ordered after them.
+    // The removal and its reboot land in one workflow: `mark_reboot_required`
+    // raises the flag during planning, and the reboot is ordered after both
+    // method subtasks.
     init_tracing();
     assert_workflow(
         json!({
@@ -341,8 +347,8 @@ fn it_removes_an_overlay_dropped_from_the_target() {
         }),
         par!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!("reboot to apply overlay changes"),
+            "mark reboot as required",
+        ) + seq!("reboot the device"),
     );
 }
 
@@ -416,6 +422,7 @@ fn it_withdraws_a_dropped_overlay_before_activating_the_staged_ones() {
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -474,7 +481,8 @@ fn it_withdraws_a_dropped_overlay_before_activating_the_staged_ones() {
         }),
         seq!(
             "remove overlay 'extra-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -537,15 +545,12 @@ fn it_removes_two_overlays_dropped_from_the_target() {
                 }
             },
         }),
-        // The removals go one at a time: both marks write the same flag, so
-        // they cannot share a branch. The reboot waits for the last of them.
+        // One mark covers both removals; the reboot runs after both.
         par!(
             "remove overlay 'extra-modules' for host OS release 'target-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + par!(
-            "remove overlay 'kernel-modules' for host OS release 'target-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!("reboot to apply overlay changes"),
+            "mark reboot as required",
+        ) + seq!("remove overlay 'kernel-modules' for host OS release 'target-release'")
+            + seq!("reboot the device"),
     );
 }
 
@@ -669,6 +674,7 @@ fn it_removes_a_second_overlay_while_the_first_removals_reboot_is_pending() {
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -676,7 +682,6 @@ fn it_removes_a_second_overlay_while_the_first_removals_reboot_is_pending() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -714,10 +719,11 @@ fn it_removes_a_second_overlay_while_the_first_removals_reboot_is_pending() {
                 }
             },
         }),
-        par!(
+        // The flag is already set, so the removal does not mark it again.
+        seq!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!("reboot to apply overlay changes"),
+            "reboot the device"
+        ),
     );
 }
 
@@ -725,13 +731,14 @@ fn it_removes_a_second_overlay_while_the_first_removals_reboot_is_pending() {
 fn it_reboots_to_apply_a_pending_overlay_removal() {
     // The cycle after a removal: the container is gone, but the root overlay
     // composition mobynit assembled at boot still carries it, so `read` derives
-    // `pending_reboot` from the breadcrumb `remove_overlay` left. The target
-    // never asks for a reboot, and that diff is the whole plan.
+    // `needs_reboot` from the breadcrumb the removal left. The target never
+    // asks for a reboot, and that diff is the whole plan.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -739,7 +746,6 @@ fn it_reboots_to_apply_a_pending_overlay_removal() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -771,7 +777,7 @@ fn it_reboots_to_apply_a_pending_overlay_removal() {
                 }
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!("reboot the device"),
     );
 }
 
@@ -782,16 +788,14 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
     // Dead and reports a failure it cannot avoid, and the container stays
     // registered until a boot unpins it.
     //
-    // `derive_overlay_status` reads that container as no overlay at all, which
-    // is what makes the removal converge: were it still derived as present, the
-    // target would go on asking for its removal and the planner would re-plan
-    // one on every seek until the reboot. The release keeps its other overlay,
-    // so the only work left is the reboot the removal recorded.
+    // The container is read as withdrawn, and its removal is skipped rather
+    // than re-planned on every seek. The only work left is the reboot.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -799,7 +803,6 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -814,6 +817,11 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                                 "image": "registry2.balena-cloud.com/v2/extramodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
                                 "status": "active",
                                 "runtime": "extension",
+                            },
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "withdrawn",
+                                "runtime": "extension",
                             }
                         }
                     }
@@ -844,28 +852,24 @@ fn it_does_not_replan_a_withdrawal_the_engine_could_not_finish() {
                 }
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!("reboot the device"),
     );
 }
 
 #[test]
-fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
+fn it_waits_for_the_reboot_to_redeploy_a_withdrawn_overlay() {
     // The other direction of the same read. A withdrawal the engine could not
     // finish, and then the target asks for the same overlay at the same image
     // again, which is what re-enabling a fleet profile produces.
     //
-    // Derived as Failed, the Dead container would match
-    // `overlay_activation_failed` and wedge the release until an operator
-    // intervened. That guard is for an activation that ran and lost, and a
-    // removal the engine could not finish is not an activation verdict, so the
-    // planner deploys instead. The deploy fails while the dead container still
-    // reserves the name, and no budget bounds those retries: the reboot planned
-    // here unpins the layer and the next attempt lands.
+    // The withdrawn container keeps the name until the OS removes it on boot,
+    // so the release waits for the reboot, and the deploy follows it.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -873,7 +877,6 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -883,7 +886,13 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                             "install_attempts": 0,
                         },
                         "status": "running",
-                        "overlays": {}
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "withdrawn",
+                                "runtime": "extension",
+                            }
+                        }
                     }
                 }
             },
@@ -912,24 +921,21 @@ fn it_redeploys_over_a_dead_container_instead_of_freezing_the_release() {
                 }
             },
         }),
-        seq!(
-            "reboot to apply overlay changes",
-            "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
-        ),
+        seq!("reboot the device"),
     );
 }
 
 #[test]
 fn it_defers_the_overlay_reboot_while_validation_runs() {
     // A helios-issued reboot inside the rollback-health window would trigger
-    // the rollback. The reboot task enforces on the validation flag, so the
-    // planner sequences the wait first, and the wait fails.
+    // the rollback. The reboot enforces on the validation flag, so the planner
+    // sequences the wait first, and the wait fails before the reboot runs.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -938,7 +944,6 @@ fn it_defers_the_overlay_reboot_while_validation_runs() {
                     "build": "cde2354",
                 },
                 "host_validating": true,
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -972,7 +977,7 @@ fn it_defers_the_overlay_reboot_while_validation_runs() {
         }),
         seq!(
             "wait for the host validation to finish",
-            "reboot to apply overlay changes"
+            "reboot the device"
         ),
     );
 }
@@ -1040,9 +1045,9 @@ fn it_defers_an_overlay_removal_while_validation_runs() {
         seq!("wait for the host validation to finish")
             + par!(
                 "remove overlay 'kernel-modules' for host OS release 'target-release'",
-                "mark overlay change as awaiting a reboot",
+                "mark reboot as required",
             )
-            + seq!("reboot to apply overlay changes"),
+            + seq!("reboot the device"),
     );
 }
 
@@ -1112,7 +1117,7 @@ fn it_aborts_when_an_overlay_activation_failed() {
 
 #[test]
 fn it_redeploys_an_overlay_whose_activation_failed_at_a_new_image() {
-    // The terminal abort above is scoped to retrying the image that failed. A
+    // A failed activation aborts the release only at the image that failed. A
     // new image is a different bet, so a release shipped to replace a broken
     // overlay still gets its attempt.
     init_tracing();
@@ -1174,7 +1179,9 @@ fn it_redeploys_an_overlay_whose_activation_failed_at_a_new_image() {
         seq!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -1243,7 +1250,83 @@ fn it_redeploys_an_overlay_whose_target_image_changed() {
         seq!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_deploys_a_changed_overlay_before_a_pending_reboot() {
+    // A reboot is pending when a new release of the running build changes an
+    // active overlay's image. The new release takes over the running one, so the
+    // old release and its overlay go, and the reboot waits for the deploy.
+    // NOTE: this probably can never happen given the current OS build workflow
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
+            "host": {
+                "meta": {
+                    "name": "balenaOS",
+                    "version": "5.7.3",
+                    "build": "cde2354",
+                },
+                "releases": {
+                    "target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-target-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "initialize host OS release 'new-target-release'",
+            "remove overlay 'kernel-modules' for host OS release 'target-release'",
+            "remove metadata for host OS release 'target-release'",
+            "deploy overlay 'kernel-modules' for host OS release 'new-target-release'",
+            "reboot the device",
+            "activate host OS release 'new-target-release'",
         ),
     );
 }
@@ -1310,7 +1393,9 @@ fn it_redeploys_an_overlay_created_against_another_runtime() {
         seq!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -1381,7 +1466,9 @@ fn it_redeploys_an_overlay_whose_kernel_did_not_boot() {
         seq!(
             "remove overlay 'kernel-modules' for host OS release 'target-release'",
             "deploy overlay 'kernel-modules' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -1436,19 +1523,81 @@ fn it_finds_a_workflow_to_update_the_hostapp_to_a_new_release() {
         seq!(
             "initialize host OS release 'new-release'",
             "install host OS release 'new-release'",
-            "reboot to activate host OS release 'new-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
 
 #[test]
-fn it_skips_a_hostapp_install_if_already_installed() {
+fn it_deploys_an_overlay_added_after_the_install_before_the_reboot() {
+    // The target gains an overlay after the install. The reboot waits for the
+    // deploy, so one reboot brings up both.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
-            "auths": [],
+            "host": {
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
+                        "status": "installed",
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "deploy overlay 'kernel-modules' for host OS release 'new-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_reboots_into_an_installed_release_without_marking_it_again() {
+    // The cycle after the install: `needs_reboot` is read back, so the release
+    // is activated and rebooted into without a second mark.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -1457,15 +1606,6 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                     "build": "abcd1234",
                 },
                 "releases": {
-                    "old-release": {
-                        "hostapp": {
-                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                            "updater": "bh.cr/balena_os/balenahup",
-                            "build": "abcd1234",
-                            "install_attempts": 1,
-                        },
-                        "status": "running",
-                    },
                     "new-release": {
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
@@ -1495,9 +1635,10 @@ fn it_skips_a_hostapp_install_if_already_installed() {
                 }
             },
         }),
-        // Still running the old release until this reboot lands, so its record
-        // stays.
-        seq!("reboot to activate host OS release 'new-release'",),
+        seq!(
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
     );
 }
 
@@ -1611,7 +1752,9 @@ fn it_waits_while_the_os_release_is_being_validated() {
         seq!(
             "wait for the host validation to finish",
             "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'"
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
@@ -1661,7 +1804,9 @@ fn it_defers_installing_a_new_target_release_while_validation_runs() {
             "wait for the host validation to finish",
             "initialize host OS release 'new-release'",
             "install host OS release 'new-release'",
-            "reboot to activate host OS release 'new-release'"
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
@@ -1806,26 +1951,19 @@ fn it_plans_nothing_when_the_release_and_its_overlays_are_converged() {
 }
 
 #[test]
-fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
+fn it_deploys_an_incoming_overlay_before_a_pending_reboot() {
     // A target change that drops one overlay and adds another, on the cycle
     // after the removal ran: its breadcrumb is already there, so
-    // `pending_reboot` is set while the overlay the target wants is still
+    // `needs_reboot` is set while the overlay the target wants is still
     // missing.
     //
-    // The removal reboot does not wait for that deploy. It runs first, the
-    // device comes back without the incoming overlay, and `reboot_to_activate`
-    // reboots again once the deploy lands. That second reboot is the deliberate
-    // price of not gating the reboot on a deploy: a wait on work that can go
-    // permanently unsatisfiable makes the flag unreachable, and mahler answers
-    // an unreachable target by planning nothing at all, for the whole device.
-    //
-    // The reboot reads the whole state and target, which puts it on its own
-    // planning step rather than a concurrent branch; the order is the same.
+    // The deploy goes first, and one reboot applies both changes.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": {
@@ -1833,7 +1971,6 @@ fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -1873,37 +2010,33 @@ fn it_reboots_for_a_removal_without_waiting_for_an_incoming_deploy() {
             },
         }),
         seq!(
-            "reboot to apply overlay changes",
             "deploy overlay 'incoming' for host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "reboot the device",
+            "activate host OS release 'target-release'",
         ),
     );
 }
 
 #[test]
-fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
-    // Regression guard for the whole-device freeze. A pending removal reboot
-    // next to an overlay stuck at `Failed` at the target image: the release is
-    // frozen by the activation-failed exception, so nothing can ever stage that
-    // overlay. Gating the reboot on it left the `pending_reboot` divergence
-    // unclosable, and mahler answers an unreachable target with no workflow at
-    // all, which stops every other change on the device too. The reboot must
-    // stay plannable regardless of what the rest of the target is doing.
+fn it_reboots_for_a_staged_overlay_while_a_sibling_activation_is_failing() {
+    // The deploy of one overlay requested the reboot before its sibling failed
+    // at the target image. The frozen release counts as settled, so the reboot
+    // still runs and brings up the staged overlay without the failed one.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
-                "app": "hostapp-uuid",
                 "meta": {
                     "name": "balenaOS",
                     "version": "5.7.3",
                     "build": "cde2354",
                 },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
+                        "app": "hostapp-uuid",
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
@@ -1912,6 +2045,11 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
                         },
                         "status": "running",
                         "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "deployed",
+                                "runtime": "extension",
+                            },
                             "incoming": {
                                 "image": "registry2.balena-cloud.com/v2/incoming@sha256:d444444444444444444444444444444444444444444444444444444444444444",
                                 "status": "failed",
@@ -1926,9 +2064,9 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
             "name": "device-name",
             "uuid": "my-device-uuid",
             "host": {
-                "app": "hostapp-uuid",
                 "releases": {
                     "target-release": {
+                        "app": "hostapp-uuid",
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
@@ -1936,6 +2074,11 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
                         },
                         "status": "running",
                         "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            },
                             "incoming": {
                                 "image": "registry2.balena-cloud.com/v2/incoming@sha256:d444444444444444444444444444444444444444444444444444444444444444",
                                 "status": "active",
@@ -1946,7 +2089,7 @@ fn it_reboots_for_a_removal_while_an_overlay_activation_is_failing() {
                 }
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!("reboot the device"),
     );
 }
 
@@ -2014,11 +2157,81 @@ fn it_removes_a_superseded_releases_overlays_when_it_forgets_the_release() {
         // container is removed, and only then is the release forgotten.
         par!(
             "remove overlay 'kernel-modules' for host OS release 'old-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!(
-            "remove metadata for host OS release 'old-release'",
-            "reboot to apply overlay changes",
-        ),
+            "mark reboot as required",
+        ) + seq!("remove metadata for host OS release 'old-release'")
+            + seq!("reboot the device"),
+    );
+}
+
+#[test]
+fn it_waits_for_the_reboot_to_redeploy_a_withdrawn_overlay_of_a_release_targeted_again() {
+    // The target goes back to a release whose overlay was withdrawn this boot.
+    // The kept record shows the container still holding the name, so the
+    // release waits for the reboot rather than deploying into it.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
+            "host": {
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "withdrawn",
+                                "runtime": "extension",
+                            }
+                        }
+                    },
+                    "new-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "running",
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "old-release": {
+                        "app": "hostapp-uuid",
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("reboot the device"),
     );
 }
 
@@ -2075,7 +2288,9 @@ fn it_keeps_the_running_releases_overlays_while_its_replacement_installs() {
         seq!(
             "initialize host OS release 'new-release'",
             "install host OS release 'new-release'",
-            "reboot to activate host OS release 'new-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
@@ -2143,12 +2358,10 @@ fn it_keeps_a_superseded_release_while_the_new_one_is_validating() {
         seq!("wait for the host validation to finish")
             + par!(
                 "remove overlay 'kernel-modules' for host OS release 'old-release'",
-                "mark overlay change as awaiting a reboot",
+                "mark reboot as required",
             )
-            + seq!(
-                "remove metadata for host OS release 'old-release'",
-                "reboot to apply overlay changes"
-            ),
+            + seq!("remove metadata for host OS release 'old-release'")
+            + seq!("reboot the device"),
     );
 }
 
@@ -2221,13 +2434,11 @@ fn it_removes_a_dropped_overlay_while_forgetting_a_superseded_release() {
         }),
         par!(
             "remove overlay 'kernel-modules' for host OS release 'old-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!("remove metadata for host OS release 'old-release'")
-            + par!(
-                "remove overlay 'tracing' for host OS release 'new-release'",
-                "mark overlay change as awaiting a reboot",
-            )
-            + seq!("reboot to apply overlay changes"),
+            "mark reboot as required",
+        ) + seq!(
+            "remove metadata for host OS release 'old-release'",
+            "remove overlay 'tracing' for host OS release 'new-release'",
+        ) + seq!("reboot the device"),
     );
 }
 
@@ -2243,10 +2454,10 @@ fn it_reboots_for_a_removal_while_a_frozen_release_holds_a_dropped_overlay() {
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -2296,24 +2507,23 @@ fn it_reboots_for_a_removal_while_a_frozen_release_holds_a_dropped_overlay() {
                 }
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!("reboot the device"),
     );
 }
 
 #[test]
 fn it_reboots_for_a_removal_while_the_running_release_awaits_its_replacement() {
-    // Same guard for a release the target forgets but the device still runs:
-    // its overlays only go once the activating reboot has moved the device
-    // off it, so the removal reboot must not wait for them either.
+    // A forgotten release the device still runs keeps its overlays until the
+    // reboot moves off it, so the reboot does not wait for them.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
-                "pending_reboot": true,
                 "releases": {
                     "old-release": {
                         "hostapp": {
@@ -2360,25 +2570,38 @@ fn it_reboots_for_a_removal_while_the_running_release_awaits_its_replacement() {
                 }
             },
         }),
+        // One reboot applies the removal and activates the installed release.
         seq!(
-            "reboot to apply overlay changes",
-            "reboot to activate host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
 
 #[test]
-fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() {
-    // Identical target plans normally on a host whose engine registers the runtime
-    // the overlay names.
+fn it_installs_a_new_release_before_a_pending_reboot() {
+    // A pending reboot waits for a new release to install, so one reboot
+    // applies both.
     init_tracing();
     assert_workflow(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
-                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    }
+                }
             },
         }),
         json!({
@@ -2387,7 +2610,7 @@ fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() 
             "host": {
                 "app": "hostapp-uuid",
                 "releases": {
-                    "target-release": {
+                    "new-release": {
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
@@ -2395,8 +2618,8 @@ fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() 
                         },
                         "status": "running",
                         "overlays": {
-                            "ebpf": {
-                                "image": "registry2.balena-cloud.com/v2/ebpf@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
                                 "status": "active",
                                 "runtime": "extension",
                             }
@@ -2406,51 +2629,11 @@ fn it_deploys_the_same_release_on_a_host_that_registers_the_extension_runtime() 
             },
         }),
         seq!(
-            "initialize host OS release 'target-release'",
-            "deploy overlay 'ebpf' for host OS release 'target-release'",
-            "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
-        ),
-    );
-}
-
-#[test]
-fn it_installs_a_release_without_overlays_on_a_pre_extension_host() {
-    // The first step of the supported two-step migration: the vanilla release
-    // that brings the extension-capable OS must plan normally, or the device
-    // has no way out of the state above. A target with no overlays asks for no
-    // runtime, so the engine's empty list has nothing to decline.
-    init_tracing();
-    assert_workflow(
-        json!({
-            "name": "device-name",
-            "uuid": "my-device-uuid",
-            "host": {
-                "app": "hostapp-uuid",
-                "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
-            },
-        }),
-        json!({
-            "name": "device-name",
-            "uuid": "my-device-uuid",
-            "host": {
-                "app": "hostapp-uuid",
-                "releases": {
-                    "target-release": {
-                        "hostapp": {
-                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
-                            "updater": "bh.cr/balena_os/balenahup",
-                            "build": "cde2354",
-                        },
-                        "status": "running",
-                    }
-                }
-            },
-        }),
-        seq!(
-            "initialize host OS release 'target-release'",
-            "install host OS release 'target-release'",
-            "reboot to activate host OS release 'target-release'",
+            "initialize host OS release 'new-release'",
+            "deploy overlay 'kernel-modules' for host OS release 'new-release'",
+            "install host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
@@ -2463,10 +2646,10 @@ fn it_reboots_for_a_removal_while_a_pre_extension_host_holds_a_declined_release(
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
-                "pending_reboot": true,
                 "releases": {
                     "target-release": {
                         "hostapp": {
@@ -2498,14 +2681,167 @@ fn it_reboots_for_a_removal_while_a_pre_extension_host_holds_a_declined_release(
             },
         }),
         seq!(
-            "reboot to apply overlay changes",
+            "reboot the device",
             "set rejected target release for host OS to target-release"
         ),
     );
 }
 
 #[test]
-fn it_withdraws_the_last_overlay_on_a_pre_extension_host() {
+fn it_does_not_install_a_new_release_whose_overlay_failed_to_deploy() {
+    // An overlay of a release that is not installed yet failed to activate. The
+    // install must not follow: it cannot be undone, and the release would boot
+    // without an extension it requires.
+    init_tracing();
+    assert_aborted(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "failed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        "overlay activation failed for host OS release 'new-release', check device",
+    );
+}
+
+#[test]
+fn it_reboots_without_installing_a_new_release_whose_overlay_failed_to_deploy() {
+    // The first overlay deployed and requested the reboot, then its sibling
+    // failed. The release is frozen before the install, and the reboot still
+    // runs on the running OS. The staged sibling comes up stale if it claims a
+    // kernel, active on the running OS if it claims none.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 0,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "extra-modules": {
+                                "image": "registry2.balena-cloud.com/v2/extramodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "deployed",
+                                "runtime": "extension",
+                            },
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "failed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "extra-modules": {
+                                "image": "registry2.balena-cloud.com/v2/extramodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            },
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("reboot the device"),
+    );
+}
+
+#[test]
+fn it_installs_a_new_release_once_a_failed_overlay_is_replaced() {
+    // The failure freezes the release at the image that failed. A target with a
+    // new image for the overlay is the way forward: the failed container goes,
+    // the new one deploys, and the install follows.
     init_tracing();
     assert_workflow(
         json!({
@@ -2513,19 +2849,257 @@ fn it_withdraws_the_last_overlay_on_a_pre_extension_host() {
             "uuid": "my-device-uuid",
             "host": {
                 "app": "hostapp-uuid",
-                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
                 "releases": {
-                    "target-release": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
                             "build": "cde2354",
                             "install_attempts": 0,
                         },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "failed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "remove overlay 'kernel-modules' for host OS release 'new-release'",
+            "deploy overlay 'kernel-modules' for host OS release 'new-release'",
+            "mark reboot as required",
+            "install host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_retries_a_failed_install_without_touching_the_staged_overlays() {
+    // The install failed after the overlays deployed. Their deploy already
+    // requested the reboot, so the retry is the install alone: the staged
+    // overlays stay, and are not deployed again.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "deployed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
                         "status": "running",
                         "overlays": {
                             "kernel-modules": {
                                 "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "install host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_redeploys_a_staged_overlay_that_went_stale_before_the_install() {
+    // The install failed and the device rebooted before a retry. The reboot
+    // came up on the running OS, so the overlay's kernel claim was not honoured
+    // and it reads stale. A stale overlay does not count as staged, so the
+    // planner recreates it before the install.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "stale",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "remove overlay 'kernel-modules' for host OS release 'new-release'",
+            "deploy overlay 'kernel-modules' for host OS release 'new-release'",
+            "mark reboot as required",
+            "install host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_installs_over_a_claimless_overlay_activated_by_an_early_reboot() {
+    // As above, but the overlay claims no kernel, so the reboot read it as
+    // active rather than stale. Nothing to redeploy: the install goes ahead.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "tracing": {
+                                "image": "registry2.balena-cloud.com/v2/tracing@sha256:c333333333333333333333333333333333333333333333333333333333333333",
                                 "status": "active",
                                 "runtime": "extension",
                             }
@@ -2540,26 +3114,109 @@ fn it_withdraws_the_last_overlay_on_a_pre_extension_host() {
             "host": {
                 "app": "hostapp-uuid",
                 "releases": {
-                    "target-release": {
+                    "new-release": {
                         "hostapp": {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
                             "build": "cde2354",
                         },
-                        "status": "running"
+                        "status": "running",
+                        "overlays": {
+                            "tracing": {
+                                "image": "registry2.balena-cloud.com/v2/tracing@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
                     }
                 }
             },
         }),
-        par!(
-            "remove overlay 'kernel-modules' for host OS release 'target-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!("reboot to apply overlay changes"),
+        seq!(
+            "install host OS release 'new-release'",
+            "mark reboot as required",
+            "reboot the device",
+            "activate host OS release 'new-release'",
+        ),
     );
 }
 
 #[test]
-fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
+fn it_reboots_for_staged_overlays_after_too_many_install_failures() {
+    // The install budget is spent with the overlays staged and their reboot
+    // pending. The frozen release counts as settled, so the reboot still runs.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "needs_reboot": true,
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 3,
+                        },
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "deployed",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!("reboot the device"),
+    );
+}
+
+#[test]
+fn it_keeps_a_superseded_releases_stale_overlays_while_the_new_one_is_validating() {
+    // Booted on the new release, so the old release's kernel-claiming overlay
+    // reads stale. A rollback would bring that kernel back, so the overlay
+    // stays until the validation is over. It never reached this boot's root, so
+    // its removal then costs no reboot.
     init_tracing();
     assert_workflow(
         json!({
@@ -2568,6 +3225,7 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
             "host": {
                 "app": "hostapp-uuid",
                 "meta": { "name": "balenaOS", "version": "5.7.3", "build": "cde2354" },
+                "host_validating": true,
                 "releases": {
                     "old-release": {
                         "hostapp": {
@@ -2577,6 +3235,92 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
                             "install_attempts": 1,
                         },
                         "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
+                                "status": "stale",
+                                "runtime": "extension",
+                            }
+                        }
+                    },
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "releases": {
+                    "new-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "cde2354",
+                        },
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
+                    }
+                }
+            },
+        }),
+        seq!(
+            "wait for the host validation to finish",
+            "remove overlay 'kernel-modules' for host OS release 'old-release'",
+            "remove metadata for host OS release 'old-release'",
+        ),
+    );
+}
+
+#[test]
+fn it_reinstalls_a_release_the_os_rolled_back() {
+    // The install went through and the device rebooted into it, but the OS
+    // rolled back. The old release runs again with its overlay, the breadcrumb
+    // went with the reboot so the new release reads as created, and its
+    // overlay's kernel claim is not the one that booted.
+    //
+    // The old release and its overlay are kept. The stale overlay matches the
+    // target but is recreated anyway, as a stale overlay does not count as
+    // staged, and the install is retried.
+    init_tracing();
+    assert_workflow(
+        json!({
+            "name": "device-name",
+            "uuid": "my-device-uuid",
+            "host": {
+                "app": "hostapp-uuid",
+                "meta": { "name": "balenaOS", "version": "5.7.3", "build": "abcd1234" },
+                "releases": {
+                    "old-release": {
+                        "hostapp": {
+                            "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
+                            "updater": "bh.cr/balena_os/balenahup",
+                            "build": "abcd1234",
+                            "install_attempts": 1,
+                        },
+                        "status": "running",
                         "overlays": {
                             "kernel-modules": {
                                 "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:b222222222222222222222222222222222222222222222222222222222222222",
@@ -2590,9 +3334,16 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
                             "image": "registry2.balena-cloud.com/v2/hostapp@sha256:a111111111111111111111111111111111111111111111111111111111111111",
                             "updater": "bh.cr/balena_os/balenahup",
                             "build": "cde2354",
-                            "install_attempts": 0,
+                            "install_attempts": 1,
                         },
-                        "status": "running",
+                        "status": "created",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "stale",
+                                "runtime": "extension",
+                            }
+                        }
                     }
                 }
             },
@@ -2609,17 +3360,25 @@ fn it_forgets_a_release_with_overlays_on_a_pre_extension_host() {
                             "updater": "bh.cr/balena_os/balenahup",
                             "build": "cde2354",
                         },
-                        "status": "running"
+                        "status": "running",
+                        "overlays": {
+                            "kernel-modules": {
+                                "image": "registry2.balena-cloud.com/v2/kernelmodules@sha256:c333333333333333333333333333333333333333333333333333333333333333",
+                                "status": "active",
+                                "runtime": "extension",
+                            }
+                        }
                     }
                 }
             },
         }),
-        par!(
-            "remove overlay 'kernel-modules' for host OS release 'old-release'",
-            "mark overlay change as awaiting a reboot",
-        ) + seq!(
-            "remove metadata for host OS release 'old-release'",
-            "reboot to apply overlay changes",
+        seq!(
+            "remove overlay 'kernel-modules' for host OS release 'new-release'",
+            "deploy overlay 'kernel-modules' for host OS release 'new-release'",
+            "mark reboot as required",
+            "install host OS release 'new-release'",
+            "reboot the device",
+            "activate host OS release 'new-release'",
         ),
     );
 }
@@ -2703,10 +3462,10 @@ fn it_reboots_for_a_removal_while_the_target_release_is_rejected() {
         json!({
             "name": "device-name",
             "uuid": "my-device-uuid",
+            "needs_reboot": true,
             "host": {
                 "app": "hostapp-uuid",
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "cde2354" },
-                "pending_reboot": true,
                 "rejected_release": "bad-release",
                 "releases": {
                     "old-release": {
@@ -2737,6 +3496,6 @@ fn it_reboots_for_a_removal_while_the_target_release_is_rejected() {
                 "rejected_release": "bad-release",
             },
         }),
-        seq!("reboot to apply overlay changes"),
+        seq!("reboot the device"),
     );
 }
