@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
 use crate::contracts::{Kernel, device_contract};
+use crate::legacy::{self, LegacyConfig, UpstreamError};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
@@ -72,6 +73,9 @@ pub enum RuntimePrepareError {
 
     #[error("failed to initialize store: {0}")]
     StoreInit(std::io::Error),
+
+    #[error("failed to query the legacy Supervisor version: {0}")]
+    LegacyVersion(#[from] UpstreamError),
 }
 
 pub async fn prepare(
@@ -79,6 +83,7 @@ pub async fn prepare(
     retry_interval: Duration,
     host_config: HostConfig,
     remote_config: Option<RemoteConfig>,
+    legacy_config: Option<LegacyConfig>,
 ) -> Result<(Runtime, Device), RuntimePrepareError> {
     let docker = Docker::connect().await?;
 
@@ -118,13 +123,21 @@ pub async fn prepare(
     let initial_state = reader.read().await?;
 
     let kernel = Kernel::read().await;
+    let supervisor_version = match legacy_config {
+        Some(LegacyConfig {
+            api_endpoint,
+            api_key,
+        }) => Some(legacy::version(api_endpoint, api_key).await?),
+        None => None,
+    };
     #[cfg(feature = "balenahup")]
     let contract = device_contract(
         initial_state.host.as_ref().map(|host| &host.meta),
         kernel.as_ref(),
+        supervisor_version.as_deref(),
     );
     #[cfg(not(feature = "balenahup"))]
-    let contract = device_contract(None, kernel.as_ref());
+    let contract = device_contract(None, kernel.as_ref(), supervisor_version.as_deref());
 
     let runtime = Runtime {
         retry_interval,

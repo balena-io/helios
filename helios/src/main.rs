@@ -147,6 +147,7 @@ async fn start_supervisor(
         retry_interval,
         host_config,
         state_remote_config,
+        legacy_config.clone(),
     )
     .await?;
 
