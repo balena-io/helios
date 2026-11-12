@@ -5,7 +5,7 @@ use contrato::Universe;
 use thiserror::Error;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
-use crate::contracts::device_contract;
+use crate::contracts::{Kernel, device_contract};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
@@ -117,10 +117,14 @@ pub async fn prepare(
 
     let initial_state = reader.read().await?;
 
+    let kernel = Kernel::read().await;
     #[cfg(feature = "balenahup")]
-    let contract = device_contract(initial_state.host.as_ref().map(|host| &host.meta));
+    let contract = device_contract(
+        initial_state.host.as_ref().map(|host| &host.meta),
+        kernel.as_ref(),
+    );
     #[cfg(not(feature = "balenahup"))]
-    let contract = device_contract(None);
+    let contract = device_contract(None, kernel.as_ref());
 
     let runtime = Runtime {
         retry_interval,

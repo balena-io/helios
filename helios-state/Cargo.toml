@@ -26,6 +26,8 @@ helios-util.workspace = true
 helios-remote-model.workspace = true
 
 contrato.workspace = true
+nix = { workspace = true, features = ["feature"] }
+regex.workspace = true
 mahler.workspace = true
 serde.workspace = true
 serde_with.workspace = true
