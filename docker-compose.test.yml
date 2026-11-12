@@ -50,6 +50,7 @@ services:
     environment:
       DOCKER_HOST: 'unix:///var/run/docker.sock'
       BALENA_DEVICE_UUID: 'test-uuid'
+      BALENA_DEVICE_TYPE: 'generic-aarch64'
       BALENA_SUPERVISOR_PORT: 48484
       BALENA_API_URL: 'http://mock-remote'
       BALENA_API_KEY: 'test-api-key'
