@@ -10,6 +10,7 @@ use crate::labels::{
 };
 use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
+use crate::util::types::DeviceType;
 
 use super::models::{
     App, Device, LocalVolume, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
@@ -73,6 +74,7 @@ pub(crate) struct Reader {
     pub docker: Docker,
     pub local_store: DocumentStore,
     pub uuid: Uuid,
+    pub device_type: Option<DeviceType>,
     pub os: Option<OperatingSystem>,
 }
 
@@ -82,6 +84,7 @@ impl Reader {
             &self.docker,
             &self.local_store,
             self.uuid.clone(),
+            self.device_type.clone(),
             self.os.clone(),
         )
         .await
@@ -94,9 +97,10 @@ async fn read(
     docker: &Docker,
     local_store: &DocumentStore,
     uuid: Uuid,
+    device_type: Option<DeviceType>,
     os: Option<OperatingSystem>,
 ) -> Result<Device, Error> {
-    let mut device = Device::new(uuid, os);
+    let mut device = Device::new(uuid, device_type, os);
 
     // read the device name from the local store
     device.name = local_store.get("device_name").await?;

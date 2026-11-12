@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::api::LocalAddress;
 use crate::util::http::Uri;
-use crate::util::types::{ApiKey, OperatingSystem, Uuid};
+use crate::util::types::{ApiKey, DeviceType, OperatingSystem, Uuid};
 
 fn parse_duration(s: &str) -> Result<Duration, ParseIntError> {
     let millis: u64 = s.parse()?;
@@ -48,6 +48,10 @@ pub struct DaemonArgs {
         value_name = "str"
     )]
     pub host_os: Option<OperatingSystem>,
+
+    /// Device type slug, e.g. "raspberrypi4-64"
+    #[arg(env = "HELIOS_DEVICE_TYPE", long = "device-type", value_name = "slug")]
+    pub device_type: Option<DeviceType>,
 
     /// Host OS runtime directory for locks and update scripts, e.g. "/tmp/helios"
     #[arg(
@@ -166,7 +170,7 @@ pub struct DaemonArgs {
         value_name = "key",
         requires = "remote_api_endpoint",
         requires = "provisioning_fleet",
-        requires = "provisioning_device_type"
+        requires = "device_type"
     )]
     pub provisioning_key: Option<String>,
 
@@ -178,15 +182,6 @@ pub struct DaemonArgs {
         requires = "provisioning_key"
     )]
     pub provisioning_fleet: Option<u32>, // FIXME: should fleet_uuid
-
-    /// Device type
-    #[arg(
-        env = "HELIOS_PROVISIONING_DEVICE_TYPE",
-        long = "provisioning-device-type",
-        value_name = "slug",
-        requires = "provisioning_key"
-    )]
-    pub provisioning_device_type: Option<String>,
 
     /// Host OS name and version, eg. "balenaOS 6.5.39+rev1"
     #[arg(

@@ -30,6 +30,7 @@ pretty_assertions = "1.4.1"
 tar = "0.4"
 go-parse-duration = "0.1"
 parse-size = "1.1"
+contrato = "0.18.3"
 
 [workspace.dependencies.nix]
 version = "0.31"
