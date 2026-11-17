@@ -10,6 +10,7 @@ pub mod locking;
 pub mod logs;
 pub mod proc;
 pub mod rand;
+pub mod reboot;
 pub mod request;
 pub mod systemd;
 pub mod tar;
