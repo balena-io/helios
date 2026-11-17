@@ -17,7 +17,7 @@ use crate::util::http::Uri;
 use crate::util::types::DeviceType;
 use crate::util::uname::uname;
 pub struct HostConfig {
-    pub device_type: Option<DeviceType>,
+    pub device_type: DeviceType,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
@@ -145,14 +145,14 @@ pub async fn prepare(
         initial_state.host.as_ref().map(|host| &host.meta),
         system,
         supervisor_version.as_deref(),
-        initial_state.kind.as_deref(),
+        &initial_state.kind,
     );
     #[cfg(not(feature = "balenahup"))]
     let contract = device_contract(
         None,
         system,
         supervisor_version.as_deref(),
-        initial_state.kind.as_deref(),
+        &initial_state.kind,
     );
 
     let runtime = Runtime {

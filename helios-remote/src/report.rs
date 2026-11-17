@@ -483,6 +483,7 @@ mod tests {
     fn it_reports_authorized_apps() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "images": {
                 "ubuntu": {
                     "oci_id": "sha256:abc",
@@ -602,6 +603,7 @@ mod tests {
     fn it_excludes_unauthorized_user_apps_from_report() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "images": {},
             "apps": {
                 "my-app": {
@@ -669,6 +671,7 @@ mod tests {
         // add a rejected release entry next to it.
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "images": {
                 "img-a": {
                     "oci_id": "sha256:abc",
@@ -736,6 +739,7 @@ mod tests {
     fn it_reports_rejected_host_release_alongside_current() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "host": {
                 "app": "host-app",
                 "meta": { "name": "balenaOS", "version": "6.9.4", "build": "abcd1234" },
@@ -789,6 +793,7 @@ mod tests {
         // a single rejected release.
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "images": {},
             "apps": {
                 "never-installed": {
@@ -825,6 +830,7 @@ mod tests {
     fn it_skips_unauthorized_rejected_apps() {
         let device = serde_json::from_value::<Device>(json!({
             "uuid": "device-123",
+            "type": "generic-aarch64",
             "images": {},
             "apps": {
                 "unauthorized-app": {

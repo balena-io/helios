@@ -32,8 +32,8 @@ pub struct Device {
     pub uuid: Uuid,
 
     /// The device type slug
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<DeviceType>,
+    #[serde(rename = "type")]
+    pub kind: DeviceType,
 
     /// The device name on the remote
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,7 +90,7 @@ impl Default for DeviceTarget {
 }
 
 impl Device {
-    pub fn new(uuid: Uuid, kind: Option<DeviceType>, os: Option<OperatingSystem>) -> Self {
+    pub fn new(uuid: Uuid, kind: DeviceType, os: Option<OperatingSystem>) -> Self {
         #[cfg(not(feature = "balenahup"))]
         let _ = os;
         Self {
@@ -177,12 +177,10 @@ impl DeviceTarget {
                         Some(device.uuid.as_str().into()),
                     );
 
-                    if let Some(device_type) = &device.kind {
-                        svc.config.environment.insert(
-                            "BALENA_DEVICE_TYPE".to_string(),
-                            Some(device_type.as_str().into()),
-                        );
-                    }
+                    svc.config.environment.insert(
+                        "BALENA_DEVICE_TYPE".to_string(),
+                        Some(device.kind.as_str().into()),
+                    );
 
                     // Mount the per-app runtime directory at /tmp/balena so
                     // services can place files (e.g. update locks) that
@@ -424,6 +422,7 @@ mod tests {
     fn device_state_should_be_serializable_into_target() {
         let json = json!({
             "uuid": "device-uuid",
+            "type": "generic-aarch64",
             "apps": {
                 "aaa": {
                     "name": "my-app",
@@ -565,12 +564,12 @@ mod tests {
 
     /// Device carrying `volumes` as unsupervised volumes.
     fn device_with_volumes(volumes: serde_json::Value) -> Device {
-        let mut device: Device = serde_json::from_value(json!({
+        let device: Device = serde_json::from_value(json!({
             "uuid": "device-uuid",
+            "type": "generic-aarch64",
             "volumes": volumes,
         }))
         .unwrap();
-        device.kind = Some("generic-aarch64".to_string());
         device
     }
 
@@ -808,32 +807,13 @@ mod tests {
         let device: Device =
             serde_json::from_value(json!({ "uuid": "device-uuid", "type": "raspberrypi4-64" }))
                 .unwrap();
-        assert_eq!(device.kind.as_deref(), Some("raspberrypi4-64"));
+        assert_eq!(device.kind, "raspberrypi4-64");
     }
 
     #[test]
     fn device_type_is_not_part_of_the_target() {
         let target = DeviceTarget::from(device_with_volumes(json!([])));
         assert!(serde_json::to_value(&target).unwrap().get("type").is_none());
-    }
-
-    #[test]
-    fn device_type_is_not_set_without_a_device_type() {
-        let mut target = target_with_config(json!({}));
-        let mut device = device_with_volumes(json!([]));
-        device.kind = None;
-        target.add_runtime_context(
-            &device,
-            &HostRuntimeDir("/run/helios".into()),
-            Path::new(DEFAULT_HOST_DOCKER_SOCK),
-            &None,
-        );
-        assert!(
-            !service_of(&target)
-                .config
-                .environment
-                .contains_key("BALENA_DEVICE_TYPE")
-        );
     }
 
     #[test]
