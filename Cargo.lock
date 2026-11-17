@@ -1099,7 +1099,6 @@ dependencies = [
  "helios-store",
  "helios-util",
  "mahler",
- "nix",
  "pretty_assertions",
  "regex",
  "serde",

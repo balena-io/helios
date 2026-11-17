@@ -5,17 +5,19 @@ use contrato::Universe;
 use thiserror::Error;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
-use crate::contracts::{Kernel, device_contract};
+use crate::contracts::device_contract;
 use crate::legacy::{self, LegacyConfig, UpstreamError};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
 use crate::store::DocumentStore;
 use crate::util::dirs;
+use crate::util::fs::run_async;
 use crate::util::http::Uri;
 use crate::util::types::DeviceType;
+use crate::util::uname::uname;
 pub struct HostConfig {
-    pub device_type: Option<DeviceType>,
+    pub device_type: DeviceType,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
@@ -76,6 +78,9 @@ pub enum RuntimePrepareError {
     #[error("failed to initialize store: {0}")]
     StoreInit(std::io::Error),
 
+    #[error("failed to identify the system: {0}")]
+    Uname(std::io::Error),
+
     #[error("failed to query the legacy Supervisor version: {0}")]
     LegacyVersion(#[from] UpstreamError),
 }
@@ -126,7 +131,8 @@ pub async fn prepare(
 
     let initial_state = reader.read().await?;
 
-    let kernel = Kernel::read().await;
+    let uname = run_async(uname).await.map_err(RuntimePrepareError::Uname)?;
+    let system = (uname.sysname(), uname.release(), uname.machine());
     let supervisor_version = match legacy_config {
         Some(LegacyConfig {
             api_endpoint,
@@ -137,16 +143,16 @@ pub async fn prepare(
     #[cfg(feature = "balenahup")]
     let contract = device_contract(
         initial_state.host.as_ref().map(|host| &host.meta),
-        kernel.as_ref(),
+        system,
         supervisor_version.as_deref(),
-        initial_state.kind.as_deref(),
+        &initial_state.kind,
     );
     #[cfg(not(feature = "balenahup"))]
     let contract = device_contract(
         None,
-        kernel.as_ref(),
+        system,
         supervisor_version.as_deref(),
-        initial_state.kind.as_deref(),
+        &initial_state.kind,
     );
 
     let runtime = Runtime {

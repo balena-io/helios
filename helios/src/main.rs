@@ -21,7 +21,7 @@ use helios_remote as remote;
 use helios_state as state;
 use helios_store::DocumentStore;
 use helios_util as util;
-use helios_util::types::Uuid;
+use helios_util::types::{DeviceType, Uuid};
 
 use crate::api::{ApiConfig, Listener, LocalAddress};
 use crate::cli::DaemonArgs;
@@ -98,10 +98,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .expect("not nil because legacy_api_endpoint isn't nil"),
         });
 
-    let (uuid, remote_config) = maybe_provision(&cli, &config_store).await?;
+    let (uuid, remote_config, device_type) = maybe_provision(&cli, &config_store).await?;
+    let device_type = device_type
+        .ok_or("device type should be known at this point, set it with --device-type")?;
 
     let host_config = HostConfig {
-        device_type: cli.device_type,
+        device_type,
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
         host_docker_sock: cli.host_docker_sock,
@@ -280,7 +282,7 @@ where
 async fn maybe_provision(
     cli: &DaemonArgs,
     config_store: &DocumentStore,
-) -> Result<(Uuid, Option<RemoteConfig>), ProvisioningError> {
+) -> Result<(Uuid, Option<RemoteConfig>, Option<DeviceType>), ProvisioningError> {
     // Load our provisioning config, if one exists
     let provisioning_config: Option<ProvisioningConfig> =
         config_store.get(ProvisioningConfig::default_name()).await?;
@@ -318,32 +320,44 @@ async fn maybe_provision(
             );
         }
 
-        Ok((uuid.clone(), Some(remote)))
+        Ok((uuid.clone(), Some(remote), cli.device_type.clone()))
     }
     // Otherwise use an existing provisioning config, if available
     else if let Some(provisioning_config) = &provisioning_config {
-        if cli.uuid.is_some() && !cli.uuid.as_ref().eq(&Some(&provisioning_config.uuid)) {
-            warn!("ignoring --uuid argument that is different to registered remote");
-        }
-        if cli.remote_api_key.is_some()
-            && !cli
-                .remote_api_key
-                .as_ref()
-                .eq(&Some(&provisioning_config.remote.api_key))
+        if cli
+            .uuid
+            .as_ref()
+            .is_some_and(|uuid| uuid != &provisioning_config.uuid)
         {
-            warn!("ignoring --remote-api-key argument that is different to registered remote");
+            warn!("ignoring --uuid argument that is different to registered uuid");
         }
-        if cli.remote_api_endpoint.is_some()
-            && !cli
-                .remote_api_endpoint
-                .as_ref()
-                .eq(&Some(&provisioning_config.remote.api_endpoint))
+        if cli
+            .remote_api_key
+            .as_ref()
+            .is_some_and(|api_key| api_key != &provisioning_config.remote.api_key)
         {
-            warn!("ignoring --remote-api-endpoint argument that is different to registered remote");
+            warn!("ignoring --remote-api-key argument that is different to registered key");
+        }
+        if cli
+            .remote_api_endpoint
+            .as_ref()
+            .is_some_and(|api_endpoint| api_endpoint != &provisioning_config.remote.api_endpoint)
+        {
+            warn!(
+                "ignoring --remote-api-endpoint argument that is different to registered endpoint"
+            );
+        }
+        if cli
+            .device_type
+            .as_ref()
+            .is_some_and(|device_type| device_type != &provisioning_config.device_type)
+        {
+            warn!("ignoring --device-type argument that is different to registered device type");
         }
 
         let uuid = &provisioning_config.uuid;
         let request_defaults = &provisioning_config.remote.request;
+        let device_type = &provisioning_config.device_type;
         let remote = RemoteConfig {
             request: RequestConfig {
                 timeout: cli
@@ -362,7 +376,7 @@ async fn maybe_provision(
             ..provisioning_config.remote.clone()
         };
 
-        Ok((uuid.clone(), Some(remote)))
+        Ok((uuid.clone(), Some(remote), Some(device_type.clone())))
     }
     // We have a provisioning key
     else if let Some(provisioning_key) = &cli.provisioning_key {
@@ -406,14 +420,18 @@ async fn maybe_provision(
             },
         };
 
-        let (uuid, remote, _) =
+        let (uuid, remote, device_type) =
             provision(provisioning_key, &provisioning_config, config_store).await?;
 
-        Ok((uuid, Some(remote)))
+        Ok((uuid, Some(remote), Some(device_type)))
     }
     // We don't have a remote at all; run in "unmanaged" mode
     else {
-        // Generate a UUID if none provided
-        Ok((cli.uuid.clone().unwrap_or_default(), None))
+        Ok((
+            // Generate a UUID if none provided
+            cli.uuid.clone().unwrap_or_default(),
+            None,
+            cli.device_type.clone(),
+        ))
     }
 }

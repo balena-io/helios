@@ -61,6 +61,8 @@ cargo run -- \
 
 For the full list of command line arguments use `cargo run -- --help`
 
+Helios needs to know the device type at startup. It is taken from `--device-type` (or `HELIOS_DEVICE_TYPE`) or, for a device that is already registered, from the stored config. Helios will exit with an error if the device type cannot be determined, this includes running without a remote (unmanaged mode).
+
 Helios will register with the remote and the device will appear on the Dashboard. The next time you start helios, you do not need to provide these arguments again (though it is not an error if you do; they are just ignored) and helios will still assume the correct identity and connect with remote. This is because helios stores all necessary information into its config file after successful registration. If you want Helios to forget this identity, just delete its config file whose path helios prints when it starts.
 
 ## Architecture Overview

@@ -4,7 +4,6 @@ use std::sync::LazyLock;
 
 use contrato::{Contract, Universe};
 use mahler::state::{Map, State};
-use nix::sys::utsname::uname;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -13,7 +12,7 @@ use tracing::warn;
 use crate::common_types::{OperatingSystem, Uuid};
 use crate::models::AppTarget;
 use crate::remote_model::ServiceContract as RemoteServiceContract;
-use crate::util::fs::run_async;
+use crate::util::types::DeviceArch;
 
 /// A service contract, wrapped to make it usable on a state model
 ///
@@ -125,48 +124,15 @@ pub(crate) fn reject_unsatisfied_releases(
     reasons
 }
 
-/// The running kernel, as reported by `uname`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Kernel {
-    /// The kernel name, as given by `uname -s`
-    pub(crate) name: String,
-    /// The kernel release, as given by `uname -r`
-    pub(crate) release: String,
-    /// The hardware identifier, as given by `uname -m`
-    pub(crate) machine: String,
-}
-
-impl Kernel {
-    /// Read the running kernel, if it can be queried
-    pub(crate) async fn read() -> Option<Self> {
-        let res = run_async(|| {
-            let info = uname()?;
-            Ok(Self {
-                name: info.sysname().to_string_lossy().into_owned(),
-                release: info.release().to_string_lossy().into_owned(),
-                machine: info.machine().to_string_lossy().into_owned(),
-            })
-        })
-        .await;
-        match res {
-            Ok(kernel) => Some(kernel),
-            Err(e) => {
-                warn!("could not query the kernel with uname: {e}");
-                None
-            }
-        }
-    }
-}
-
 /// Build the device contract from what is known about the device
 ///
 /// Supports `sw.os`, `sw.kernel`, `sw.l4t`, `sw.kernel-bsp`, `arch.sw`,
 /// `sw.supervisor`, `sw.application`, `hw.device-type` contract types.
 pub(crate) fn device_contract(
     os: Option<&OperatingSystem>,
-    kernel: Option<&Kernel>,
+    system: (&str, &str, &str),
     supervisor_version: Option<&str>,
-    device_type: Option<&str>,
+    device_type: &str,
 ) -> Universe {
     let mut universe = Universe::new();
 
@@ -177,14 +143,14 @@ pub(crate) fn device_contract(
         warn!("could not build the `sw.os` contract for '{os}': {e}");
     }
 
-    if let Some(kernel) = kernel {
-        for contract in kernel_contracts(kernel)
-            .into_iter()
-            .chain(arch_contract(kernel))
-        {
-            if let Err(e) = contract.and_then(|contract| universe.add_child(contract).map(drop)) {
-                warn!("could not build a kernel contract for '{kernel:?}': {e}");
-            }
+    let (sysname, release, machine) = system;
+    let Ok(arch) = machine.parse::<DeviceArch>();
+    for contract in kernel_contracts(sysname, release)
+        .into_iter()
+        .chain([arch_contract(&arch)])
+    {
+        if let Err(e) = contract.and_then(|contract| universe.add_child(contract).map(drop)) {
+            warn!("could not build a system contract for '{sysname} {release} {arch}': {e}");
         }
     }
 
@@ -198,9 +164,8 @@ pub(crate) fn device_contract(
         warn!("could not build the supervisor contracts for '{version}': {e}");
     }
 
-    if let Some(device_type) = device_type
-        && let Err(e) = Contract::try_from(json!({ "type": "hw.device-type", "slug": device_type }))
-            .and_then(|contract| universe.add_child(contract).map(drop))
+    if let Err(e) = Contract::try_from(json!({ "type": "hw.device-type", "slug": device_type }))
+        .and_then(|contract| universe.add_child(contract).map(drop))
     {
         warn!("could not build the `hw.device-type` contract for '{device_type}': {e}");
     }
@@ -223,13 +188,11 @@ static L4T_VERSION: LazyLock<Regex> =
 /// is described by `sw.kernel-bsp` with the slug `l4t`. `sw.l4t` is kept for contracts
 /// written against the legacy supervisor, which require it by version only. A child contract
 /// needs a slug, so it gets `l4t` as well.
-fn kernel_contracts(
-    Kernel { name, release, .. }: &Kernel,
-) -> Vec<Result<Contract, contrato::Error>> {
+fn kernel_contracts(sysname: &str, release: &str) -> Vec<Result<Contract, contrato::Error>> {
     let mut raw = Vec::new();
 
     if let Some(version) = KERNEL_VERSION.captures(release).map(|c| c[1].to_string()) {
-        raw.push(json!({ "type": "sw.kernel", "slug": slugify(name), "version": version }));
+        raw.push(json!({ "type": "sw.kernel", "slug": slugify(sysname), "version": version }));
     }
 
     if let Some(captures) = L4T_VERSION.captures(release) {
@@ -262,25 +225,8 @@ fn supervisor_contracts(version: &str) -> Result<Vec<Contract>, contrato::Error>
 }
 
 /// The contract describing the device architecture, with the balena architecture as the slug
-///
-/// Only `amd64`, `aarch64`, `armv7hf`, `rpi` and `i386` are supported. `uname` reports the
-/// machine as `x86_64`, `arm64` (or `aarch64` on Linux), `armv7l`, `armv6l` and `i686`
-/// (or `i386`) respectively.
-fn arch_contract(Kernel { machine, .. }: &Kernel) -> Option<Result<Contract, contrato::Error>> {
-    let slug = match machine.as_str() {
-        "x86_64" => "amd64",
-        "arm64" | "aarch64" => "aarch64",
-        "armv7l" => "armv7hf",
-        "armv6l" => "rpi",
-        "i686" | "i386" => "i386",
-        _ => {
-            warn!("unsupported architecture '{machine}'");
-            return None;
-        }
-    };
-    Some(Contract::try_from(
-        json!({ "type": "arch.sw", "slug": slug }),
-    ))
+fn arch_contract(arch: &DeviceArch) -> Result<Contract, contrato::Error> {
+    Contract::try_from(json!({ "type": "arch.sw", "slug": arch.as_str() }))
 }
 
 fn os_contract(os: &OperatingSystem) -> Result<Contract, contrato::Error> {
@@ -356,7 +302,12 @@ mod tests {
 
     #[test]
     fn builds_the_os_contract() {
-        let universe = device_contract(Some(&os("balenaOS", Some("6.5.6+rev1"))), None, None, None);
+        let universe = device_contract(
+            Some(&os("balenaOS", Some("6.5.6+rev1"))),
+            linux(),
+            None,
+            DEVICE_TYPE,
+        );
         let found = universe.find_children(&Matcher::new("sw.os"));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].get_slug(), Some("balena-os"));
@@ -365,7 +316,7 @@ mod tests {
 
     #[test]
     fn builds_the_os_contract_without_version() {
-        let universe = device_contract(Some(&os("balenaOS", None)), None, None, None);
+        let universe = device_contract(Some(&os("balenaOS", None)), linux(), None, DEVICE_TYPE);
         let found = universe.find_children(&Matcher::new("sw.os"));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].get_version(), None);
@@ -373,7 +324,7 @@ mod tests {
 
     #[test]
     fn leaves_the_contract_empty_without_os() {
-        let universe = device_contract(None, None, None, None);
+        let universe = device_contract(None, linux(), None, DEVICE_TYPE);
         assert!(universe.find_children(&Matcher::new("sw.os")).is_empty());
     }
 
@@ -381,15 +332,15 @@ mod tests {
     fn omits_the_os_if_the_name_is_empty() {
         assert!(!has_os(&device_contract(
             Some(&os("", Some("1.0.0"))),
+            linux(),
             None,
-            None,
-            None
+            DEVICE_TYPE
         )));
         assert!(!has_os(&device_contract(
             Some(&os("  ", Some("1.0.0"))),
+            linux(),
             None,
-            None,
-            None
+            DEVICE_TYPE
         )));
     }
 
@@ -397,21 +348,21 @@ mod tests {
     fn omits_the_os_if_the_name_does_not_start_with_a_letter() {
         assert!(!has_os(&device_contract(
             Some(&os("1OS", Some("1.0.0"))),
+            linux(),
             None,
-            None,
-            None
+            DEVICE_TYPE
         )));
         assert!(!has_os(&device_contract(
             Some(&os("+os", Some("1.0.0"))),
+            linux(),
             None,
-            None,
-            None
+            DEVICE_TYPE
         )));
         assert!(!has_os(&device_contract(
             Some(&os("!!!", Some("1.0.0"))),
+            linux(),
             None,
-            None,
-            None
+            DEVICE_TYPE
         )));
     }
 
@@ -424,28 +375,48 @@ mod tests {
         assert_eq!(slugify("éOS"), "os");
         assert_eq!(slugify("a - b"), "a-b");
 
-        let universe = device_contract(Some(&os("Debian GNU/Linux", Some("12"))), None, None, None);
+        let universe = device_contract(
+            Some(&os("Debian GNU/Linux", Some("12"))),
+            linux(),
+            None,
+            DEVICE_TYPE,
+        );
         let found = universe.find_children(&Matcher::new("sw.os"));
         assert_eq!(found[0].get_slug(), Some("debian-gnu-linux"));
     }
 
     #[test]
     fn accepts_dots_and_plus_in_the_name() {
-        let universe = device_contract(Some(&os("os.v2+x", Some("1.0.0"))), None, None, None);
+        let universe = device_contract(
+            Some(&os("os.v2+x", Some("1.0.0"))),
+            linux(),
+            None,
+            DEVICE_TYPE,
+        );
         let found = universe.find_children(&Matcher::new("sw.os"));
         assert_eq!(found[0].get_slug(), Some("os.v2+x"));
     }
 
     #[test]
     fn a_version_that_is_not_semver_does_not_fail() {
-        let universe = device_contract(Some(&os("balenaOS", Some("wheezy"))), None, None, None);
+        let universe = device_contract(
+            Some(&os("balenaOS", Some("wheezy"))),
+            linux(),
+            None,
+            DEVICE_TYPE,
+        );
         let found = universe.find_children(&Matcher::new("sw.os"));
         assert_eq!(found[0].get_version().as_deref(), Some("wheezy"));
     }
 
     #[test]
     fn the_contract_satisfies_os_requirements() {
-        let universe = device_contract(Some(&os("balenaOS", Some("6.5.6"))), None, None, None);
+        let universe = device_contract(
+            Some(&os("balenaOS", Some("6.5.6"))),
+            linux(),
+            None,
+            DEVICE_TYPE,
+        );
         let svc = service(json!([{ "type": "sw.os", "slug": "balena-os", "version": ">=6" }]));
         assert!(universe.satisfies_child_contract(&svc, Some(&["sw.os"])));
 
@@ -453,49 +424,19 @@ mod tests {
         assert!(!universe.satisfies_child_contract(&svc, Some(&["sw.os"])));
     }
 
-    fn kernel(name: &str, release: &str) -> Kernel {
-        Kernel {
-            name: name.to_string(),
-            release: release.to_string(),
-            machine: "x86_64".to_string(),
-        }
+    const DEVICE_TYPE: &str = "generic-aarch64";
+
+    fn linux() -> (&'static str, &'static str, &'static str) {
+        ("Linux", "5.15.148", "x86_64")
     }
 
-    #[test]
-    fn maps_the_machine_to_the_architecture() {
-        for (machine, slug) in [
-            ("x86_64", "amd64"),
-            ("arm64", "aarch64"),
-            ("aarch64", "aarch64"),
-            ("armv7l", "armv7hf"),
-            ("armv6l", "rpi"),
-            ("i686", "i386"),
-            ("i386", "i386"),
-        ] {
-            let kernel = Kernel {
-                machine: machine.to_string(),
-                ..kernel("Linux", "5.15.148")
-            };
-            let universe = device_contract(None, Some(&kernel), None, None);
-            let found = universe.find_children(&Matcher::new("arch.sw"));
-            assert_eq!(found.len(), 1, "{machine}");
-            assert_eq!(found[0].get_slug(), Some(slug), "{machine}");
-        }
-    }
-
-    #[test]
-    fn omits_the_architecture_if_unsupported() {
-        let kernel = Kernel {
-            machine: "riscv64".to_string(),
-            ..kernel("Linux", "5.15.148")
-        };
-        let universe = device_contract(None, Some(&kernel), None, None);
-        assert!(universe.find_children(&Matcher::new("arch.sw")).is_empty());
+    fn kernel<'a>(name: &'a str, release: &'a str) -> (&'a str, &'a str, &'static str) {
+        (name, release, "x86_64")
     }
 
     #[test]
     fn the_contract_satisfies_architecture_requirements() {
-        let universe = device_contract(None, Some(&kernel("Linux", "5.15.148")), None, None);
+        let universe = device_contract(None, kernel("Linux", "5.15.148"), None, DEVICE_TYPE);
         let svc = service(json!([{ "type": "arch.sw", "slug": "amd64" }]));
         assert!(universe.satisfies_child_contract(&svc, Some(&["arch.sw"])));
 
@@ -507,9 +448,9 @@ mod tests {
     fn builds_the_kernel_contract() {
         let universe = device_contract(
             None,
-            Some(&kernel("Linux", "5.15.148-yocto-standard")),
+            kernel("Linux", "5.15.148-yocto-standard"),
             None,
-            None,
+            DEVICE_TYPE,
         );
         let found = universe.find_children(&Matcher::new("sw.kernel"));
         assert_eq!(found.len(), 1);
@@ -520,14 +461,14 @@ mod tests {
 
     #[test]
     fn slugifies_the_kernel_name() {
-        let universe = device_contract(None, Some(&kernel("Foo Kernel", "1.2.3")), None, None);
+        let universe = device_contract(None, kernel("Foo Kernel", "1.2.3"), None, DEVICE_TYPE);
         let found = universe.find_children(&Matcher::new("sw.kernel"));
         assert_eq!(found[0].get_slug(), Some("foo-kernel"));
     }
 
     #[test]
     fn omits_the_kernel_if_the_version_is_not_recognized() {
-        let universe = device_contract(None, Some(&kernel("Linux", "6.1")), None, None);
+        let universe = device_contract(None, kernel("Linux", "6.1"), None, DEVICE_TYPE);
         assert!(
             universe
                 .find_children(&Matcher::new("sw.kernel"))
@@ -537,7 +478,7 @@ mod tests {
 
     #[test]
     fn the_contract_satisfies_kernel_requirements() {
-        let universe = device_contract(None, Some(&kernel("Linux", "5.15.148-yocto")), None, None);
+        let universe = device_contract(None, kernel("Linux", "5.15.148-yocto"), None, DEVICE_TYPE);
         let svc = service(json!([{ "type": "sw.kernel", "slug": "linux", "version": ">=5.10" }]));
         assert!(universe.satisfies_child_contract(&svc, Some(&["sw.kernel"])));
 
@@ -549,9 +490,9 @@ mod tests {
     fn builds_the_l4t_contracts() {
         let universe = device_contract(
             None,
-            Some(&kernel("Linux", "5.15.136-l4t-r36.4.3-tegra")),
+            kernel("Linux", "5.15.136-l4t-r36.4.3-tegra"),
             None,
-            None,
+            DEVICE_TYPE,
         );
         let found = universe.find_children(&Matcher::new("sw.l4t"));
         assert_eq!(found.len(), 1);
@@ -568,9 +509,9 @@ mod tests {
     fn adds_a_patch_number_to_a_two_part_l4t_version() {
         let universe = device_contract(
             None,
-            Some(&kernel("Linux", "4.9.140-l4t-r32.5-tegra")),
+            kernel("Linux", "4.9.140-l4t-r32.5-tegra"),
             None,
-            None,
+            DEVICE_TYPE,
         );
         for ty in ["sw.l4t", "sw.kernel-bsp"] {
             let found = universe.find_children(&Matcher::new(ty));
@@ -582,9 +523,9 @@ mod tests {
     fn the_contract_satisfies_l4t_requirements() {
         let universe = device_contract(
             None,
-            Some(&kernel("Linux", "5.15.136-l4t-r36.4.3")),
+            kernel("Linux", "5.15.136-l4t-r36.4.3"),
             None,
-            None,
+            DEVICE_TYPE,
         );
         // `sw.l4t` requirements have no slug
         for (ty, slug) in [("sw.l4t", None), ("sw.kernel-bsp", Some("l4t"))] {
@@ -612,20 +553,20 @@ mod tests {
 
         let l4t = device_contract(
             None,
-            Some(&kernel("Linux", "5.15.136-l4t-r36.4.3")),
+            kernel("Linux", "5.15.136-l4t-r36.4.3"),
             None,
-            None,
+            DEVICE_TYPE,
         );
         assert!(l4t.satisfies_child_contract(&either(">=36"), types));
         assert!(!l4t.satisfies_child_contract(&either(">=37"), types));
 
-        let other = device_contract(None, Some(&kernel("Linux", "5.15.148-yocto")), None, None);
+        let other = device_contract(None, kernel("Linux", "5.15.148-yocto"), None, DEVICE_TYPE);
         assert!(!other.satisfies_child_contract(&either(">=36"), types));
     }
 
     #[test]
     fn builds_the_supervisor_contracts() {
-        let universe = device_contract(None, None, Some("v7.21.0"), None);
+        let universe = device_contract(None, linux(), Some("v7.21.0"), DEVICE_TYPE);
         for ty in ["sw.supervisor", "sw.application"] {
             let found = universe.find_children(&Matcher::new(ty));
             assert_eq!(found.len(), 1, "{ty}");
@@ -639,7 +580,7 @@ mod tests {
 
     #[test]
     fn omits_the_supervisor_contracts_without_a_supervisor() {
-        let universe = device_contract(None, None, None, None);
+        let universe = device_contract(None, linux(), None, DEVICE_TYPE);
         assert!(
             universe
                 .find_children(&Matcher::new("sw.supervisor"))
@@ -654,7 +595,7 @@ mod tests {
 
     #[test]
     fn the_contract_satisfies_supervisor_requirements() {
-        let universe = device_contract(None, None, Some("v7.21.0"), None);
+        let universe = device_contract(None, linux(), Some("v7.21.0"), DEVICE_TYPE);
         for ty in ["sw.supervisor", "sw.application"] {
             let svc = |version: &str| {
                 service(json!([{ "type": ty, "slug": "balena-supervisor", "version": version }]))
@@ -666,25 +607,15 @@ mod tests {
 
     #[test]
     fn builds_the_device_type_contract() {
-        let universe = device_contract(None, None, None, Some("raspberrypi4-64"));
+        let universe = device_contract(None, linux(), None, "raspberrypi4-64");
         let found = universe.find_children(&Matcher::new("hw.device-type"));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].get_slug(), Some("raspberrypi4-64"));
     }
 
     #[test]
-    fn omits_the_device_type_contract_without_a_device_type() {
-        let universe = device_contract(None, None, None, None);
-        assert!(
-            universe
-                .find_children(&Matcher::new("hw.device-type"))
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn omits_the_device_type_contract_if_the_slug_is_invalid() {
-        let universe = device_contract(None, None, None, Some("Not A Slug"));
+        let universe = device_contract(None, linux(), None, "Not A Slug");
         assert!(
             universe
                 .find_children(&Matcher::new("hw.device-type"))
@@ -694,7 +625,7 @@ mod tests {
 
     #[test]
     fn the_contract_satisfies_device_type_requirements() {
-        let universe = device_contract(None, None, None, Some("raspberrypi4-64"));
+        let universe = device_contract(None, linux(), None, "raspberrypi4-64");
         let svc = |slug: &str| service(json!([{ "type": "hw.device-type", "slug": slug }]));
         assert!(universe.satisfies_child_contract(&svc("raspberrypi4-64"), None));
         assert!(!universe.satisfies_child_contract(&svc("intel-nuc"), None));
@@ -702,7 +633,7 @@ mod tests {
 
     #[test]
     fn omits_the_l4t_contracts_for_other_kernels() {
-        let universe = device_contract(None, Some(&kernel("Linux", "5.15.148-yocto")), None, None);
+        let universe = device_contract(None, kernel("Linux", "5.15.148-yocto"), None, DEVICE_TYPE);
         assert!(universe.find_children(&Matcher::new("sw.l4t")).is_empty());
         assert!(
             universe
@@ -745,9 +676,9 @@ mod tests {
     fn reject(target: &mut crate::models::DeviceTarget, device_version: &str) -> Vec<String> {
         let universe = device_contract(
             Some(&os("balenaOS", Some(device_version))),
+            linux(),
             None,
-            None,
-            None,
+            DEVICE_TYPE,
         );
         reject_unsatisfied_releases(&mut target.apps, &universe)
     }
