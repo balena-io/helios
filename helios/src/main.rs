@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("device type should be known at this point, set it with --device-type")?;
 
     let host_config = HostConfig {
-        device_type: Some(device_type),
+        device_type,
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
         host_docker_sock: cli.host_docker_sock,

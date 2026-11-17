@@ -20,8 +20,18 @@ pub(super) fn init_tracing() {
         .unwrap_or(());
 }
 
+/// Parse the current state, defaulting the device type which is not relevant to planning
+fn device(mut current: Value) -> Device {
+    current
+        .as_object_mut()
+        .expect("device state is an object")
+        .entry("type")
+        .or_insert_with(|| "generic-aarch64".into());
+    serde_json::from_value(current).unwrap()
+}
+
 pub(super) fn assert_workflow(current: Value, target: Value, expected: Dag<&str>) -> Workflow {
-    let current = serde_json::from_value::<Device>(current).unwrap();
+    let current = device(current);
     let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
     let (_, workflow) = super::super::worker()
         .initial_state(current)
@@ -56,7 +66,7 @@ pub(super) fn assert_exception(current: Value, target: Value, path: &str, reason
 /// current/target pair because an exception matched, and that the skip is
 /// reported with `reason`.
 pub(super) fn assert_aborted(current: Value, target: Value, reason: &str) {
-    let current = serde_json::from_value::<Device>(current).unwrap();
+    let current = device(current);
     let target = serde_json::from_value::<DeviceTarget>(target).unwrap();
     let (_, workflow) = super::super::worker()
         .initial_state(current)
