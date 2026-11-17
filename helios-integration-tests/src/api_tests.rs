@@ -345,6 +345,12 @@ async fn test_set_app_target_install_images() {
                 json!({
                     "id": 1,
                     "image": "ubuntu:latest",
+                    // this contract should be fulfilled
+                    "contract": {
+                        "type": "sw.container",
+                        "slug": "service-one",
+                        "requires": [{ "type": "hw.device-type", "slug": "generic-aarch64" }],
+                    },
                     "composition": {
                         "command": "sleep infinity",
                         "restart": "no",
@@ -427,6 +433,24 @@ async fn test_set_app_target_install_images() {
                     }
                 }),
             ),
+            (
+                // The device is not a raspberrypi4-64, so the service is dropped from
+                // the release without rejecting it
+                "service-four",
+                json!({
+                    "id": 4,
+                    "image": "alpine:latest",
+                    "labels": { "io.balena.features.optional": "1" },
+                    "contract": {
+                        "type": "sw.container",
+                        "slug": "service-four",
+                        "requires": [{ "type": "hw.device-type", "slug": "raspberrypi4-64" }],
+                    },
+                    "composition": {
+                        "command": ["sleep", "infinity"],
+                    }
+                }),
+            ),
         ],
         &[("net-a", json!({})), ("net-b", json!({}))],
         &[("my-vol", json!({})), ("legacy-vol", json!({}))],
@@ -491,6 +515,12 @@ async fn test_set_app_target_install_images() {
         .and_then(|e| e.get("MY_KEY"))
         .unwrap();
     assert_eq!(my_env, &json!(123));
+
+    // The optional service with an unmet requirement was removed from the release
+    assert_eq!(
+        app.pointer(&format!("/releases/{release_uuid}/services/service-four")),
+        None
+    );
 
     // Containers exist and have the right configuration
     let svc_one_container_id = get_service_container_id(app, release_uuid, "service-one");
@@ -774,6 +804,59 @@ async fn test_set_app_target_install_images() {
     assert!(docker.inspect_volume(&my_vol_id).await.is_err());
     assert!(docker.inspect_volume(&legacy_vol).await.is_ok());
     remove_volume(&docker, &legacy_vol).await;
+}
+
+#[tokio::test]
+async fn test_set_app_target_rejects_unmet_service_requirement() {
+    let release_uuid = "unmet-release-uuid";
+
+    let release = release_json(
+        &[(
+            "my-service",
+            json!({
+                "id": 1,
+                "image": "alpine:latest",
+                "contract": {
+                    "type": "sw.container",
+                    "slug": "my-service",
+                    "requires": [{ "type": "hw.device-type", "slug": "raspberrypi4-64" }],
+                },
+                "composition": {
+                    "command": ["sleep", "infinity"],
+                }
+            }),
+        )],
+        &[],
+        &[],
+    );
+    let target = app_target_json("my-app", release_uuid, release);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{HELIOS_URL}/v3/device/apps/{TEST_APP_UUID}"))
+        .json(&target)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    wait_for_target_apply().await;
+
+    let device: Value = reqwest::get(format!("{HELIOS_URL}/v3/device"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let app = device
+        .get("apps")
+        .and_then(|apps| apps.get(TEST_APP_UUID))
+        .unwrap();
+
+    // The release was rejected: it is not installed
+    assert_eq!(app.get("releases"), Some(&json!({})));
+    assert_eq!(app.get("rejected_release"), Some(&json!(release_uuid)));
+
+    delete_app_and_wait(&client, TEST_APP_UUID).await;
 }
 
 /// A release with a single service mounting `shared-vol` at `/data`, with the

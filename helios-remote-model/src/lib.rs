@@ -2,7 +2,7 @@
 //!
 //! All input validations should happen in this module
 //!
-//! the types are based  from https://github.com/balena-io/open-balena-api/blob/master/src/features/device-state/routes/state-get-v3.ts#L48
+//! the types are based on https://github.com/balena-io/open-balena-api/blob/master/src/features/device-state/routes/state-get-v3.ts#L48
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -590,6 +590,7 @@ impl<'de> Deserialize<'de> for Release {
                 }
             }
 
+            features::take_optional(svc);
             features::add_feature_mounts(svc_name, svc).map_err(serde::de::Error::custom)?;
 
             // Verify each volume-type mount references a volume declared at the release level.

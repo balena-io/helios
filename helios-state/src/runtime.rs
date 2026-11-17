@@ -1,16 +1,21 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use contrato::Universe;
 use thiserror::Error;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
+use crate::contracts::{Kernel, device_contract};
+use crate::legacy::{self, LegacyConfig, UpstreamError};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
 use crate::store::DocumentStore;
 use crate::util::dirs;
 use crate::util::http::Uri;
+use crate::util::types::DeviceType;
 pub struct HostConfig {
+    pub device_type: Option<DeviceType>,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
@@ -48,6 +53,8 @@ pub struct Runtime {
     pub(crate) reader: Reader,
     /// OCI engine context
     pub(crate) oci: OciContext,
+    /// The contract describing what the device provides to services
+    pub(crate) contract: Universe,
     /// Remote credentials
     pub(crate) remote_config: Option<RemoteConfig>,
 }
@@ -68,6 +75,9 @@ pub enum RuntimePrepareError {
 
     #[error("failed to initialize store: {0}")]
     StoreInit(std::io::Error),
+
+    #[error("failed to query the legacy Supervisor version: {0}")]
+    LegacyVersion(#[from] UpstreamError),
 }
 
 pub async fn prepare(
@@ -75,6 +85,7 @@ pub async fn prepare(
     retry_interval: Duration,
     host_config: HostConfig,
     remote_config: Option<RemoteConfig>,
+    legacy_config: Option<LegacyConfig>,
 ) -> Result<(Runtime, Device), RuntimePrepareError> {
     let docker = Docker::connect().await?;
 
@@ -84,6 +95,7 @@ pub async fn prepare(
         .map_err(RuntimePrepareError::StoreInit)?;
 
     let HostConfig {
+        device_type,
         host_os,
         host_runtime_dir,
         host_docker_sock,
@@ -107,11 +119,36 @@ pub async fn prepare(
     let reader = Reader {
         os: host_os,
         uuid,
+        device_type,
         docker: docker.clone(),
         local_store: local_store.clone(),
     };
 
     let initial_state = reader.read().await?;
+
+    let kernel = Kernel::read().await;
+    let supervisor_version = match legacy_config {
+        Some(LegacyConfig {
+            api_endpoint,
+            api_key,
+        }) => Some(legacy::version(api_endpoint, api_key).await?),
+        None => None,
+    };
+    #[cfg(feature = "balenahup")]
+    let contract = device_contract(
+        initial_state.host.as_ref().map(|host| &host.meta),
+        kernel.as_ref(),
+        supervisor_version.as_deref(),
+        initial_state.kind.as_deref(),
+    );
+    #[cfg(not(feature = "balenahup"))]
+    let contract = device_contract(
+        None,
+        kernel.as_ref(),
+        supervisor_version.as_deref(),
+        initial_state.kind.as_deref(),
+    );
+
     let runtime = Runtime {
         retry_interval,
         host_runtime_dir: HostRuntimeDir(host_runtime_dir),
@@ -123,6 +160,7 @@ pub async fn prepare(
         },
         reader,
         oci,
+        contract,
         remote_config,
     };
 

@@ -53,9 +53,9 @@ Alternatively, you can have helios register a new unique identity with balenaClo
 
 ```
 cargo run -- \
+    --device-type generic-aarch64 \
     --remote-api-endpoint https://api.balena-cloud.com \
     --provisioning-fleet <fleet-id> \
-    --provisioning-device-type generic-aarch64 \
     --provisioning-key <provisioning-key>
 ```
 

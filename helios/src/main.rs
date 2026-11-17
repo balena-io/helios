@@ -101,6 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (uuid, remote_config) = maybe_provision(&cli, &config_store).await?;
 
     let host_config = HostConfig {
+        device_type: cli.device_type,
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
         host_docker_sock: cli.host_docker_sock,
@@ -147,6 +148,7 @@ async fn start_supervisor(
         retry_interval,
         host_config,
         state_remote_config,
+        legacy_config.clone(),
     )
     .await?;
 
@@ -376,7 +378,7 @@ async fn maybe_provision(
                 .provisioning_fleet
                 .expect("not nil because provisioning_key isn't nil"),
             device_type: cli
-                .provisioning_device_type
+                .device_type
                 .clone()
                 .expect("not nil because provisioning_key isn't nil"),
 

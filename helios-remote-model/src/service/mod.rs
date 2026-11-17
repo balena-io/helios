@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::duration::{DurationMicros, DurationSecs};
+use contrato::Contract;
 use serde::{Deserialize, Deserializer};
 
 use crate::byte_size::ByteSize;
@@ -52,6 +53,32 @@ pub struct Service {
 
     #[serde(default)]
     pub composition: ServiceComposition,
+
+    #[serde(default, deserialize_with = "deserialize_contract")]
+    pub contract: Option<ServiceContract>,
+}
+
+/// The contract of a service
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceContract {
+    /// If set, the service is removed from the release instead of rejecting
+    /// the release when the contract is not satisfied
+    ///
+    /// Set from the `io.balena.features.optional` label
+    pub optional: bool,
+    pub contract: Contract,
+}
+
+fn deserialize_contract<'de, D>(deserializer: D) -> Result<Option<ServiceContract>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        Option::<Contract>::deserialize(deserializer)?.map(|contract| ServiceContract {
+            optional: false,
+            contract,
+        }),
+    )
 }
 
 // FIXME: add remaining fields
@@ -1290,5 +1317,77 @@ mod tests {
             svc.environment.get("HOST"),
             Some(&Some(Value::String("localhost".to_string())))
         );
+    }
+
+    const IMAGE: &str =
+        "registry.example.com/repo/image@sha256:1234567890abcdef1234567890abcdef12345678";
+
+    #[test]
+    fn service_contract_defaults_to_none() {
+        let svc: Service =
+            serde_json::from_value(serde_json::json!({"id": 1, "image": IMAGE})).unwrap();
+        assert!(svc.contract.is_none());
+    }
+
+    #[test]
+    fn service_contract_null_is_none() {
+        let svc: Service =
+            serde_json::from_value(serde_json::json!({"id": 1, "image": IMAGE, "contract": null}))
+                .unwrap();
+        assert!(svc.contract.is_none());
+    }
+
+    #[test]
+    fn service_parses_minimal_contract() {
+        let svc: Service = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "image": IMAGE,
+            "contract": {
+                "type": "sw.container",
+                "requires": [{ "type": "sw.supervisor", "version": ">=14.0.0" }]
+            }
+        }))
+        .unwrap();
+        let contract = svc.contract.expect("contract is present").contract;
+        assert_eq!(contract.get_type(), "sw.container");
+    }
+
+    #[test]
+    fn service_parses_contract() {
+        let svc: Service = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "image": IMAGE,
+            "contract": {
+                "type": "sw.container",
+                "slug": "my-service",
+                "version": "1.2.3",
+                "requires": [{ "type": "sw.supervisor", "version": ">=14.0.0" }]
+            }
+        }))
+        .unwrap();
+        let contract = svc.contract.expect("contract is present").contract;
+        assert_eq!(contract.get_type(), "sw.container");
+        assert_eq!(contract.get_slug(), Some("my-service"));
+        assert_eq!(contract.get_version().as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn service_rejects_contract_without_type() {
+        let res = serde_json::from_value::<Service>(serde_json::json!({
+            "id": 1,
+            "image": IMAGE,
+            "contract": { "slug": "my-service" }
+        }));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn service_rejects_contract_with_invalid_slug() {
+        let res = serde_json::from_value::<Service>(serde_json::json!({
+            "id": 1,
+            "image": IMAGE,
+            "contract": { "type": "sw.container", "slug": "Not A Slug!" }
+        }));
+        assert!(res.is_err());
     }
 }

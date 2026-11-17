@@ -1,3 +1,4 @@
+mod contracts;
 mod labels;
 mod read;
 mod runtime;
