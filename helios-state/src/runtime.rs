@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use contrato::Universe;
 use thiserror::Error;
-use tracing::warn;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
 use crate::contracts::device_contract;
@@ -79,6 +78,9 @@ pub enum RuntimePrepareError {
     #[error("failed to initialize store: {0}")]
     StoreInit(std::io::Error),
 
+    #[error("failed to identify the system: {0}")]
+    Uname(std::io::Error),
+
     #[error("failed to query the legacy Supervisor version: {0}")]
     LegacyVersion(#[from] UpstreamError),
 }
@@ -129,16 +131,8 @@ pub async fn prepare(
 
     let initial_state = reader.read().await?;
 
-    let uname = match run_async(uname).await {
-        Ok(uname) => Some(uname),
-        Err(e) => {
-            warn!("could not query the system with uname: {e}");
-            None
-        }
-    };
-    let system = uname
-        .as_ref()
-        .map(|u| (u.sysname(), u.release(), u.machine()));
+    let uname = run_async(uname).await.map_err(RuntimePrepareError::Uname)?;
+    let system = (uname.sysname(), uname.release(), uname.machine());
     let supervisor_version = match legacy_config {
         Some(LegacyConfig {
             api_endpoint,
