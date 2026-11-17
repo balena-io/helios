@@ -99,9 +99,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
 
     let (uuid, remote_config, device_type) = maybe_provision(&cli, &config_store).await?;
+    let device_type = device_type
+        .ok_or("device type should be known at this point, set it with --device-type")?;
 
     let host_config = HostConfig {
-        device_type,
+        device_type: Some(device_type),
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
         host_docker_sock: cli.host_docker_sock,
@@ -318,7 +320,14 @@ async fn maybe_provision(
             );
         }
 
-        Ok((uuid.clone(), Some(remote), cli.device_type.clone()))
+        // use the CLI provided DT, or fallback to the provisioned DT if any
+        let device_type = cli
+            .device_type
+            .as_ref()
+            .or_else(|| provisioning_config.as_ref().map(|c| &c.device_type))
+            .cloned();
+
+        Ok((uuid.clone(), Some(remote), device_type))
     }
     // Otherwise use an existing provisioning config, if available
     else if let Some(provisioning_config) = &provisioning_config {
