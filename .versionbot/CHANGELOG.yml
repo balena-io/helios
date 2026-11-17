@@ -1,4 +1,137 @@
 - commits:
+    - subject: Add integration tests for contract support
+      hash: 5d0ca72b48e9b4dad672df607b2aae715e5ddfda
+      body: ""
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for the hw.device-type contract
+      hash: e97edc23cad670cd5038959d588c7a9997c63362
+      body: >
+        The device contract now includes the device type, taken from the Device
+
+        model. It is exposed as `hw.device-type` with the device type as slug.
+
+        Without a device type, or with one that is not a valid slug, the
+        contract
+
+        has no `hw.device-type`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read the device type from the cli into the Device model
+      hash: 885041d776538b8179bdc2c0149a656a6e35692f
+      body: >
+        The device type is now read from `--device-type`, or
+        `HELIOS_DEVICE_TYPE`,
+
+        replacing `--provisioning-device-type`, and stored as the internal
+        `kind`
+
+        property of the Device model (serialized as `type`). It is set as
+        `BALENA_DEVICE_TYPE` in all
+
+        service containers. The start script reads it exclusively from
+
+        `BALENA_DEVICE_TYPE`.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for the sw.supervisor contract type
+      hash: 8c1370414f988da51d1d4b9764c710502547e0a8
+      body: |
+        The device contract now includes the legacy supervisor, with version
+        read from its `/v2/version` endpoint. It is exposed as `sw.supervisor`
+        and as `sw.application`, both with slug `balena-supervisor`.
+
+        The version is queried once when preparing the runtime. A failure to
+        query the legacy supervisor is an error that stops helios. Without a
+        legacy supervisor the version is unknown and neither contract is added.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for the arch.sw contract type
+      hash: 6f9bd9ee743c1a33858df20ccbcddbc2528ce728
+      body: |
+        The device contract now includes the device architecture, taken from
+        the machine field of the `uname` syscall. The machine is mapped to the
+        balena architecture used as slug: x86_64 to amd64, arm64 and aarch64
+        to aarch64, armv7l to armv7hf, armv6l to rpi, and i686 and i386 to
+        i386. Any other machine is unsupported and the contract has no
+        `arch.sw`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for sw.kernel and L4T contracts
+      hash: 62c9c9c33ec598d2d04aba954db032df3fbc6378
+      body: |
+        The device contract now includes the running kernel, read with the
+        `uname` syscall. `sw.kernel` uses the slugified kernel name and the
+        `major.minor.patch` part of the release as the version.
+
+        For Jetson kernels, the L4T version is parsed from the `-l4t-rX.Y[.Z]`
+        release suffix, with a missing patch number taken as `0`. It is exposed
+        as `sw.kernel-bsp` with slug `l4t`, and as `sw.l4t` for contracts
+        written against the legacy supervisor.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Remove optional services when validating contracts
+      hash: dc51e660f20a66c6f263472270b5ac89d41d2acd
+      body: |
+        A service with the label `io.balena.features.optional` is removed from
+        the target state if it fails to meet its requirements instead of causing
+        the target state to be rejected. The only exception is in the case where
+        another service depends on the optional service, since that would cause
+        a failure during planning.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add initial contract support
+      hash: a5ee5ee9219861d23f5ce9c788660bd4d613b4bc
+      body: |
+        Validates services with the `sw.os` contract requirement. During helios
+        startup, the device contract is built from the runtime metadata. This
+        contract is used to validate the target app releases within
+        `Device::test_runtime_support`. An unknown contract requirement is
+        rejected as well.
+
+        Additional contract type support will be added in future commits.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add support for contracts on remote model
+      hash: 743a26e4451a472402b38c95c9659fa9d8624499
+      body: |
+        Services now optionally accept a `contract` property that is validated
+        using a [contrato::Contract](https://github.com/balena-io/contrato).
+
+        The contract validation will happen on a later commit
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.30.0
+  title: ""
+  date: 2026-11-17T02:25:30.254Z
+- commits:
     - subject: Flag the host target as rejected when its runtime is unavailable
       hash: 2cfeed50734865fb08ceb85945e226165ee5dd70
       body: |
