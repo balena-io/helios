@@ -2,12 +2,14 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 mod api_key;
+mod device_arch;
 mod environment;
 mod image_uri;
 mod operating_system;
 mod uuid;
 
 pub use api_key::ApiKey;
+pub use device_arch::DeviceArch;
 pub use environment::{Environment, Value};
 pub use image_uri::{ImageUri, InvalidImageUriError};
 pub use operating_system::OperatingSystem;
