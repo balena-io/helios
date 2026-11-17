@@ -3,17 +3,20 @@ use std::time::Duration;
 
 use contrato::Universe;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
-use crate::contracts::{Kernel, device_contract};
+use crate::contracts::device_contract;
 use crate::legacy::{self, LegacyConfig, UpstreamError};
 use crate::models::Device;
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
 use crate::store::DocumentStore;
 use crate::util::dirs;
+use crate::util::fs::run_async;
 use crate::util::http::Uri;
 use crate::util::types::DeviceType;
+use crate::util::uname::uname;
 pub struct HostConfig {
     pub device_type: Option<DeviceType>,
     pub host_os: Option<OperatingSystem>,
@@ -126,7 +129,16 @@ pub async fn prepare(
 
     let initial_state = reader.read().await?;
 
-    let kernel = Kernel::read().await;
+    let uname = match run_async(uname).await {
+        Ok(uname) => Some(uname),
+        Err(e) => {
+            warn!("could not query the system with uname: {e}");
+            None
+        }
+    };
+    let system = uname
+        .as_ref()
+        .map(|u| (u.sysname(), u.release(), u.machine()));
     let supervisor_version = match legacy_config {
         Some(LegacyConfig {
             api_endpoint,
@@ -137,14 +149,14 @@ pub async fn prepare(
     #[cfg(feature = "balenahup")]
     let contract = device_contract(
         initial_state.host.as_ref().map(|host| &host.meta),
-        kernel.as_ref(),
+        system,
         supervisor_version.as_deref(),
         initial_state.kind.as_deref(),
     );
     #[cfg(not(feature = "balenahup"))]
     let contract = device_contract(
         None,
-        kernel.as_ref(),
+        system,
         supervisor_version.as_deref(),
         initial_state.kind.as_deref(),
     );
