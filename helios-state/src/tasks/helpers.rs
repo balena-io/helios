@@ -10,18 +10,20 @@ use crate::oci::Mount;
 /// Find an installed service for a different commit
 pub fn find_installed_service<'a>(
     device: &'a Device,
-    app_uuid: &'a Uuid,
-    commit: &'a Uuid,
-    service_name: &'a String,
+    app_uuid: &Uuid,
+    commit: &Uuid,
+    service_name: &str,
 ) -> Option<&'a Service> {
-    device.apps.get(app_uuid).and_then(|app| {
-        app.releases
-            .iter()
-            .filter(|(c, _)| c != &commit)
-            .flat_map(|(_, r)| r.services.iter().find(|(k, _)| k == &service_name))
-            .map(|(_, s)| s)
-            .next()
-    })
+    device
+        .apps
+        .get(app_uuid)?
+        .releases
+        .iter()
+        .find_map(|(c, r)| {
+            (c != commit)
+                .then(|| r.services.get(service_name))
+                .flatten()
+        })
 }
 
 /// Outcome of evaluating a `depends_on` condition.

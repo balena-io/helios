@@ -15,7 +15,8 @@ use tracing::{trace, warn};
 use crate::common_types::{HostRuntimeDir, ImageUri, Uuid};
 use crate::models::{
     App, AppMap, AppTarget, Container, ContainerStatus, DependsOn, DependsOnCondition, Device,
-    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, Volume,
+    Health, ImageRef, Network, Release, ReleaseTarget, Service, ServiceTarget, UpdateStrategy,
+    Volume,
 };
 use crate::oci::{
     Client as Docker, Error as OciError, LocalNamespace, Mount, Namespace, WithContext,
@@ -34,7 +35,7 @@ use super::helpers::{
     find_installed_volume, release_services, service_matches_target, services_need_stopping,
     services_restarting_with, target_release_services,
 };
-use super::image::create_image;
+use super::image::{create_image, remove_unused_image};
 
 /// Maximum number of images to pull concurrently per planning cycle.
 const MAX_CONCURRENT_IMAGE_PULLS: usize = 3;
@@ -186,7 +187,13 @@ fn fetch_apps_images(
         .flat_map(|(app_uuid, t_app)| {
             t_app.releases.iter().flat_map(|(rel_uuid, t_rel)| {
                 t_rel.services.iter().filter_map(|(svc_name, t_svc)| {
-                    service_needs_image_download(&device, app_uuid, rel_uuid, svc_name, t_svc)
+                    let image =
+                        service_needs_image_download(&device, app_uuid, rel_uuid, svc_name, t_svc)?;
+                    // under kill-then-download, the pull waits for the service it
+                    // replaces to be removed
+                    let waits_for_kill = t_svc.config.update_strategy().kills_before_download()
+                        && find_installed_service(&device, app_uuid, rel_uuid, svc_name).is_some();
+                    (!waits_for_kill).then_some(image)
                 })
             })
         })
@@ -1508,34 +1515,41 @@ fn stop_service(mut svc: View<Service>, docker: Res<Docker>) -> IO<Service, OciE
 ///
 /// The planner picks this task when:
 /// - all target images for *other* releases of the app have already been
-///   pulled (so uninstalling the current state won't strand a future install), and
+///   pulled (so uninstalling the current state won't strand a future install),
+///   unless its replacement is killed before the download, and
 /// - either a matching future service exists and a migration is safe, or
 /// - the service can be stopped (if running) and uninstalled.
+///
+/// The update strategy of the target service takes precedence over that of the
+/// current one, as in the legacy supervisor.
 fn uninstall_service_when_requirements_are_met(
     svc: View<Service>,
     System(device): System<Device>,
     SystemTarget(t_device): SystemTarget<Device>,
     Args((app_uuid, rel_uuid, svc_name)): Args<(Uuid, Uuid, String)>,
 ) -> Vec<Task> {
+    let future = find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name);
+
     // Defer uninstall until future-release images are pulled. Removing now
-    // could free networks/volumes that pending installs depend on.
-    if any_images_are_pending_download(&device, &t_device, &app_uuid, &rel_uuid) {
+    // could free networks/volumes that pending installs depend on. A service
+    // killed before the download can't wait for it.
+    let kills_first =
+        future.is_some_and(|(_, t_svc)| t_svc.config.update_strategy().kills_before_download());
+    if !kills_first && any_images_are_pending_download(&device, &t_device, &app_uuid, &rel_uuid) {
         return Vec::new();
     }
 
-    // Migration path: a future release expects the same service with
-    // matching image/config/started state. State-only remove from the
-    // current release, then migrate the container into the future release.
-    if let Some((t_rel_uuid, t_svc)) =
-        find_future_service(&t_device, &app_uuid, &rel_uuid, &svc_name)
-    {
+    if let Some((t_rel_uuid, t_svc)) = future {
+        let can_migrate_as_is = service_matches_target(
+            &device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, t_svc,
+        );
+        // Migration path: a future release expects the same service with
+        // matching image/config/started state. State-only remove from the
+        // current release, then migrate the container into the future release.
         let target_release_exists = device
             .apps
             .get(&app_uuid)
             .is_some_and(|app| app.releases.contains_key(t_rel_uuid));
-        let can_migrate_as_is = service_matches_target(
-            &device, &t_device, &app_uuid, &rel_uuid, &svc, t_rel_uuid, t_svc,
-        );
         // Either no service in the app needs stopping (lock-free), or locks
         // were already taken upstream.
         let locks_satisfied = !services_need_stopping(&app_uuid, &device, &t_device)
@@ -1559,7 +1573,20 @@ fn uninstall_service_when_requirements_are_met(
 
     // Fallback: stop the service if it is still running, then uninstall it
     // along with its `restart: true` dependents
-    vec![stop_service_when_requirements_are_met.with_target(StopTarget::Uninstalled)]
+    let mut tasks =
+        vec![stop_service_when_requirements_are_met.with_target(StopTarget::Uninstalled)];
+
+    // the old image goes before the new one is pulled, which waits for this
+    // service to be removed
+    let strategy = future
+        .map_or(&svc.config, |(_, t_svc)| &t_svc.config)
+        .update_strategy();
+    if strategy == UpdateStrategy::DeleteThenDownload
+        && let ImageRef::Uri(image) = &svc.image
+    {
+        tasks.push(remove_unused_image.with_arg("image_name", image.clone()));
+    }
+    tasks
 }
 
 /// Remove service from the current release state

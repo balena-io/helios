@@ -8,4 +8,7 @@ mod api_tests;
 mod polling_tests;
 
 #[cfg(test)]
+mod update_strategy_tests;
+
+#[cfg(test)]
 mod util_tests;

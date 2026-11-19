@@ -9,3 +9,4 @@ mod volumes;
 mod hostapp;
 
 mod migrations;
+mod update_strategies;
