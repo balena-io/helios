@@ -29,7 +29,7 @@ use crate::legacy::{LegacyConfig, ProxyConfig, ProxyState};
 use crate::remote::{
     ProvisioningConfig, ProvisioningError, RemoteConfig, RequestConfig, provision,
 };
-use crate::state::HostConfig;
+use crate::state::LocalConfig;
 use crate::util::config::StoredConfig;
 use crate::util::dirs::config_dir;
 
@@ -102,36 +102,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let device_type = device_type
         .ok_or("device type should be known at this point, set it with --device-type")?;
 
-    let host_config = HostConfig {
+    let local_config = LocalConfig {
+        uuid,
         device_type,
         host_os: cli.host_os,
         host_runtime_dir: cli.host_runtime_dir.unwrap_or(util::dirs::runtime_dir()),
         host_docker_sock: cli.host_docker_sock,
+        retry_interval: cli.local_retry_interval.unwrap_or(Duration::from_secs(30)),
     };
 
-    let retry_interval = cli.local_retry_interval.unwrap_or(Duration::from_secs(30));
-
-    start_supervisor(
-        uuid,
-        host_config,
-        api_config,
-        remote_config,
-        legacy_config,
-        retry_interval,
-    )
-    .await?;
+    start_supervisor(local_config, api_config, remote_config, legacy_config).await?;
 
     Ok(())
 }
 
 async fn start_supervisor(
-    uuid: Uuid,
-    host_config: HostConfig,
+    local_config: LocalConfig,
     api_config: Option<ApiConfig>,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
-    retry_interval: Duration,
 ) -> Result<(), Box<dyn Error>> {
+    let uuid = local_config.uuid.clone();
     trace!(
         uuid = ?uuid,
         api = ?api_config,
@@ -145,14 +136,8 @@ async fn start_supervisor(
         api_key: c.api_key.clone(),
     });
 
-    let (state_runtime, initial_state) = state::prepare(
-        uuid.clone(),
-        retry_interval,
-        host_config,
-        state_remote_config,
-        legacy_config.clone(),
-    )
-    .await?;
+    let (state_runtime, initial_state) =
+        state::prepare(local_config, state_remote_config, legacy_config.clone()).await?;
 
     // Set-up channels to trigger state poll, updates and reporting
     let (seek_request_tx, seek_request_rx) = watch::channel(state::SeekRequest::default());

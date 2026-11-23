@@ -16,11 +16,15 @@ use crate::util::fs::run_async;
 use crate::util::http::Uri;
 use crate::util::types::DeviceType;
 use crate::util::uname::uname;
-pub struct HostConfig {
+
+/// Local device configuration for the state engine
+pub struct LocalConfig {
+    pub uuid: Uuid,
     pub device_type: DeviceType,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
+    pub retry_interval: Duration,
 }
 
 /// Remote API configuration
@@ -78,9 +82,7 @@ pub enum RuntimePrepareError {
 }
 
 pub async fn prepare(
-    uuid: Uuid,
-    retry_interval: Duration,
-    host_config: HostConfig,
+    local_config: LocalConfig,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
 ) -> Result<(Runtime, Device), RuntimePrepareError> {
@@ -91,12 +93,14 @@ pub async fn prepare(
         .await
         .map_err(RuntimePrepareError::StoreInit)?;
 
-    let HostConfig {
+    let LocalConfig {
+        uuid,
         device_type,
         host_os,
         host_runtime_dir,
         host_docker_sock,
-    } = host_config;
+        retry_interval,
+    } = local_config;
 
     // Create a registry auth client using the remote credentials
     let registry_auth_client = remote_config.as_ref().map(

@@ -7,7 +7,7 @@ mod tasks;
 mod worker;
 
 pub mod models;
-pub use runtime::{HostConfig, RemoteConfig, Runtime, prepare};
+pub use runtime::{LocalConfig, RemoteConfig, Runtime, prepare};
 pub use seek::{LocalState, SeekRequest, TargetState, UpdateOpts, UpdateStatus, start_seek};
 
 use helios_legacy as legacy;
