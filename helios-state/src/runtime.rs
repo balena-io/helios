@@ -54,17 +54,11 @@ pub struct Runtime {
     /// State reader
     pub(crate) reader: Reader,
     /// OCI engine context
-    pub(crate) oci: OciContext,
+    pub(crate) oci: oci::Version,
     /// The contract describing what the device provides to services
     pub(crate) contract: Universe,
     /// Remote credentials
     pub(crate) remote_config: Option<RemoteConfig>,
-}
-
-/// Oci engine information
-pub(crate) struct OciContext {
-    /// The list of runtimes supported by the engine
-    pub(crate) runtimes: Vec<oci::Runtime>,
 }
 
 #[derive(Debug, Error)]
@@ -116,9 +110,7 @@ pub async fn prepare(
     );
 
     // read OCI context only once
-    let oci = OciContext {
-        runtimes: docker.runtimes().await?,
-    };
+    let oci = docker.version().await?;
 
     // initialize state reader
     let reader = Reader {

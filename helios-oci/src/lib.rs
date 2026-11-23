@@ -33,10 +33,10 @@ pub use network::{
 mod volume;
 pub use volume::{LocalVolume, Volume, VolumeConfig, VolumeDriver};
 
-use helios_util as util;
+mod version;
+pub use version::{EngineKind, Runtime, Version};
 
-/// Convenience alias to describe an OCI runtime
-pub type Runtime = String;
+use helios_util as util;
 
 #[derive(Debug, Clone)]
 pub struct Client(Docker);
@@ -61,10 +61,7 @@ impl Client {
         &self.0
     }
 
-    /// Returns version information about the connected daemon.
-    ///
-    /// The returned components can be used to identify the engine type (e.g. "Podman Engine")
-    /// and its version.
+    /// Returns a description of the connected container engine.
     pub async fn version(&self) -> Result<Version> {
         let version = self
             .0
@@ -72,28 +69,15 @@ impl Client {
             .await
             .map_err(Error::with_context("failed to get server version"))?;
 
-        let components = version
-            .components
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| Component {
-                name: c.name,
-                version: c.version,
-            })
-            .collect();
-
-        Ok(Version { components })
-    }
-
-    /// The OCI runtimes the daemon has configured.
-    pub async fn runtimes(&self) -> Result<Vec<Runtime>> {
         let info = self
             .0
             .info()
             .await
             .map_err(Error::with_context("failed to get daemon info"))?;
 
-        Ok(info.runtimes.unwrap_or_default().into_keys().collect())
+        let runtimes = info.runtimes.unwrap_or_default().into_keys().collect();
+
+        Version::new(version, runtimes)
     }
 
     /// Exposes methods to work with images.
@@ -125,19 +109,6 @@ impl Client {
     pub fn volume(&self) -> Volume<'_, LocalNamespace> {
         Volume::new(self)
     }
-}
-
-/// Version information about the connected daemon.
-#[derive(Debug, Clone)]
-pub struct Version {
-    pub components: Vec<Component>,
-}
-
-/// A component reported by the daemon's version endpoint.
-#[derive(Debug, Clone)]
-pub struct Component {
-    pub name: String,
-    pub version: String,
 }
 
 #[doc(hidden)]
