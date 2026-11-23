@@ -330,7 +330,7 @@ async fn seek_target(
                             // A failed task reports no state back, but it may have
                             // changed the engine before failing.
                             *current_state = state_reader.read().await?;
-                            // TODO: we need to report the state here
+                            report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
 
                             // break-the inner loop after the back-off
                             break;
