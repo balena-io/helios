@@ -116,7 +116,7 @@ impl DeviceTarget {
     ///
     /// Runs before planning: a target with no runtime for it is bad input.
     /// Contract checks belong here once service targets carry a runtime.
-    pub fn test_runtime_support(
+    pub(crate) fn test_runtime_support(
         &mut self,
         device: &Device,
         runtimes: &[oci::Runtime],
@@ -147,7 +147,7 @@ impl DeviceTarget {
     /// helios restart), they will also cause a service restart
     ///
     /// This information will also show on the state returned by helios API
-    pub fn add_runtime_context(
+    pub(crate) fn add_runtime_context(
         &mut self,
         device: &Device,
         host_runtime_dir: &HostRuntimeDir,
