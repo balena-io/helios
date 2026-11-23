@@ -291,6 +291,7 @@ async fn set_app_tgt_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use helios_state::models::DeviceInfo;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -307,11 +308,11 @@ mod tests {
             opts: UpdateOpts::default(),
         });
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
-        let device = Device::new(
-            Uuid::default(),
-            "generic-aarch64".to_string(),
-            "balenaOS 6.3.1".parse().ok(),
-        );
+        let device = Device::new(DeviceInfo {
+            uuid: Uuid::default(),
+            kind: "generic-aarch64".to_string(),
+            host_os: "balenaOS 6.3.1".parse().ok(),
+        });
         let local_state = LocalState {
             authorized_apps: Vec::new(),
             device,

@@ -4,17 +4,16 @@ use mahler::state::Map;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::common_types::{InvalidImageUriError, OperatingSystem, Uuid};
+use crate::common_types::{InvalidImageUriError, Uuid};
 use crate::labels::{
     LABEL_APP_UUID, LABEL_NETWORK_NAME, LABEL_SERVICE_NAME, LABEL_SUPERVISED, LABEL_VOLUME_NAME,
 };
 use crate::oci::{self, Client as Docker};
 use crate::store::{self, DocumentStore};
-use crate::util::types::DeviceType;
 
 use super::models::{
-    App, Device, LocalVolume, Network, Release, Service, UNKNOWN_APP_UUID, UNKNOWN_RELEASE_UUID,
-    Volume,
+    App, Device, DeviceInfo, LocalVolume, Network, Release, Service, UNKNOWN_APP_UUID,
+    UNKNOWN_RELEASE_UUID, Volume,
 };
 
 #[derive(Debug, Error)]
@@ -70,37 +69,32 @@ async fn get_or_create_app<'a>(
 }
 
 /// Resources to read the system state through [`Reader::read`]
-pub(crate) struct Reader {
-    pub docker: Docker,
-    pub local_store: DocumentStore,
-    pub uuid: Uuid,
-    pub device_type: DeviceType,
-    pub os: Option<OperatingSystem>,
+pub(crate) struct Reader<'a> {
+    docker: &'a Docker,
+    local_store: &'a DocumentStore,
 }
 
-impl Reader {
-    pub(crate) async fn read(&self) -> Result<Device, Error> {
-        read(
-            &self.docker,
-            &self.local_store,
-            self.uuid.clone(),
-            self.device_type.clone(),
-            self.os.clone(),
-        )
-        .await
+impl<'a> Reader<'a> {
+    pub(crate) fn new(docker: &'a Docker, local_store: &'a DocumentStore) -> Self {
+        Self {
+            docker,
+            local_store,
+        }
+    }
+
+    /// Read the state of the system, starting from the given device info
+    #[instrument(name = "read_state", level = "trace", skip_all, err)]
+    pub(crate) async fn read(&self, info: impl Into<DeviceInfo>) -> Result<Device, Error> {
+        read(self.docker, self.local_store, info.into()).await
     }
 }
 
-/// Read the state of system
-#[instrument(name = "read_state", level = "trace", skip_all, err)]
 async fn read(
     docker: &Docker,
     local_store: &DocumentStore,
-    uuid: Uuid,
-    device_type: DeviceType,
-    os: Option<OperatingSystem>,
+    info: DeviceInfo,
 ) -> Result<Device, Error> {
-    let mut device = Device::new(uuid, device_type, os);
+    let mut device = Device::new(info);
 
     // read the device name from the local store
     device.name = local_store.get("device_name").await?;

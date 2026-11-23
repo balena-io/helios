@@ -89,10 +89,39 @@ impl Default for DeviceTarget {
     }
 }
 
+/// The parts of a [`Device`] that cannot be read from the system: the identity
+/// of the device and the metadata of the host.
+#[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub uuid: Uuid,
+    pub kind: DeviceType,
+    /// The host OS metadata
+    pub host_os: Option<OperatingSystem>,
+}
+
+impl From<&Device> for DeviceInfo {
+    fn from(device: &Device) -> Self {
+        DeviceInfo {
+            uuid: device.uuid.clone(),
+            kind: device.kind.clone(),
+            #[cfg(feature = "balenahup")]
+            host_os: device.host.as_ref().map(|host| host.meta.clone()),
+            #[cfg(not(feature = "balenahup"))]
+            host_os: None,
+        }
+    }
+}
+
 impl Device {
-    pub fn new(uuid: Uuid, kind: DeviceType, os: Option<OperatingSystem>) -> Self {
+    pub fn new(
+        DeviceInfo {
+            kind,
+            uuid,
+            host_os,
+        }: DeviceInfo,
+    ) -> Self {
         #[cfg(not(feature = "balenahup"))]
-        let _ = os;
+        let _ = host_os;
         Self {
             uuid,
             kind,
@@ -100,7 +129,7 @@ impl Device {
             images: Map::new(),
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
-            host: os.map(Host::new),
+            host: host_os.map(Host::new),
             volumes: List::new(),
         }
     }

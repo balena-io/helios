@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
 use crate::contracts::device_contract;
 use crate::legacy::{self, LegacyConfig, UpstreamError};
-use crate::models::Device;
+use crate::models::{Device, DeviceInfo};
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
 use crate::store::DocumentStore;
@@ -51,8 +51,6 @@ pub struct Runtime {
     pub(crate) host_docker_sock: PathBuf,
     /// Runtime resources
     pub(crate) resources: Resources,
-    /// State reader
-    pub(crate) reader: Reader,
     /// OCI engine context
     pub(crate) oci: oci::Version,
     /// The contract describing what the device provides to services
@@ -113,15 +111,12 @@ pub async fn prepare(
     let oci = docker.version().await?;
 
     // initialize state reader
-    let reader = Reader {
-        os: host_os,
+    let info = DeviceInfo {
         uuid,
-        device_type,
-        docker: docker.clone(),
-        local_store: local_store.clone(),
+        kind: device_type,
+        host_os,
     };
-
-    let initial_state = reader.read().await?;
+    let initial_state = Reader::new(&docker, &local_store).read(info).await?;
 
     let uname = run_async(uname).await.map_err(RuntimePrepareError::Uname)?;
     let system = (uname.sysname(), uname.release(), uname.machine());
@@ -156,7 +151,6 @@ pub async fn prepare(
             registry_auth_client,
             local_store,
         },
-        reader,
         oci,
         contract,
         remote_config,
