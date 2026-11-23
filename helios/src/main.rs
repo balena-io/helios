@@ -234,8 +234,7 @@ async fn start_supervisor(
         res = state::start_seek(
             state_runtime,
             initial_state,
-            proxy_state.clone(),
-            legacy_config,
+            legacy_config.zip(proxy_state.clone()),
             seek_request_rx,
             local_state_tx,
         ) => res.map_err(|err| err.into()),
