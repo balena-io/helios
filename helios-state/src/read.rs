@@ -74,7 +74,7 @@ pub(crate) struct Reader {
     pub docker: Docker,
     pub local_store: DocumentStore,
     pub uuid: Uuid,
-    pub device_type: Option<DeviceType>,
+    pub device_type: DeviceType,
     pub os: Option<OperatingSystem>,
 }
 
@@ -97,7 +97,7 @@ async fn read(
     docker: &Docker,
     local_store: &DocumentStore,
     uuid: Uuid,
-    device_type: Option<DeviceType>,
+    device_type: DeviceType,
     os: Option<OperatingSystem>,
 ) -> Result<Device, Error> {
     let mut device = Device::new(uuid, device_type, os);

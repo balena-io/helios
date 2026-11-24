@@ -49,7 +49,8 @@ pub struct DaemonArgs {
     )]
     pub host_os: Option<OperatingSystem>,
 
-    /// Device type slug, e.g. "raspberrypi4-64"
+    /// Device type slug, e.g. "raspberrypi4-64". Required unless the device is
+    /// already registered, in which case the stored device type is used
     #[arg(env = "HELIOS_DEVICE_TYPE", long = "device-type", value_name = "slug")]
     pub device_type: Option<DeviceType>,
 

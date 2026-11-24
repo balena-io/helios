@@ -309,7 +309,7 @@ mod tests {
         let (poll_request_tx, poll_rx) = watch::channel(PollRequest::default());
         let device = Device::new(
             Uuid::default(),
-            Some("generic-aarch64".to_string()),
+            "generic-aarch64".to_string(),
             "balenaOS 6.3.1".parse().ok(),
         );
         let local_state = LocalState {

@@ -14,3 +14,4 @@ pub mod request;
 pub mod systemd;
 pub mod tar;
 pub mod types;
+pub mod uname;

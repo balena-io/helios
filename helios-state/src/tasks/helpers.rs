@@ -533,6 +533,7 @@ mod tests {
     fn device_with(services: serde_json::Value) -> Device {
         serde_json::from_value(json!({
             "uuid": "device-uuid",
+            "type": "generic-aarch64",
             "apps": {
                 "app-uuid": {
                     "id": 1,
@@ -594,6 +595,7 @@ mod tests {
     fn device_with_release(rel: &str, services: serde_json::Value) -> Device {
         serde_json::from_value(json!({
             "uuid": "device-uuid",
+            "type": "generic-aarch64",
             "apps": {"app-uuid": {"id": 1, "name": "app", "releases": {
                 rel: {"installed": true, "services": services}
             }}}
