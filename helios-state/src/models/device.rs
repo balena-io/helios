@@ -89,10 +89,39 @@ impl Default for DeviceTarget {
     }
 }
 
+/// The parts of a [`Device`] that cannot be read from the system: the identity
+/// of the device and the metadata of the host.
+#[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub uuid: Uuid,
+    pub kind: DeviceType,
+    /// The host OS metadata
+    pub host_os: Option<OperatingSystem>,
+}
+
+impl From<&Device> for DeviceInfo {
+    fn from(device: &Device) -> Self {
+        DeviceInfo {
+            uuid: device.uuid.clone(),
+            kind: device.kind.clone(),
+            #[cfg(feature = "balenahup")]
+            host_os: device.host.as_ref().map(|host| host.meta.clone()),
+            #[cfg(not(feature = "balenahup"))]
+            host_os: None,
+        }
+    }
+}
+
 impl Device {
-    pub fn new(uuid: Uuid, kind: DeviceType, os: Option<OperatingSystem>) -> Self {
+    pub fn new(
+        DeviceInfo {
+            kind,
+            uuid,
+            host_os,
+        }: DeviceInfo,
+    ) -> Self {
         #[cfg(not(feature = "balenahup"))]
-        let _ = os;
+        let _ = host_os;
         Self {
             uuid,
             kind,
@@ -100,7 +129,7 @@ impl Device {
             images: Map::new(),
             apps: Map::new(),
             #[cfg(feature = "balenahup")]
-            host: os.map(Host::new),
+            host: host_os.map(Host::new),
             volumes: List::new(),
         }
     }
@@ -116,7 +145,7 @@ impl DeviceTarget {
     ///
     /// Runs before planning: a target with no runtime for it is bad input.
     /// Contract checks belong here once service targets carry a runtime.
-    pub fn test_runtime_support(
+    pub(crate) fn test_runtime_support(
         &mut self,
         device: &Device,
         runtimes: &[oci::Runtime],
@@ -147,7 +176,7 @@ impl DeviceTarget {
     /// helios restart), they will also cause a service restart
     ///
     /// This information will also show on the state returned by helios API
-    pub fn add_runtime_context(
+    pub(crate) fn add_runtime_context(
         &mut self,
         device: &Device,
         host_runtime_dir: &HostRuntimeDir,

@@ -236,7 +236,7 @@ async fn seek_target(
     interrupt: &Interrupt,
     state_tx: &Sender<LocalState>,
     retry_interval: Duration,
-    state_reader: &Reader,
+    state_reader: &Reader<'_>,
 ) -> Result<UpdateStatus, SeekError> {
     info!("applying target state");
 
@@ -329,8 +329,8 @@ async fn seek_target(
 
                             // A failed task reports no state back, but it may have
                             // changed the engine before failing.
-                            *current_state = state_reader.read().await?;
-                            // TODO: we need to report the state here
+                            *current_state = state_reader.read(&*current_state).await?;
+                            report_state(state_tx, current_state, &UpdateStatus::ApplyingChanges);
 
                             // break-the inner loop after the back-off
                             break;
@@ -352,10 +352,9 @@ pub async fn start_seek(
     runtime: Runtime,
     // initial state for the loop
     initial_state: Device,
-    // configure the state of legacy proxy, it should be removed at some point
-    proxy_state: Option<ProxyState>,
-    // credentials for the legacy API
-    legacy_config: Option<LegacyConfig>,
+    // credentials for the legacy API and state of the legacy proxy, it should be removed at some
+    // point
+    legacy: Option<(LegacyConfig, ProxyState)>,
     // channel to receive target state requests
     mut seek_rx: Receiver<SeekRequest>,
     // channel to report state changes
@@ -371,20 +370,20 @@ pub async fn start_seek(
         contract,
         retry_interval,
         resources,
-        host_runtime_dir,
         host_docker_sock,
-        reader: state_reader,
         remote_config,
     } = runtime;
 
+    let state_reader = Reader::new(&resources.docker, &resources.local_store);
+
     // Create an uninitialized local worker
-    let worker = worker::create(host_runtime_dir.clone(), resources.clone());
+    let worker = worker::create(resources.clone());
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
     let mut apply_future: Pin<Box<dyn Future<Output = SeekResult>>> = Box::pin(future::pending());
     let mut interrupt = Interrupt::new();
-    if legacy_config.is_some() {
+    if legacy.is_some() {
         // If there is a fallback, we just assume it is applying changes, so the first apply will
         // go to the legacy supervisor instead of the local worker
         prev_seek_state = SeekState::Legacy;
@@ -473,7 +472,7 @@ pub async fn start_seek(
 
                 // We re-initialize the worker each time as the state of the system may have changed
                 // outside of what is monitored by the worker
-                current_state = state_reader.read().await?;
+                current_state = state_reader.read(&current_state).await?;
 
                 // Set the update status immediately
                 update_status = UpdateStatus::ApplyingChanges;
@@ -482,10 +481,9 @@ pub async fn start_seek(
                 // Create the apply future
                 apply_future = {
                     let interrupt = interrupt.clone();
-                    let proxy_state = &proxy_state;
+                    let legacy = &legacy;
                     let prev_seek_state = prev_seek_state.clone();
-                    let legacy_config = legacy_config.clone();
-                    let host_runtime_dir = &host_runtime_dir;
+                    let host_runtime_dir = &resources.host_runtime_dir;
                     let host_docker_sock = host_docker_sock.as_ref();
                     let runtimes = &oci.runtimes;
                     let contract = &contract;
@@ -523,7 +521,7 @@ pub async fn start_seek(
                         {
                             // Reset the target state so a supervisor poll cannot
                             // lead to a double apply
-                            if let Some(proxy_state) = &proxy_state {
+                            if let Some((_, proxy_state)) = legacy {
                                 proxy_state.clear().await;
                             }
 
@@ -558,14 +556,13 @@ pub async fn start_seek(
 
                         // If there is a legacy supervisor and the target state is coming from
                         // the remote API
-                        if let (Some(config), Some(maybe_raw_target)) =
-                            (legacy_config.clone(), raw_target)
+                        if let (Some((config, proxy_state)), Some(maybe_raw_target)) =
+                            (legacy, raw_target)
                         {
+                            let config = config.clone();
                             // Set as the target state the raw target accepted by
                             // the fallback
-                            if let Some(proxy_state) = &proxy_state {
-                                proxy_state.set(maybe_raw_target).await;
-                            }
+                            proxy_state.set(maybe_raw_target).await;
                             return match legacy::trigger_update(
                                 config.api_endpoint,
                                 config.api_key,
@@ -584,9 +581,8 @@ pub async fn start_seek(
 
                         // If there is a legacy supervisor but the target is coming from the
                         // local API (so no raw target)
-                        if let (Some(config), SeekState::Legacy) =
-                            (legacy_config.clone(), prev_seek_state)
-                        {
+                        if let (Some((config, _)), SeekState::Legacy) = (legacy, prev_seek_state) {
+                            let config = config.clone();
                             // keep waiting
                             return match legacy::wait_for_state_settle(
                                 config.api_endpoint,
@@ -627,7 +623,7 @@ pub async fn start_seek(
                 // if the legacy apply went through
                 else if matches!(state, SeekState::Reset) {
                     // reload the current state
-                    current_state = state_reader.read().await?;
+                    current_state = state_reader.read(&current_state).await?;
 
                     UpdateStatus::Done
                 } else {

@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::common_types::{ApiKey, HostRuntimeDir, OperatingSystem, Uuid};
 use crate::contracts::device_contract;
 use crate::legacy::{self, LegacyConfig, UpstreamError};
-use crate::models::Device;
+use crate::models::{Device, DeviceInfo};
 use crate::oci::{self, Client as Docker, RegistryAuth};
 use crate::read::{self, Reader};
 use crate::store::DocumentStore;
@@ -16,11 +16,15 @@ use crate::util::fs::run_async;
 use crate::util::http::Uri;
 use crate::util::types::DeviceType;
 use crate::util::uname::uname;
-pub struct HostConfig {
+
+/// Local device configuration for the state engine
+pub struct LocalConfig {
+    pub uuid: Uuid,
     pub device_type: DeviceType,
     pub host_os: Option<OperatingSystem>,
     pub host_runtime_dir: PathBuf,
     pub host_docker_sock: PathBuf,
+    pub retry_interval: Duration,
 }
 
 /// Remote API configuration
@@ -39,32 +43,24 @@ pub(crate) struct Resources {
     pub(crate) registry_auth_client: Option<RegistryAuth>,
     /// The document store for local state
     pub(crate) local_store: DocumentStore,
+    /// The host path for runtime files
+    pub(crate) host_runtime_dir: HostRuntimeDir,
 }
 
 /// State runtime configuration and resources
 pub struct Runtime {
     /// The state loop retry interval
     pub(crate) retry_interval: Duration,
-    /// The host path for runtime files
-    pub(crate) host_runtime_dir: HostRuntimeDir,
     /// The host path for the docker API compatible engine socket
     pub(crate) host_docker_sock: PathBuf,
     /// Runtime resources
     pub(crate) resources: Resources,
-    /// State reader
-    pub(crate) reader: Reader,
     /// OCI engine context
-    pub(crate) oci: OciContext,
+    pub(crate) oci: oci::Version,
     /// The contract describing what the device provides to services
     pub(crate) contract: Universe,
     /// Remote credentials
     pub(crate) remote_config: Option<RemoteConfig>,
-}
-
-/// Oci engine information
-pub(crate) struct OciContext {
-    /// The list of runtimes supported by the engine
-    pub(crate) runtimes: Vec<oci::Runtime>,
 }
 
 #[derive(Debug, Error)]
@@ -86,9 +82,7 @@ pub enum RuntimePrepareError {
 }
 
 pub async fn prepare(
-    uuid: Uuid,
-    retry_interval: Duration,
-    host_config: HostConfig,
+    local_config: LocalConfig,
     remote_config: Option<RemoteConfig>,
     legacy_config: Option<LegacyConfig>,
 ) -> Result<(Runtime, Device), RuntimePrepareError> {
@@ -99,12 +93,14 @@ pub async fn prepare(
         .await
         .map_err(RuntimePrepareError::StoreInit)?;
 
-    let HostConfig {
+    let LocalConfig {
+        uuid,
         device_type,
         host_os,
         host_runtime_dir,
         host_docker_sock,
-    } = host_config;
+        retry_interval,
+    } = local_config;
 
     // Create a registry auth client using the remote credentials
     let registry_auth_client = remote_config.as_ref().map(
@@ -116,20 +112,15 @@ pub async fn prepare(
     );
 
     // read OCI context only once
-    let oci = OciContext {
-        runtimes: docker.runtimes().await?,
-    };
+    let oci = docker.version().await?;
 
     // initialize state reader
-    let reader = Reader {
-        os: host_os,
+    let info = DeviceInfo {
         uuid,
-        device_type,
-        docker: docker.clone(),
-        local_store: local_store.clone(),
+        kind: device_type,
+        host_os,
     };
-
-    let initial_state = reader.read().await?;
+    let initial_state = Reader::new(&docker, &local_store).read(info).await?;
 
     let uname = run_async(uname).await.map_err(RuntimePrepareError::Uname)?;
     let system = (uname.sysname(), uname.release(), uname.machine());
@@ -157,14 +148,13 @@ pub async fn prepare(
 
     let runtime = Runtime {
         retry_interval,
-        host_runtime_dir: HostRuntimeDir(host_runtime_dir),
         host_docker_sock,
         resources: Resources {
             docker,
             registry_auth_client,
             local_store,
+            host_runtime_dir: HostRuntimeDir(host_runtime_dir),
         },
-        reader,
         oci,
         contract,
         remote_config,
