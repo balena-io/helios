@@ -370,7 +370,6 @@ pub async fn start_seek(
         contract,
         retry_interval,
         resources,
-        host_runtime_dir,
         host_docker_sock,
         remote_config,
     } = runtime;
@@ -378,7 +377,7 @@ pub async fn start_seek(
     let state_reader = Reader::new(&resources.docker, &resources.local_store);
 
     // Create an uninitialized local worker
-    let worker = worker::create(host_runtime_dir.clone(), resources.clone());
+    let worker = worker::create(resources.clone());
 
     // Seek target state
     let mut prev_seek_state = SeekState::Local(UpdateStatus::default());
@@ -484,7 +483,7 @@ pub async fn start_seek(
                     let interrupt = interrupt.clone();
                     let legacy = &legacy;
                     let prev_seek_state = prev_seek_state.clone();
-                    let host_runtime_dir = &host_runtime_dir;
+                    let host_runtime_dir = &resources.host_runtime_dir;
                     let host_docker_sock = host_docker_sock.as_ref();
                     let runtimes = &oci.runtimes;
                     let contract = &contract;

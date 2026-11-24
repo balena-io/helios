@@ -43,14 +43,14 @@ pub(crate) struct Resources {
     pub(crate) registry_auth_client: Option<RegistryAuth>,
     /// The document store for local state
     pub(crate) local_store: DocumentStore,
+    /// The host path for runtime files
+    pub(crate) host_runtime_dir: HostRuntimeDir,
 }
 
 /// State runtime configuration and resources
 pub struct Runtime {
     /// The state loop retry interval
     pub(crate) retry_interval: Duration,
-    /// The host path for runtime files
-    pub(crate) host_runtime_dir: HostRuntimeDir,
     /// The host path for the docker API compatible engine socket
     pub(crate) host_docker_sock: PathBuf,
     /// Runtime resources
@@ -148,12 +148,12 @@ pub async fn prepare(
 
     let runtime = Runtime {
         retry_interval,
-        host_runtime_dir: HostRuntimeDir(host_runtime_dir),
         host_docker_sock,
         resources: Resources {
             docker,
             registry_auth_client,
             local_store,
+            host_runtime_dir: HostRuntimeDir(host_runtime_dir),
         },
         oci,
         contract,
