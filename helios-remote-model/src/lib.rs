@@ -17,6 +17,7 @@ mod features;
 mod labels;
 mod network;
 mod service;
+mod update_strategy;
 mod volume;
 
 pub use byte_size::ByteSize;
@@ -592,6 +593,8 @@ impl<'de> Deserialize<'de> for Release {
 
             features::take_optional(svc);
             features::add_feature_mounts(svc_name, svc).map_err(serde::de::Error::custom)?;
+            update_strategy::validate_update_strategy(svc_name, svc)
+                .map_err(serde::de::Error::custom)?;
 
             // Verify each volume-type mount references a volume declared at the release level.
             for mount in svc.composition.volumes.iter() {
