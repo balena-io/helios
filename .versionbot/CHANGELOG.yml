@@ -1,4 +1,86 @@
 - commits:
+    - subject: Make the device type non-optional in the state model
+      hash: daac238ed1db642b196fc0930365a757c1a8aedf
+      body: |
+        The device type is now always known at startup, so `Device::kind`,
+        `HostConfig::device_type` and the `device_contract` argument no longer
+        need to be optional. The `hw.device-type` contract and the
+        `BALENA_DEVICE_TYPE` service variable are now always set.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Make the device type a required input.
+      hash: 565556aa04f66f23455a8457d210cf32f1482255
+      body: |
+        The device type should be known when starting the service, either
+        because it was provided during provisioning, or via the --device-type
+        flag.
+      footer:
+        Change-type: minor
+        change-type: minor
+      author: Felipe Lalanne
+      nested: []
+    - subject: Fail to start if system information cannot be retrieved
+      hash: c2041ed0dba54394f5425f33a32cd3f5b97d295f
+      body: |
+        Failure to call `uname` now results in the service terminating during
+        the `prepare` stage.
+
+        This information is key for helios operation so aborting the process is
+        warranted if unknown.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Use Uname and DeviceArch to build the system contracts
+      hash: 2b4275cda4e6306605892cc4268c96454a8f405c
+      body: |
+        Uname replaces contracts::Kernel as the source of the system
+        information. The machine is converted to a DeviceArch to build the
+        `arch.sw` contract, so devices with an architecture unknown to balena
+        get a contract with the machine name as slug instead of none.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add DeviceArch util type
+      hash: 79bebdbc4bb343aa6a21103c31ddab0ba5d1b5fa
+      body: |
+        Represents the balena architecture slug and can be built from the
+        machine name reported by `uname -m`. Machines unknown to balena map to
+        `DeviceArch::Other`.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Add Uname util type
+      hash: 3d8826372719067d1e4a3401ed55410fd14018e4
+      body: |
+        Wraps the system information reported by `uname` so it can be used
+        without reaching for nix directly.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+    - subject: Read device type from provisioning config if available
+      hash: f93e84e710c74f553a05d596de15d2e97d71dcd0
+      body: |
+        The device type is set as provisioning and cannot be changed.
+      footer:
+        Change-type: patch
+        change-type: patch
+      author: Felipe Lalanne
+      nested: []
+  version: 0.31.0
+  title: ""
+  date: 2026-11-24T20:53:37.045Z
+- commits:
     - subject: Add integration tests for contract support
       hash: 5d0ca72b48e9b4dad672df607b2aae715e5ddfda
       body: ""
