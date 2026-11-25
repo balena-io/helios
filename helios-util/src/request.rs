@@ -523,7 +523,9 @@ impl Get {
     /// returns 304 Not Modified, the cached response is returned instead. On errors
     /// (rate limiting, server errors), returns cached data if available.
     ///
-    /// The request can be cancelled via the `interrupt` argument
+    /// The request can be cancelled via the `interrupt` argument. Once the interrupt
+    /// is set, the call returns `GetError::Cancelled` even if a response was already
+    /// available, and the client cache is left unchanged.
     ///
     /// # Arguments
     /// * `interrupt` - optional Interrupt token allowing the get to be cancelled
@@ -551,11 +553,15 @@ impl Get {
         let mut tries = 1;
         loop {
             let result = tokio::select! {
-                res = self.try_get() => res,
+                // Check the interrupt first so a set interrupt always wins
+                // over a response that is ready at the same time
+                biased;
+
                 _ = interrupt.wait() => {
                     span.record("cancelled", true);
                     return Err(GetError::Cancelled)
                 }
+                res = self.try_get() => res,
             };
 
             match result {
