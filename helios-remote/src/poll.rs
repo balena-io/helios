@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::{collections::HashMap, future::Future, pin::Pin};
 use tokio::sync::watch::{Receiver, Sender};
@@ -7,6 +8,7 @@ use tokio::time::Instant;
 use tracing::{error, info, instrument, trace, warn};
 
 use crate::state::{SeekRequest, TargetState, UpdateOpts};
+use crate::util::dirs;
 use crate::util::http::Uri;
 use crate::util::interrupt::Interrupt;
 use crate::util::request::{self, Get, GetError};
@@ -15,7 +17,11 @@ use crate::util::types::Uuid;
 use super::config::{RemoteConfig, RequestConfig};
 use super::model::{App as RemoteApp, Device as RemoteDeviceTarget};
 
-async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Value>) {
+async fn get_poll_client(
+    uuid: &Uuid,
+    remote: &RemoteConfig,
+    cache_dir: PathBuf,
+) -> (Get, Option<Value>) {
     let uri = remote.api_endpoint.clone();
     let endpoint = Uri::from_parts(uri, format!("/device/v3/{uuid}/state").as_str(), None)
         .expect("remote API endpoint must be a valid URI")
@@ -28,7 +34,7 @@ async fn get_poll_client(uuid: &Uuid, remote: &RemoteConfig) -> (Get, Option<Val
             max_backoff: remote.request.poll_interval,
             auth_token: Some(remote.api_key.to_string()),
         },
-        persist_cache: true,
+        cache_dir: Some(cache_dir),
     };
 
     let mut client = Get::new(endpoint, client_config);
@@ -118,7 +124,15 @@ pub async fn start_poll(
     poll_rx: Receiver<PollRequest>,
     seek_tx: Sender<SeekRequest>,
 ) {
-    start_poll_with_reemit(uuid, remote, poll_rx, seek_tx, REEMIT_TIMEOUT).await
+    start_poll_with_reemit(
+        uuid,
+        remote,
+        poll_rx,
+        seek_tx,
+        REEMIT_TIMEOUT,
+        dirs::cache_dir(),
+    )
+    .await
 }
 
 async fn start_poll_with_reemit(
@@ -127,10 +141,11 @@ async fn start_poll_with_reemit(
     mut poll_rx: Receiver<PollRequest>,
     seek_tx: Sender<SeekRequest>,
     reemit_timeout: Duration,
+    cache_dir: PathBuf,
 ) {
     info!("starting");
 
-    let (mut poll_client, initial_target) = get_poll_client(&uuid, &remote).await;
+    let (mut poll_client, initial_target) = get_poll_client(&uuid, &remote, cache_dir).await;
 
     // Poll trigger variables
     let mut next_poll_time = Instant::now() + next_poll(&remote.request);
@@ -352,6 +367,7 @@ mod tests {
         })
         .to_string();
 
+        let cache_dir = tempfile::tempdir().unwrap();
         let mut server = Server::new_async().await;
         let path = format!("/device/v3/{uuid}/state");
         let _mock = server
@@ -387,7 +403,14 @@ mod tests {
         };
 
         tokio::select! {
-            _ = start_poll_with_reemit(uuid.clone(), remote, poll_rx, seek_tx, reemit_timeout) => {
+            _ = start_poll_with_reemit(
+                uuid.clone(),
+                remote,
+                poll_rx,
+                seek_tx,
+                reemit_timeout,
+                cache_dir.path().to_path_buf(),
+            ) => {
                 unreachable!("start_poll_with_reemit should not return on its own");
             }
             _ = observer => {}
@@ -410,6 +433,7 @@ mod tests {
         })
         .to_string();
 
+        let cache_dir = tempfile::tempdir().unwrap();
         let mut server = Server::new_async().await;
         let path = format!("/device/v3/{uuid}/state");
         let _mock = server
@@ -458,6 +482,7 @@ mod tests {
                 poll_rx,
                 seek_tx,
                 Duration::from_secs(3600),
+                cache_dir.path().to_path_buf(),
             ) => {
                 unreachable!("start_poll_with_reemit should not return on its own");
             }
@@ -481,6 +506,7 @@ mod tests {
         })
         .to_string();
 
+        let cache_dir = tempfile::tempdir().unwrap();
         let mut server = Server::new_async().await;
         let path = format!("/device/v3/{uuid}/state");
 
@@ -543,6 +569,7 @@ mod tests {
                 poll_rx,
                 seek_tx,
                 Duration::from_secs(3600),
+                cache_dir.path().to_path_buf(),
             ) => {
                 unreachable!("start_poll_with_reemit should not return on its own");
             }
@@ -566,6 +593,7 @@ mod tests {
         })
         .to_string();
 
+        let cache_dir = tempfile::tempdir().unwrap();
         let mut server = Server::new_async().await;
         let path = format!("/device/v3/{uuid}/state");
 
@@ -589,6 +617,7 @@ mod tests {
                 poll_rx,
                 seek_tx,
                 Duration::from_secs(3600),
+                cache_dir.path().to_path_buf(),
             ) => {
                 unreachable!("start_poll_with_reemit should not return on its own");
             }
@@ -630,6 +659,7 @@ mod tests {
                 poll_rx,
                 seek_tx,
                 Duration::from_secs(3600),
+                cache_dir.path().to_path_buf(),
             ) => {
                 unreachable!("start_poll_with_reemit should not return on its own");
             }

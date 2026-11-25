@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
@@ -118,19 +118,9 @@ struct CacheEntry {
 }
 
 /// Generate cache file path based on endpoint
-fn get_cache_path(endpoint: &str) -> PathBuf {
+fn get_cache_path(cache_dir: &Path, endpoint: &str) -> PathBuf {
     let digest = sha256_hex_digest(endpoint.as_bytes());
-    let filename = format!("{digest}.json");
-    let cache_dir = if let Some(cache_dir) = dirs::cache_dir() {
-        cache_dir.join(env!("HELIOS_PKG_NAME"))
-    } else {
-        // Fallback to home directory if cache dir is not available
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cache")
-            .join(env!("HELIOS_PKG_NAME"))
-    };
-    cache_dir.join(filename)
+    cache_dir.join(format!("{digest}.json"))
 }
 
 /// Errors that can occur during HTTP PATCH requests.
@@ -284,8 +274,7 @@ pub struct Get {
     state: RequestState,
     cached: Option<serde_json::Value>,
     etag: Option<String>,
-    cache_path: PathBuf,
-    persist_cache: bool,
+    cache_path: Option<PathBuf>,
 }
 
 /// Configuration for HTTP GET request behavior including timeouts, rate limiting, and backoff.
@@ -293,8 +282,9 @@ pub struct Get {
 pub struct GetConfig {
     /// Configuration for HTTP request behavior including timeouts, rate limiting, and backoff.
     pub request: RequestConfig,
-    /// Set to true to persist the request cache on disk
-    pub persist_cache: bool,
+    /// Directory to persist the request cache in. The cache is kept in
+    /// memory only if not set.
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl Get {
@@ -337,10 +327,10 @@ impl Get {
                     max_backoff,
                     auth_token: api_token,
                 },
-            persist_cache,
+            cache_dir,
         } = config.into();
         let endpoint: String = endpoint.into();
-        let cache_path = get_cache_path(&endpoint);
+        let cache_path = cache_dir.map(|dir| get_cache_path(&dir, &endpoint));
         Self {
             state: RequestState::new(
                 endpoint,
@@ -354,13 +344,12 @@ impl Get {
             cached: None,
             etag: None,
             cache_path,
-            persist_cache,
         }
     }
 
     /// Restore cache from file if it exists and returns a reference to the cached value
     pub async fn restore_cache(&mut self) -> Option<&serde_json::Value> {
-        let cache_path = &self.cache_path;
+        let cache_path = self.cache_path.as_ref()?;
         // use blocking read as this only happens when the client is created
         let (cached, etag) = match tokio::fs::read_to_string(cache_path.clone()).await {
             Ok(contents) => match serde_json::from_str::<CacheEntry>(&contents) {
@@ -387,15 +376,15 @@ impl Get {
     }
 
     /// Save cache to file
-    async fn save_cache(&self, etag: &str, value: &serde_json::Value) {
+    async fn save_cache(cache_path: &Path, etag: &str, value: &serde_json::Value) {
         let entry = CacheEntry {
             etag: etag.to_owned(),
             value: value.clone(),
         };
 
-        let cache_path = self.cache_path.clone();
         let res = match serde_json::to_string(&entry) {
             Ok(contents) => {
+                let cache_path = cache_path.to_owned();
                 fs::run_async(move || {
                     if let Some(parent) = cache_path.parent() {
                         fs::ensure_exists(parent)?;
@@ -408,11 +397,7 @@ impl Get {
         };
 
         if let Err(e) = res {
-            warn!(
-                "failed to write cache to {}: {}",
-                self.cache_path.display(),
-                e
-            );
+            warn!("failed to write cache to {}: {e}", cache_path.display());
         }
     }
 
@@ -469,9 +454,9 @@ impl Get {
                 };
 
                 if let Some(etag) = &new_etag
-                    && self.persist_cache
+                    && let Some(cache_path) = &self.cache_path
                 {
-                    self.save_cache(etag, &json).await;
+                    Self::save_cache(cache_path, etag, &json).await;
                 }
 
                 // Update the in-memory cache only after the last await point. If the
@@ -800,7 +785,7 @@ mod tests {
                     max_backoff,
                     auth_token: api_token,
                 },
-                persist_cache: false,
+                cache_dir: None,
             }
         }
     }
