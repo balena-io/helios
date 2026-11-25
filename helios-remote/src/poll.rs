@@ -69,6 +69,12 @@ async fn poll_remote(
     (value, req.opts, Instant::now() + next_poll(config))
 }
 
+/// A poll that yields no target, completing only when interrupted
+async fn idle_poll(interrupt: Interrupt, next_poll: Instant) -> PollResult {
+    interrupt.wait().await;
+    (None, UpdateOpts::default(), next_poll)
+}
+
 #[derive(Deserialize, Debug)]
 struct RemoteTargetState(HashMap<Uuid, RemoteDeviceTarget>);
 
@@ -133,18 +139,19 @@ async fn start_poll_with_reemit(
 
     let mut daily_reemit_poll = Instant::now() + reemit_timeout;
 
-    // Use the client cached target if any as the result of the first poll
+    // Emit the client cached target immediately if any
     if let Some(target_state) = initial_target {
-        poll_future = Box::pin(async move {
-            (
-                Some(target_state),
-                UpdateOpts {
-                    force: false,
-                    cancel: false,
-                },
-                Instant::now() + remote.request.poll_min_interval,
-            )
-        });
+        emit_target(
+            &uuid,
+            target_state,
+            UpdateOpts {
+                force: false,
+                cancel: false,
+            },
+            &seek_tx,
+        );
+        next_poll_time = Instant::now() + remote.request.poll_min_interval;
+        poll_future = Box::pin(idle_poll(interrupt.clone(), next_poll_time));
     } else {
         poll_future = Box::pin(poll_remote(
             &remote.request,
@@ -228,63 +235,59 @@ async fn start_poll_with_reemit(
             } => {
                 // Reset the polling state
                 interrupt = Interrupt::new();
-                poll_future = {
-                    let interrupt = interrupt.clone();
-                    // create a future that just waits for an interrupt
-                    Box::pin(async move {
-                        interrupt.wait().await;
-                        (None, UpdateOpts::default(), next_poll)
-                    })
-                };
+                poll_future = Box::pin(idle_poll(interrupt.clone(), next_poll));
                 next_poll_time = next_poll;
 
                 // If there is a new target
                 if let Some(target_state) = target {
                     // re-set the daily poll timer
                     daily_reemit_poll = Instant::now() + reemit_timeout;
-
-                    // put the poll back on the channel
-                    match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
-                        Ok(RemoteTargetState(mut map)) => {
-                            if let Some(remote_target) = map.remove(&uuid) {
-                                // Log per-app rejections; the rejected entries flow
-                                // through into the DeviceTarget so the planner can
-                                // create the app with `rejected_release` set.
-                                for (uuid, app) in remote_target.apps.iter() {
-                                    if let RemoteApp::Rejected(rej) = app {
-                                        error!(
-                                            "invalid target release ({}) for app {uuid}: {}",
-                                            rej.release.chars().take(7).collect::<String>(),
-                                            rej.reason,
-                                        );
-                                    }
-                                }
-                                let _ = seek_tx.send(SeekRequest {
-                                    target: TargetState::Remote {
-                                        target: Some(remote_target.into()),
-                                        raw_target: target_state,
-                                    },
-                                    opts,
-                                });
-                            } else {
-                                error!("no target for uuid {uuid} found on target state");
-                            }
-                        }
-                        Err(e) => {
-                            warn!("failed to deserialize target state: {e}");
-                            let _ = seek_tx.send(SeekRequest {
-                                target: TargetState::Remote {
-                                    target: None,
-                                    raw_target: target_state,
-                                },
-                                opts,
-                            });
-                        }
-                    };
+                    emit_target(&uuid, target_state, opts, &seek_tx);
                 }
             }
         }
     }
+}
+
+/// Send the polled target state to the seek loop
+fn emit_target(uuid: &Uuid, target_state: Value, opts: UpdateOpts, seek_tx: &Sender<SeekRequest>) {
+    match serde_json::from_value::<RemoteTargetState>(target_state.clone()) {
+        Ok(RemoteTargetState(mut map)) => {
+            if let Some(remote_target) = map.remove(uuid) {
+                // Log per-app rejections; the rejected entries flow
+                // through into the DeviceTarget so the planner can
+                // create the app with `rejected_release` set.
+                for (uuid, app) in remote_target.apps.iter() {
+                    if let RemoteApp::Rejected(rej) = app {
+                        error!(
+                            "invalid target release ({}) for app {uuid}: {}",
+                            rej.release.chars().take(7).collect::<String>(),
+                            rej.reason,
+                        );
+                    }
+                }
+                let _ = seek_tx.send(SeekRequest {
+                    target: TargetState::Remote {
+                        target: Some(remote_target.into()),
+                        raw_target: target_state,
+                    },
+                    opts,
+                });
+            } else {
+                error!("no target for uuid {uuid} found on target state");
+            }
+        }
+        Err(e) => {
+            warn!("failed to deserialize target state: {e}");
+            let _ = seek_tx.send(SeekRequest {
+                target: TargetState::Remote {
+                    target: None,
+                    raw_target: target_state,
+                },
+                opts,
+            });
+        }
+    };
 }
 
 #[cfg(test)]
@@ -537,6 +540,93 @@ mod tests {
             _ = start_poll_with_reemit(
                 uuid.clone(),
                 remote,
+                poll_rx,
+                seek_tx,
+                Duration::from_secs(3600),
+            ) => {
+                unreachable!("start_poll_with_reemit should not return on its own");
+            }
+            _ = observer => {}
+        }
+    }
+
+    /// The target restored from the client cache on start must reach the seek
+    /// loop even if a poll request is already pending and the poll it triggers
+    /// fails. The cache already holds the latest ETag, so later polls get a 304
+    /// and would not deliver the target again.
+    #[tokio::test]
+    async fn cached_target_is_emitted_when_first_poll_is_interrupted() {
+        let uuid = Uuid::from("testdevice");
+
+        let body = json!({
+            uuid.to_string(): {
+                "name": "test-device",
+                "apps": {}
+            }
+        })
+        .to_string();
+
+        let mut server = Server::new_async().await;
+        let path = format!("/device/v3/{uuid}/state");
+
+        // Populate the persisted cache with a first poll loop
+        let mock_200 = server
+            .mock("GET", path.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("etag", "\"v1\"")
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (_poll_tx, poll_rx) = watch::channel(PollRequest::default());
+        let (seek_tx, mut seek_rx) = watch::channel(SeekRequest::default());
+        tokio::select! {
+            _ = start_poll_with_reemit(
+                uuid.clone(),
+                test_remote_config(&server.url()),
+                poll_rx,
+                seek_tx,
+                Duration::from_secs(3600),
+            ) => {
+                unreachable!("start_poll_with_reemit should not return on its own");
+            }
+            _ = expect_seek_request(&mut seek_rx, "initial") => {}
+        }
+        mock_200.assert_async().await;
+        mock_200.remove_async().await;
+
+        // From now on every poll fails
+        let _mock_401 = server
+            .mock("GET", path.as_str())
+            .with_status(401)
+            .create_async()
+            .await;
+
+        // Restart with a poll request already pending
+        let (poll_tx, poll_rx) = watch::channel(PollRequest::default());
+        poll_tx
+            .send(PollRequest::default())
+            .expect("poll channel closed");
+        let (seek_tx, mut seek_rx) = watch::channel(SeekRequest::default());
+
+        let observer = async {
+            expect_seek_request(&mut seek_rx, "cached").await;
+
+            let seek = seek_rx.borrow();
+            match &seek.target {
+                TargetState::Remote { target, .. } => {
+                    assert!(target.is_some(), "the cached target must be delivered");
+                }
+                _ => panic!("expected Remote target state"),
+            }
+        };
+
+        tokio::select! {
+            _ = start_poll_with_reemit(
+                uuid.clone(),
+                test_remote_config(&server.url()),
                 poll_rx,
                 seek_tx,
                 Duration::from_secs(3600),
