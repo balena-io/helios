@@ -387,35 +387,33 @@ impl Get {
     }
 
     /// Save cache to file
-    async fn save_cache(&self) {
-        if let (Some(cached), Some(etag)) = (&self.cached, &self.etag) {
-            let entry = CacheEntry {
-                etag: etag.clone(),
-                value: cached.clone(),
-            };
+    async fn save_cache(&self, etag: &str, value: &serde_json::Value) {
+        let entry = CacheEntry {
+            etag: etag.to_owned(),
+            value: value.clone(),
+        };
 
-            if let Err(e) = self.write_cache_file(&entry).await {
-                warn!(
-                    "failed to write cache to {}: {}",
-                    self.cache_path.display(),
-                    e
-                );
-            }
-        }
-    }
-
-    /// Write cache entry to file
-    async fn write_cache_file(&self, entry: &CacheEntry) -> std::io::Result<()> {
         let cache_path = self.cache_path.clone();
-        let contents = serde_json::to_string(entry)?;
-        fs::run_async(move || {
-            if let Some(parent) = cache_path.parent() {
-                fs::ensure_exists(parent)?;
+        let res = match serde_json::to_string(&entry) {
+            Ok(contents) => {
+                fs::run_async(move || {
+                    if let Some(parent) = cache_path.parent() {
+                        fs::ensure_exists(parent)?;
+                    }
+                    fs::safe_write_all(&cache_path, contents)
+                })
+                .await
             }
-            fs::safe_write_all(&cache_path, contents)
-        })
-        .await?;
-        Ok(())
+            Err(e) => Err(e.into()),
+        };
+
+        if let Err(e) = res {
+            warn!(
+                "failed to write cache to {}: {}",
+                self.cache_path.display(),
+                e
+            );
+        }
     }
 
     #[instrument(level = "trace", skip_all, fields(response=field::Empty) err(level="warn"))]
@@ -470,11 +468,17 @@ impl Get {
                     }
                 };
 
+                if let Some(etag) = &new_etag
+                    && self.persist_cache
+                {
+                    self.save_cache(etag, &json).await;
+                }
+
+                // Update the in-memory cache only after the last await point. If the
+                // request is cancelled before this, the ETag must not change, otherwise
+                // the next request gets a 304 for a value the caller never received.
                 self.cached = Some(json.clone());
                 self.etag = new_etag;
-                if self.etag.is_some() && self.persist_cache {
-                    self.save_cache().await;
-                }
                 self.state.record_success();
 
                 Ok(TryGetResponse {
