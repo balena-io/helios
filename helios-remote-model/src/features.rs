@@ -1,91 +1,153 @@
-//! Mounts requested through `io.balena.features.*` service labels
+//! Mounts and environment requested through `io.balena.features.*` service labels
 
 use std::path::Path;
 
-use crate::service::{BindMount, Mount, Service};
+use crate::common_types::Value;
+use crate::service::{BindMount, BindPropagation, Mount, Service};
 
 /// A host path bind mounted by a feature label
 struct FeatureBind {
     source: &'static str,
     target: &'static str,
     read_only: bool,
+    propagation: Option<BindPropagation>,
     create_host_path: bool,
 }
 
-/// Bind mounts added for each feature label
-const FEATURE_BINDS: &[(&str, &[FeatureBind])] = &[
-    (
-        "io.balena.features.journal-logs",
+/// Bind mounts and environment variables added by a feature label
+///
+/// Feature environment variables take priority over any variable with the same
+/// name defined by the service.
+struct Feature {
+    label: &'static str,
+    binds: &'static [FeatureBind],
+    env: &'static [(&'static str, &'static str)],
+}
+
+/// Features supported through service labels
+const FEATURES: &[Feature] = &[
+    Feature {
+        label: "io.balena.features.journal-logs",
         // we mount both logs locations so we don't want the mount to fail
         // if one of them doesn't exist
-        &[
+        binds: &[
             FeatureBind {
                 source: "/var/log/journal",
                 target: "/var/log/journal",
                 read_only: true,
+                propagation: None,
                 create_host_path: true,
             },
             FeatureBind {
                 source: "/run/log/journal",
                 target: "/run/log/journal",
                 read_only: true,
+                propagation: None,
                 create_host_path: true,
             },
             FeatureBind {
                 source: "/etc/machine-id",
                 target: "/etc/machine-id",
                 read_only: true,
+                propagation: None,
                 create_host_path: false,
             },
         ],
-    ),
-    (
-        "io.balena.features.dbus",
-        &[FeatureBind {
+        env: &[],
+    },
+    Feature {
+        label: "io.balena.features.dbus",
+        binds: &[FeatureBind {
             source: "/run/dbus",
             target: "/host/run/dbus",
             read_only: false,
+            propagation: None,
             create_host_path: true,
         }],
-    ),
-    (
-        "io.balena.features.kernel-modules",
-        &[FeatureBind {
+        env: &[],
+    },
+    Feature {
+        label: "io.balena.features.kernel-modules",
+        binds: &[FeatureBind {
             source: "/lib/modules",
             target: "/lib/modules",
             read_only: false,
+            propagation: None,
             create_host_path: true,
         }],
-    ),
-    (
-        "io.balena.features.firmware",
-        &[FeatureBind {
+        env: &[],
+    },
+    Feature {
+        label: "io.balena.features.firmware",
+        binds: &[FeatureBind {
             source: "/lib/firmware",
             target: "/lib/firmware",
             read_only: false,
+            propagation: None,
             create_host_path: true,
         }],
-    ),
+        env: &[],
+    },
     // there is something wrong with the host if `/sys` or `/proc`
     // don't exist. Don't create them
-    (
-        "io.balena.features.sysfs",
-        &[FeatureBind {
+    Feature {
+        label: "io.balena.features.sysfs",
+        binds: &[FeatureBind {
             source: "/sys",
             target: "/sys",
             read_only: false,
+            propagation: None,
             create_host_path: false,
         }],
-    ),
-    (
-        "io.balena.features.procfs",
-        &[FeatureBind {
+        env: &[],
+    },
+    Feature {
+        label: "io.balena.features.procfs",
+        binds: &[FeatureBind {
             source: "/proc",
             target: "/proc",
             read_only: false,
+            propagation: None,
             create_host_path: false,
         }],
-    ),
+        env: &[],
+    },
+    // Give the service the host CA store.
+    //
+    // Mounts /etc/ssl/certs into the container /host/ssl/certs and sets SSL_CERT_FILE env var.
+    // It also mounts /usr/share/ca-certificates and /etc/ca-certificates.conf to allow a
+    // user to use them as source for re-building the cert dir. Directories use rslave propagation
+    // so mounts on top of the host directory are propagated.
+    Feature {
+        label: "io.balena.features.ca-certificates",
+        binds: &[
+            FeatureBind {
+                source: "/etc/ssl/certs",
+                target: "/host/ssl/certs",
+                read_only: true,
+                propagation: Some(BindPropagation::Rslave),
+                create_host_path: false,
+            },
+            FeatureBind {
+                source: "/usr/share/ca-certificates",
+                target: "/usr/share/ca-certificates",
+                read_only: true,
+                propagation: Some(BindPropagation::Rslave),
+                create_host_path: false,
+            },
+            FeatureBind {
+                source: "/etc/ca-certificates.conf",
+                target: "/host/ca-certificates.conf",
+                read_only: true,
+                propagation: None,
+                create_host_path: false,
+            },
+        ],
+        env: &[
+            ("SSL_CERT_FILE", "/host/ssl/certs/ca-certificates.crt"),
+            ("SSL_CERT_DIR", "/host/ssl/certs"),
+        ],
+    },
 ];
 
 /// Remove the feature `label` from the service and return whether the feature is enabled
@@ -141,25 +203,31 @@ fn add_mount(svc_name: &str, svc: &mut Service, label: &str, mount: Mount) -> Re
     Ok(())
 }
 
-/// Add the mounts requested by feature labels to the service
+/// Add the mounts and environment variables requested by feature labels to the service
 ///
 /// Feature labels are always removed from the service. A feature mount whose target is
 /// already used by another mount of the service is rejected as the definition would be
-/// ambiguous.
-pub(crate) fn add_feature_mounts(svc_name: &str, svc: &mut Service) -> Result<(), String> {
-    for (label, binds) in FEATURE_BINDS {
-        if !take_feature(svc, label) {
+/// ambiguous. Feature environment variables replace any service variable with the same name.
+pub(crate) fn add_features(svc_name: &str, svc: &mut Service) -> Result<(), String> {
+    for feature in FEATURES {
+        if !take_feature(svc, feature.label) {
             continue;
         }
-        for b in binds.iter() {
+        for b in feature.binds.iter() {
             let mount = Mount::Bind(BindMount {
                 source: b.source.to_string(),
                 target: b.target.to_string(),
                 read_only: b.read_only,
-                propagation: None,
+                propagation: b.propagation,
                 create_host_path: b.create_host_path,
             });
-            add_mount(svc_name, svc, label, mount)?;
+            add_mount(svc_name, svc, feature.label, mount)?;
+        }
+        for (key, value) in feature.env.iter() {
+            // the top level service environment takes priority over the composition
+            // environment, so setting the variable there overrides both
+            svc.environment
+                .insert(key.to_string(), Some(Value::String(value.to_string())));
         }
     }
     Ok(())
@@ -170,6 +238,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::Release;
+    use crate::common_types::Value as EnvValue;
     use crate::service::is_allowed_bind_source;
 
     use super::*;
@@ -211,6 +280,16 @@ mod tests {
         })
     }
 
+    fn rslave_bind_mount(source: &str, target: &str) -> Mount {
+        Mount::Bind(BindMount {
+            source: source.to_string(),
+            target: target.to_string(),
+            read_only: true,
+            propagation: Some(BindPropagation::Rslave),
+            create_host_path: false,
+        })
+    }
+
     fn has_label(release: &Release, label: &str) -> bool {
         let svc = service(release);
         svc.labels.contains_key(label) || svc.composition.labels.contains_key(label)
@@ -218,14 +297,28 @@ mod tests {
 
     #[test]
     fn feature_bind_sources_are_allowed_bind_sources() {
-        for (_, binds) in FEATURE_BINDS {
-            for b in binds.iter() {
+        for feature in FEATURES
+            .iter()
+            .filter(|f| f.label != "io.balena.features.ca-certificates")
+        {
+            for b in feature.binds.iter() {
                 assert!(
                     is_allowed_bind_source(b.source),
                     "{} is not allowed",
                     b.source
                 );
             }
+        }
+    }
+
+    #[test]
+    fn ca_certificates_bind_sources_are_not_allowed_bind_sources() {
+        let feature = FEATURES
+            .iter()
+            .find(|f| f.label == "io.balena.features.ca-certificates")
+            .unwrap();
+        for b in feature.binds.iter() {
+            assert!(!is_allowed_bind_source(b.source), "{} is allowed", b.source);
         }
     }
 
@@ -260,6 +353,19 @@ mod tests {
                 "io.balena.features.procfs",
                 vec![bind_mount("/proc", "/proc", false, false)],
             ),
+            (
+                "io.balena.features.ca-certificates",
+                vec![
+                    rslave_bind_mount("/etc/ssl/certs", "/host/ssl/certs"),
+                    rslave_bind_mount("/usr/share/ca-certificates", "/usr/share/ca-certificates"),
+                    bind_mount(
+                        "/etc/ca-certificates.conf",
+                        "/host/ca-certificates.conf",
+                        true,
+                        false,
+                    ),
+                ],
+            ),
         ];
 
         for (label, expected) in cases {
@@ -273,6 +379,62 @@ mod tests {
                 assert!(!has_label(&release, label));
             }
         }
+    }
+
+    fn ssl_release(environment: Value, composition_environment: Value) -> Release {
+        serde_json::from_value(json!({
+            "services": {
+                "my-service": {
+                    "id": 1,
+                    "image": "alpine:latest",
+                    "labels": {"io.balena.features.ca-certificates": "1"},
+                    "environment": environment,
+                    "composition": {"environment": composition_environment}
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn env(release: &Release, key: &str) -> Option<EnvValue> {
+        service(release).environment.get(key).cloned().flatten()
+    }
+
+    #[test]
+    fn ca_certificates_feature_sets_ssl_environment() {
+        let release = ssl_release(json!({"OTHER": "a"}), json!({}));
+        assert_eq!(
+            env(&release, "SSL_CERT_FILE"),
+            Some(EnvValue::String(
+                "/host/ssl/certs/ca-certificates.crt".to_string()
+            ))
+        );
+        assert_eq!(
+            env(&release, "SSL_CERT_DIR"),
+            Some(EnvValue::String("/host/ssl/certs".to_string()))
+        );
+        assert_eq!(
+            env(&release, "OTHER"),
+            Some(EnvValue::String("a".to_string()))
+        );
+    }
+
+    #[test]
+    fn ca_certificates_feature_overrides_service_ssl_environment() {
+        let release = ssl_release(
+            json!({"SSL_CERT_FILE": "/etc/my-ca.crt"}),
+            json!({"SSL_CERT_DIR": "/etc/my-certs"}),
+        );
+        assert_eq!(
+            env(&release, "SSL_CERT_FILE"),
+            Some(EnvValue::String(
+                "/host/ssl/certs/ca-certificates.crt".to_string()
+            ))
+        );
+        assert_eq!(
+            env(&release, "SSL_CERT_DIR"),
+            Some(EnvValue::String("/host/ssl/certs".to_string()))
+        );
     }
 
     #[test]
