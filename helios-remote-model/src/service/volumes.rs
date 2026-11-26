@@ -14,7 +14,7 @@ use serde::{
 use std::fmt;
 
 /// Bind mount propagation mode.
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BindPropagation {
     Private,
@@ -74,7 +74,8 @@ impl Mount {
 }
 
 /// Host paths that are permitted as bind-mount sources, these are the
-/// same bind mounts allowed from labels
+/// same bind mounts allowed from labels, except for the `ca-certificates`
+/// feature, whose host paths can only be mounted through the feature label
 const BIND_SOURCE_ALLOWLIST: &[&str] = &[
     "/var/run/docker.sock",
     "/run/dbus",
