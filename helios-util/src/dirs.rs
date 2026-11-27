@@ -13,6 +13,19 @@ pub fn config_dir() -> PathBuf {
     dir.join(env!("HELIOS_PKG_NAME"))
 }
 
+/// Return the application cache directory
+pub fn cache_dir() -> PathBuf {
+    let dir = if let Some(cache_dir) = dirs::cache_dir() {
+        cache_dir
+    } else {
+        // Fallback to home directory if cache dir is not available
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".cache")
+    };
+    dir.join(env!("HELIOS_PKG_NAME"))
+}
+
 /// Return the application state directory
 pub fn state_dir() -> PathBuf {
     let dir = if let Some(state_dir) = dirs::state_dir() {
